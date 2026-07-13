@@ -1,9 +1,9 @@
 # Savour Meal Planner
 
 Savour is a private, self-hosted household meal planner. It imports recipes,
-uses complete publisher per-serving nutrition with ingredient calculation as a
-fallback, builds plans against per-person targets, reserves pantry stock, and
-produces an offline-capable shopping list.
+uses complete publisher-reported per-serving nutrition for planning, builds
+plans against per-person targets, reserves pantry stock, and produces an
+offline-capable shopping list.
 
 The production target is an Unraid server on a trusted LAN. The repository also
 contains a demo mode so the complete responsive light/dark interface can be
@@ -16,15 +16,16 @@ evaluated without first loading a nutrition dataset.
   feasibility validation.
 - Versioned custom and URL-imported recipes; publisher instructions are not
   copied.
-- Good Food, Great British Chefs and Allrecipes search adapters with website
-  filters, high-resolution image selection, publisher nutrition and saved-URL
-  deduplication.
+- Good Food and Allrecipes search adapters with website filters, stable search
+  thumbnails, publisher nutrition and saved-URL deduplication. Great British
+  Chefs is currently disabled.
 - Safe generic URL imports using JSON-LD first and a review-required semantic
   fallback.
 - CoFID CSV ingestion plus USDA FoodData Central and Open Food Facts provider
   boundaries, retaining dataset version and provenance.
 - Publisher per-serving nutrition is used when all four planning nutrients are
-  present; auditable ingredient-based totals remain the fallback.
+  present. Ingredient-to-food matching and calculated nutrition are parked and
+  are not used by automatic planning.
 - Automatic shared-recipe planning with individual quarter-serving portions,
   hard exclusions, must/prefer/exclude ingredient guidance and explicit
   infeasibility errors.
@@ -96,10 +97,10 @@ accounts, database or publisher access.
 
 ## Load nutrition data
 
-Fallback ingredient calculation blocks until each included ingredient has a
-real food record and a compatible amount. Recipes with complete publisher
-per-serving nutrition do not require food matches. Download CoFID from the
-official UK government source, retain its licence/version notes, then run:
+Ingredient matching and calculated nutrition are currently parked, so nutrition
+datasets are not required for automatic planning. CoFID can still be loaded for
+future catalogue work. Download it from the official UK government source,
+retain its licence/version notes, then run:
 
 ```powershell
 Set-Location backend
@@ -124,7 +125,7 @@ npm.cmd test
 npm.cmd run build
 ```
 
-The current repository passes 34 backend tests, 3 frontend tests, TypeScript
+The current repository passes 39 backend tests, 4 frontend tests, TypeScript
 compilation, the production PWA build, the initial Alembic upgrade, Compose YAML
 parsing and Unraid XML parsing. A Docker Desktop smoke test also passed: the
 PostgreSQL, Redis, web, worker and scheduler services started; migrations ran;

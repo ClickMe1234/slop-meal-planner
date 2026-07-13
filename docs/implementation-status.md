@@ -6,10 +6,10 @@ This file connects the product specification to the first runnable release.
 
 1. Deploy the five-service Compose stack and create the owner.
 2. Choose calorie or macro targets and a hard tolerance during onboarding.
-3. Import versioned CoFID data.
-4. Add a custom recipe or search/import a publisher recipe.
-5. Review serving yield, ingredient amounts and food-data matches.
-6. Calculate auditable per-serving nutrition and mark the recipe planner-ready.
+3. Add a custom recipe or search/import a publisher recipe.
+4. Review serving yield and detected ingredient amounts/units.
+5. Use complete per-serving nutrition reported by the recipe website and mark
+   the recipe planner-ready.
 7. Generate a multi-day plan from planner-ready recipes.
 8. Review and accept it, reserving pantry stock.
 9. Use the generated shopping list online or from its local offline copy.
@@ -30,11 +30,14 @@ This file connects the product specification to the first runnable release.
 - Optional ingredients default to excluded until explicitly included.
 - Pantry reservations and transactions are separate; acceptance does not
   pretend food has already been consumed.
-- Source estimates are labelled reference-only and cannot enter planning.
+- Complete publisher-reported per-serving nutrition is attributed to its website
+  and is the only nutrition source admitted to automatic planning.
+- Ingredient-to-food matching and calculated nutrition are parked.
+- Great British Chefs discovery is disabled; Good Food and Allrecipes are active.
 
 ## Validation completed
 
-- 34 backend tests and 3 frontend tests pass.
+- 39 backend tests and 4 frontend tests pass.
 - The production frontend build and PWA manifest build pass.
 - Docker Desktop smoke test passed for the full Compose stack (PostgreSQL,
   Redis, web, worker and scheduler), including migrations, readiness, PWA

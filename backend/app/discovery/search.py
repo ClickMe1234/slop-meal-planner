@@ -8,8 +8,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .errors import DiscoveryError
-from .models import CombinedSearchResponse, SearchResult, SourceSearchResponse
+from .extraction import extract_recipe
+from .models import CombinedSearchResponse, ExtractedRecipe, SearchResult, SourceSearchResponse
 from .registry import SourceRegistry, default_registry
+from .urls import canonicalize_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +24,8 @@ class SearchPolicy:
     maximum_cache_entries: int = 256
     minimum_query_length: int = 2
     maximum_results_per_source: int = 24
+    preview_cache_ttl_seconds: int = 3600
+    maximum_preview_cache_entries: int = 512
 
 
 class LiveSearchService:
@@ -49,6 +53,8 @@ class LiveSearchService:
         self.policy = policy
         self.saved_url_lookup = saved_url_lookup
         self._cache: dict[str, tuple[float, tuple[SourceSearchResponse, ...]]] = {}
+        self._preview_cache: dict[str, tuple[float, ExtractedRecipe]] = {}
+        self._preview_locks: dict[str, asyncio.Lock] = {}
         self._generations: dict[str, int] = {}
         self._generation_lock = asyncio.Lock()
 
@@ -136,6 +142,41 @@ class LiveSearchService:
         sources: tuple[str, ...] | None = None,
     ) -> CombinedSearchResponse:
         return await self.search_remote(query, request_key=request_key, sources=sources)
+
+    async def nutrition_preview(self, url: str) -> ExtractedRecipe:
+        """Fetch and cache publisher nutrition without importing the recipe."""
+
+        canonical = canonicalize_url(url)
+        adapter = self.registry.for_url(canonical)
+        now = time.monotonic()
+        cached = self._preview_cache.get(canonical)
+        if cached is not None and now <= cached[0]:
+            return cached[1]
+
+        lock = self._preview_locks.setdefault(canonical, asyncio.Lock())
+        async with lock:
+            now = time.monotonic()
+            cached = self._preview_cache.get(canonical)
+            if cached is not None and now <= cached[0]:
+                return cached[1]
+
+            html = await self.fetcher.fetch_text(canonical, allowed_hosts=set(adapter.hosts))
+            recipe = extract_recipe(html, canonical)
+            expired_keys = [
+                key for key, value in self._preview_cache.items() if now > value[0]
+            ]
+            for key in expired_keys:
+                self._preview_cache.pop(key, None)
+                self._preview_locks.pop(key, None)
+            if len(self._preview_cache) >= self.policy.maximum_preview_cache_entries:
+                evicted = next(iter(self._preview_cache))
+                self._preview_cache.pop(evicted)
+                self._preview_locks.pop(evicted, None)
+            self._preview_cache[canonical] = (
+                now + self.policy.preview_cache_ttl_seconds,
+                recipe,
+            )
+            return recipe
 
     async def _search_source(self, adapter, query: str) -> SourceSearchResponse:
         try:

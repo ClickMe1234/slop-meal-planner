@@ -1,16 +1,19 @@
 # Recipe discovery boundary
 
-This package supports Good Food, Great British Chefs, and Allrecipes through small
-publisher adapters. An adapter may build an ordinary public search URL and parse
+This package currently supports Good Food and Allrecipes through small publisher
+adapters. Great British Chefs is disabled while its public search is not usable
+without client-side or member-only behaviour. An adapter may build an ordinary public search URL and parse
 fields already present in returned HTML. It must not log in, solve challenges,
 rotate identities, call undocumented private APIs, or otherwise bypass a site's
-controls. HTTP 403 and 429 responses are surfaced as limitation errors.
+controls. HTTP 402, 403 and 429 responses are surfaced as limitation errors after
+one ordinary cookie-aware retry.
 
 The UI searches PostgreSQL immediately. Remote source search begins only after
 the `SearchPolicy.debounce_ms` interval (350 ms by default), is cancellable,
 limited by the selected website filters, and cached for 15 minutes. Complete
-publisher-reported per-serving nutrition becomes the planning source;
-ingredient matching and repeatable calculation are the fallback.
+publisher-reported per-serving nutrition is the only nutrition source used by
+automatic planning. Ingredient matching and calculated fallback nutrition are
+currently parked.
 
 All fetched URLs must pass `validate_fetch_url`, including every redirect. The
 Docker deployment should additionally deny access from the app container to LAN
@@ -19,6 +22,6 @@ rules change; fixture tests make intentional adapter maintenance visible, but do
 not guarantee a publisher will continue to permit or expose search.
 
 Recipe-page extraction prefers Schema.org `Recipe` JSON-LD, then uses a limited
-semantic HTML fallback. Imports always require review because quantities, ranges,
-optional ingredients, units, serving yield, and food-record matches affect the
-calculation. Publisher cooking instructions are not copied.
+semantic HTML fallback. Imports retain quantities, ranges, optional ingredients,
+units and serving yield for recipe and shopping use, but food-record matches are
+not requested. Publisher cooking instructions are not copied.

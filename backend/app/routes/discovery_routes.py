@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..auth import AuthContext, get_auth_context
 from ..db import get_db
 from ..discovery import LiveSearchService
+from ..discovery.errors import DiscoveryError, FetchError
 from ..discovery.http import PoliteHttpFetcher
 from ..discovery.urls import canonicalize_url
 from ..errors import DomainError
@@ -37,6 +38,31 @@ def _json_safe(value):
     if isinstance(value, (tuple, list)):
         return [_json_safe(item) for item in value]
     return value
+
+
+@router.get("/nutrition-preview")
+async def preview_recipe_nutrition(
+    url: str = Query(max_length=4096),
+    context: AuthContext = Depends(get_auth_context),
+):
+    """Return publisher-reported nutrition without saving or calculating."""
+
+    del context  # Authentication is required, but the preview is not household-specific.
+    try:
+        recipe = await _live_service().nutrition_preview(url)
+    except DiscoveryError as exc:
+        status = 502 if isinstance(exc, FetchError) else 422
+        raise DomainError(exc.code, str(exc), status) from exc
+    return _json_safe(
+        {
+            "url": recipe.canonical_url,
+            "publisher": recipe.publisher,
+            "yield_servings": recipe.yield_servings,
+            "publisher_nutrition": (
+                asdict(recipe.publisher_nutrition) if recipe.publisher_nutrition else None
+            ),
+        }
+    )
 
 
 @router.get("")

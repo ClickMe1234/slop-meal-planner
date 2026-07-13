@@ -22,7 +22,9 @@ def _as_json(values: dict[str, Decimal]) -> dict[str, float]:
     return {key: round(float(value), 3) for key, value in values.items()}
 
 
-def _publisher_values(version: RecipeVersion) -> dict[str, Decimal] | None:
+def publisher_values(version: RecipeVersion) -> dict[str, Decimal] | None:
+    """Return a complete publisher-reported per-serving nutrition set."""
+
     nutrition = version.publisher_nutrition
     if not isinstance(nutrition, dict):
         return None
@@ -63,18 +65,21 @@ def calculate_recipe(db: Session, recipe_version_id: str) -> NutritionCalculatio
         raise DomainError("MISSING_YIELD", "Confirm a positive serving yield before calculating")
 
     recipe = db.get(Recipe, version.recipe_id)
-    publisher_values = _publisher_values(version)
-    if publisher_values is not None:
-        totals = {code: value * Decimal(version.yield_servings) for code, value in publisher_values.items()}
+    reported_values = publisher_values(version)
+    if reported_values is not None:
+        totals = {code: value * Decimal(version.yield_servings) for code, value in reported_values.items()}
         source = recipe.publisher or recipe.source_url if recipe is not None else "recipe publisher"
         calculation = NutritionCalculation(
             recipe_version_id=version.id,
             status="publisher",
             total_values=_as_json(totals),
-            per_serving_values=_as_json(publisher_values),
+            per_serving_values=_as_json(reported_values),
             contributions=[],
-            assumptions=["Publisher-reported per-serving nutrition was used; ingredient calculation remains the fallback."],
-            dataset_snapshot={"publisher": source or "recipe publisher"},
+            assumptions=[f"Per-serving nutrition reported by {source or 'the recipe website'} was used."],
+            dataset_snapshot={
+                "nutrition_source": "publisher",
+                "publisher": source or "recipe website",
+            },
         )
         db.add(calculation)
         if recipe is not None:
@@ -82,6 +87,12 @@ def calculate_recipe(db: Session, recipe_version_id: str) -> NutritionCalculatio
             recipe.version += 1
         db.flush()
         return calculation
+
+    if recipe is not None and recipe.source_type == "url":
+        raise DomainError(
+            "PUBLISHER_NUTRITION_UNAVAILABLE",
+            "The recipe website did not report a complete per-serving nutrition set",
+        )
 
     if not version.ingredients:
         raise DomainError("MISSING_INGREDIENTS", "The recipe has no ingredients")

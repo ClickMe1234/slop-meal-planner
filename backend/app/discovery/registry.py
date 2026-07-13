@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from .adapters import AllrecipesAdapter, GoodFoodAdapter, GreatBritishChefsAdapter, SourceAdapter
+from .adapters import AllrecipesAdapter, GoodFoodAdapter, SourceAdapter
 from .errors import UnsupportedSourceError
 
 
@@ -29,4 +29,4 @@ class SourceRegistry:
         return adapter
 
 
-default_registry = SourceRegistry((GoodFoodAdapter(), GreatBritishChefsAdapter(), AllrecipesAdapter()))
+default_registry = SourceRegistry((GoodFoodAdapter(), AllrecipesAdapter()))

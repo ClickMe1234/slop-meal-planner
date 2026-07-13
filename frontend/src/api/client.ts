@@ -72,6 +72,7 @@ export const api = {
   saveRecipeReview: (id: string, payload: { expected_version: number; title: string; yield_servings: number; ingredients: Array<Record<string, unknown>> }) => request<BackendRecipeDetail>(`/recipes/${id}/review`, { method: 'PUT', body: JSON.stringify(payload) }),
   searchFoods: (query = '') => request<{ items: BackendFood[]; total: number; remote_error?: string }>(`/foods?q=${encodeURIComponent(query)}&page_size=100`),
   searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[]) => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}`),
+  nutritionPreview: (url: string) => request<DiscoveryNutritionPreview>(`/recipe-discovery/nutrition-preview?url=${encodeURIComponent(url)}`),
   startImport: (url: string) => request<JobStatus>('/recipe-imports', { method: 'POST', body: JSON.stringify({ url }) }),
   calculateRecipe: (id: string) => request<{ per_serving_values: Record<string, number> }>(`/recipes/${id}/calculate`, { method: 'POST' }),
   job: (id: string) => request<JobStatus>(`/jobs/${id}`),
@@ -200,7 +201,14 @@ export interface DiscoveryResponse {
   debounce_ms: number
 }
 
-export type RecipeSourceKey = 'good_food' | 'great_british_chefs' | 'allrecipes'
+export interface DiscoveryNutritionPreview {
+  url: string
+  publisher?: string
+  yield_servings?: number
+  publisher_nutrition?: DiscoveryResult['publisher_nutrition']
+}
+
+export type RecipeSourceKey = 'good_food' | 'allrecipes'
 
 export interface BackendPantryItem {
   id: string

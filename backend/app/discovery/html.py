@@ -10,27 +10,6 @@ class Anchor:
     text: str = ""
     image_url: str | None = None
     image_alt: str | None = None
-    image_score: int = 0
-
-
-def _srcset_candidate(value: str) -> tuple[str | None, int]:
-    candidates: list[tuple[int, str]] = []
-    for item in value.split(","):
-        parts = item.strip().split()
-        if not parts:
-            continue
-        score = 1
-        if len(parts) > 1:
-            descriptor = parts[-1].casefold()
-            try:
-                score = int(float(descriptor[:-1]) * (1000 if descriptor.endswith("x") else 1))
-            except (TypeError, ValueError):
-                score = 1
-        candidates.append((score, parts[0]))
-    if not candidates:
-        return None, 0
-    score, url = max(candidates)
-    return url, score
 
 
 class RecipeHtmlParser(HTMLParser):
@@ -55,15 +34,18 @@ class RecipeHtmlParser(HTMLParser):
             self._script_parts = []
         elif tag == "a" and values.get("href"):
             self._anchor = Anchor(values["href"])
-        elif tag in {"img", "source"} and self._anchor is not None:
-            srcset = values.get("srcset") or values.get("data-srcset") or ""
-            image_url, score = _srcset_candidate(srcset)
-            if image_url is None:
-                image_url = values.get("data-src") or values.get("data-lazy-src") or values.get("src") or None
-                score = 1 if image_url else 0
-            if image_url and score >= self._anchor.image_score:
-                self._anchor.image_url = image_url
-                self._anchor.image_score = score
+        elif tag == "img" and self._anchor is not None:
+            # Publisher srcset URLs can contain literal commas in resize query
+            # values (for example ``resize=372,338``). Treating every comma as
+            # a candidate separator produced invalid paths such as ``/338``.
+            # The ordinary image URL is lower resolution but consistently valid.
+            self._anchor.image_url = (
+                values.get("data-src")
+                or values.get("data-lazy-src")
+                or values.get("src")
+                or self._anchor.image_url
+                or None
+            )
             self._anchor.image_alt = values.get("alt") or self._anchor.image_alt or None
         elif tag == "meta":
             key = values.get("property") or values.get("name") or values.get("itemprop")

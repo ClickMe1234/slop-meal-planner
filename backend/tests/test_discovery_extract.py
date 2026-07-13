@@ -1,7 +1,7 @@
 from decimal import Decimal
 from pathlib import Path
 
-from app.discovery.adapters import AllrecipesAdapter, GoodFoodAdapter, GreatBritishChefsAdapter
+from app.discovery.adapters import AllrecipesAdapter, GoodFoodAdapter
 from app.discovery.extraction import extract_recipe
 
 FIXTURES = Path(__file__).parent / "fixtures" / "discovery"
@@ -20,7 +20,7 @@ def test_json_ld_recipe_extracts_present_fields_but_requires_review():
     assert result.publisher_nutrition.protein_g == Decimal("18")
     assert result.extraction_method == "json_ld"
     assert result.review_required is True
-    assert any("food matches" in reason for reason in result.review_reasons)
+    assert any("amounts and units" in reason for reason in result.review_reasons)
 
 
 def test_serving_range_prefills_midpoint_and_flags_confirmation():
@@ -58,11 +58,10 @@ def test_supported_adapter_urls_and_good_food_result_parsing():
     assert results[0].publisher_nutrition.energy_kcal == Decimal("280")
     assert results[1].image_url == "https://www.bbcgoodfood.com/images/another.jpg"
 
-    assert GreatBritishChefsAdapter().supports_url("https://www.greatbritishchefs.com/recipes/stew-recipe")
     assert AllrecipesAdapter().supports_url("https://www.allrecipes.com/recipe/123/stew/")
 
 
-def test_search_result_prefers_largest_lazy_image_candidate():
+def test_search_result_uses_valid_img_instead_of_srcset_source():
     html = '''<a href="/recipes/soup"><picture>
       <source srcset="/images/soup-480.jpg 480w, /images/soup-1280.jpg 1280w">
       <img src="/images/soup-placeholder.jpg" alt="Soup">
@@ -71,4 +70,30 @@ def test_search_result_prefers_largest_lazy_image_candidate():
         html,
         search_url="https://www.bbcgoodfood.com/search?q=soup",
     )[0]
-    assert result.image_url == "https://www.bbcgoodfood.com/images/soup-1280.jpg"
+    assert result.image_url == "https://www.bbcgoodfood.com/images/soup-placeholder.jpg"
+
+
+def test_search_result_image_keeps_commas_inside_resize_query():
+    html = '''<a href="/recipes/soup"><picture>
+      <source srcset="https://images.immediate.co.uk/soup.jpg?resize=93,84 93w, https://images.immediate.co.uk/soup.jpg?resize=372,338 372w">
+      <img src="https://images.immediate.co.uk/soup.jpg?resize=93,84" alt="Soup">
+    </picture></a>'''
+    result = GoodFoodAdapter().parse_search_results(
+        html,
+        search_url="https://www.bbcgoodfood.com/search?q=soup",
+    )[0]
+    assert result.image_url == "https://images.immediate.co.uk/soup.jpg?resize=93%2C84"
+    assert not result.image_url.endswith("/338")
+
+
+def test_allrecipes_search_card_removes_rating_count_from_title():
+    html = '''<a href="/recipe/123/chicken-soup/">
+      <img data-src="https://www.allrecipes.com/thmb/chicken.jpg" alt="Chicken Soup">
+      Chicken Soup 1,234 Ratings
+    </a>'''
+    result = AllrecipesAdapter().parse_search_results(
+        html,
+        search_url="https://www.allrecipes.com/search?q=chicken",
+    )[0]
+    assert result.title == "Chicken Soup"
+    assert result.image_url == "https://www.allrecipes.com/thmb/chicken.jpg"

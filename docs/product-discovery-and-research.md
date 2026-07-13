@@ -1,5 +1,10 @@
 # Meal Planner Product Discovery and Research
 
+> Implementation update — 13 July 2026: automatic planning now uses only a
+> complete per-serving nutrition set reported by the recipe publisher.
+> Ingredient matching/calculation is parked. Good Food and Allrecipes discovery
+> remain active; Great British Chefs is temporarily disabled.
+
 **Status:** Living discovery and decision record; initial implementation completed 12 July 2026
 **Research date:** 12 July 2026
 **Primary region assumed:** United Kingdom

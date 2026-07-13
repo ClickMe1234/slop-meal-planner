@@ -31,7 +31,7 @@ from ..schemas import (
 )
 from ..services.food_search import fetch_and_cache_usda_foods, normalise_food_query
 from ..services.ingredients import parse_ingredient
-from ..services.nutrition import calculate_recipe, latest_calculation
+from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
 
 router = APIRouter(tags=["recipes and food data"])
 
@@ -71,16 +71,39 @@ def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
             )
         ingredients.append(item)
     calculation = latest_calculation(db, version.id)
+    reported_values = publisher_values(version)
+    nutrition_values = (
+        calculation.per_serving_values
+        if calculation is not None and calculation.status == "publisher"
+        else ({key: float(value) for key, value in reported_values.items()} if reported_values else None)
+    )
+    effective_eligibility = (
+        RecipeEligibility.PLANNER_READY
+        if reported_values is not None and version.yield_servings
+        else recipe.eligibility
+    )
     recipe_fields = RecipeSummary.model_validate(recipe).model_dump(
-        exclude={"yield_servings", "publisher_nutrition", "calculated_nutrition", "nutrition_method", "review_count"}
+        exclude={
+            "eligibility",
+            "yield_servings",
+            "publisher_nutrition",
+            "calculated_nutrition",
+            "nutrition_method",
+            "review_count",
+        }
     )
     summary = RecipeSummary(
         **recipe_fields,
+        eligibility=effective_eligibility,
         yield_servings=version.yield_servings,
         publisher_nutrition=version.publisher_nutrition,
-        calculated_nutrition=calculation.per_serving_values if calculation else None,
-        nutrition_method=calculation.status if calculation else None,
-        review_count=sum(1 for ingredient in version.ingredients if ingredient.included and ingredient.needs_review),
+        calculated_nutrition=nutrition_values,
+        nutrition_method="publisher" if reported_values is not None else None,
+        review_count=(
+            0
+            if recipe.source_type == "url"
+            else sum(1 for ingredient in version.ingredients if ingredient.included and ingredient.needs_review)
+        ),
     )
     return RecipeDetail(
         **summary.model_dump(),
@@ -156,6 +179,8 @@ def create_recipe(
     db.flush()
     for position, item in enumerate(payload.ingredients):
         db.add(RecipeIngredient(recipe_version_id=version.id, position=position, **item.model_dump()))
+    if publisher_values(version) is not None and version.yield_servings:
+        recipe.eligibility = RecipeEligibility.PLANNER_READY.value
     db.commit()
     db.refresh(recipe)
     return _recipe_detail(db, recipe)
@@ -215,8 +240,8 @@ def save_recipe_review(
         )
     recipe.title = payload.title
     recipe.eligibility = (
-        RecipeEligibility.NEEDS_REVIEW.value
-        if any(item.needs_review for item in payload.ingredients)
+        RecipeEligibility.PLANNER_READY.value
+        if publisher_values(next_version) is not None
         else RecipeEligibility.DRAFT.value
     )
     recipe.version += 1

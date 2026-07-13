@@ -267,6 +267,7 @@ button.tag { cursor: pointer; font: inherit; }
 .search-status { align-items:center; background:var(--blue-soft); border-radius:10px; color:var(--blue); display:flex; justify-content:space-between; margin-bottom:16px; padding:10px 14px; }
 .search-status span { color:var(--muted); font-size:.72rem; }
 .recipe-grid { display:grid; gap:18px; grid-template-columns:repeat(3,minmax(0,1fr)); }
+.recipe-card-observer,.recipe-card-observer>.recipe-card { height:100%; }
 .recipe-card { overflow:hidden; }
 .recipe-image { aspect-ratio:16/9; background:var(--surface-2); color:var(--muted); overflow:hidden; position:relative; }
 .recipe-image>img { height:100%; object-fit:cover; width:100%; }

@@ -28,7 +28,7 @@ from ..models import (
     TargetProfile,
 )
 from ..schemas import PlanGenerateRequest, PlanOut
-from ..services.nutrition import latest_calculation
+from ..services.nutrition import publisher_values
 from ..services.pantry import reserve_plan_batches
 from ..services.planner import (
     ParticipantTarget,
@@ -48,13 +48,13 @@ def _candidate(db: Session, recipe: Recipe) -> RecipeCandidate | None:
     )
     if version is None:
         return None
-    calculation = latest_calculation(db, version.id)
-    if calculation is None or calculation.status != "complete":
+    nutrition = publisher_values(version)
+    if nutrition is None:
         return None
     return RecipeCandidate(
         recipe_id=recipe.id,
         recipe_version_id=version.id,
-        nutrition={key: Decimal(str(value)) for key, value in calculation.per_serving_values.items()},
+        nutrition=nutrition,
         food_record_ids=frozenset(
             item.food_record_id
             for item in version.ingredients
@@ -113,7 +113,6 @@ def generate_plan(
         select(Recipe).where(
             Recipe.id.in_(payload.recipe_ids),
             Recipe.household_id == context.user.household_id,
-            Recipe.eligibility == RecipeEligibility.PLANNER_READY.value,
         )
     ).all()
     candidates = [candidate for recipe in recipes if (candidate := _candidate(db, recipe))]
@@ -286,7 +285,7 @@ def get_plan(
         batch = db.get(MealBatch, occurrence.batch_id)
         version = db.get(RecipeVersion, batch.recipe_version_id)
         recipe = db.get(Recipe, version.recipe_id)
-        calculation = latest_calculation(db, version.id)
+        nutrition = publisher_values(version)
         portions = db.scalars(
             select(PortionAllocation).where(
                 PortionAllocation.meal_occurrence_id == occurrence.id
@@ -303,7 +302,11 @@ def get_plan(
                 "recipe_title": recipe.title,
                 "source_url": recipe.source_url,
                 "batch_servings": batch.servings,
-                "nutrition_per_serving": calculation.per_serving_values if calculation else None,
+                "nutrition_per_serving": (
+                    {key: float(value) for key, value in nutrition.items()}
+                    if nutrition
+                    else None
+                ),
                 "cooked_at": batch.cooked_at,
                 "portions": [
                     {"member_id": portion.member_id, "servings": portion.servings}

@@ -26,6 +26,7 @@ from .models import (
     UserSession,
 )
 from .services.ingredients import parse_ingredient
+from .services.nutrition import publisher_values
 
 celery_app = Celery(
     "meal_planner",
@@ -123,7 +124,7 @@ def process_recipe_import(self, job_id: str) -> dict:
             )
             if existing is not None:
                 job.status = JobStatus.AWAITING_REVIEW.value
-                job.stage = "ingredient_review"
+                job.stage = "recipe_review"
                 job.progress = 100
                 job.result = {"recipe_id": existing.id, "already_saved": True}
                 db.commit()
@@ -167,11 +168,15 @@ def process_recipe_import(self, job_id: str) -> dict:
                         preparation=parsed.preparation,
                         included=not parsed.optional,
                         optional=parsed.optional,
-                        needs_review=True,
+                        needs_review=False,
                     )
                 )
+            if publisher_values(version) is not None and version.yield_servings:
+                recipe.eligibility = RecipeEligibility.PLANNER_READY.value
+            else:
+                recipe.eligibility = RecipeEligibility.DRAFT.value
             job.status = JobStatus.AWAITING_REVIEW.value
-            job.stage = "ingredient_review"
+            job.stage = "recipe_review"
             job.progress = 80
             job.result = {
                 "recipe_id": recipe.id,

@@ -172,9 +172,10 @@ def extract_recipe(html: str, page_url: str) -> ExtractedRecipe:
             image_url = None
             reasons.append("The recipe image URL was invalid")
 
-    # Imported ingredient text still needs quantity/unit parsing and food-record
-    # matching, so even complete JSON-LD imports enter the review workflow.
-    reasons.append("Ingredient quantities and food matches have not been confirmed")
+    # Ingredient text is retained for the recipe and shopping features. Food
+    # matching is intentionally not part of the current nutrition workflow.
+    if ingredients:
+        reasons.append("Ingredient amounts and units can be reviewed for shopping")
     return ExtractedRecipe(
         title=title,
         canonical_url=canonical_url,
@@ -184,6 +185,6 @@ def extract_recipe(html: str, page_url: str) -> ExtractedRecipe:
         ingredient_lines=ingredients,
         publisher_nutrition=nutrition,
         extraction_method=method,
-        review_required=True,
+        review_required=bool(reasons),
         review_reasons=tuple(dict.fromkeys(reasons)),
     )

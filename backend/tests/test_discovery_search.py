@@ -1,6 +1,7 @@
 import asyncio
 
 from app.discovery.models import SearchResult
+from app.discovery.registry import default_registry
 from app.discovery.search import LiveSearchService, SearchPolicy
 
 
@@ -13,8 +14,6 @@ class FakeFetcher:
         title = "Stew" if "stew" in url else "Soup"
         if "bbcgoodfood" in url:
             recipe_url = f"https://www.bbcgoodfood.com/recipes/{title.lower()}"
-        elif "greatbritishchefs" in url:
-            recipe_url = f"https://www.greatbritishchefs.com/recipes/{title.lower()}-recipe"
         else:
             recipe_url = f"https://www.allrecipes.com/recipe/123/{title.lower()}/"
         return f'<a href="{recipe_url}">{title}</a>'
@@ -34,10 +33,10 @@ def test_remote_search_is_cached_and_marks_saved_results():
         )
         first = await service.search_remote(" Soup ")
         second = await service.search_remote("soup")
-        assert len(first.results) == 3
+        assert len(first.results) == 2
         assert sum(result.already_saved for result in first.results) == 1
         assert second.cache_hit is True
-        assert len(fetcher.calls) == 3
+        assert len(fetcher.calls) == 2
 
     asyncio.run(run())
 
@@ -52,7 +51,7 @@ def test_newer_request_supersedes_older_request_key():
         old_result, new_result = await asyncio.gather(older, newer)
         assert old_result.superseded is True
         assert new_result.superseded is False
-        assert len(fetcher.calls) == 3
+        assert len(fetcher.calls) == 2
 
     asyncio.run(run())
 
@@ -75,5 +74,54 @@ def test_remote_search_only_calls_selected_publishers():
         assert {source.source for source in result.sources} == {"good_food", "allrecipes"}
         assert len(fetcher.calls) == 2
         assert not any("greatbritishchefs" in url for url in fetcher.calls)
+
+    asyncio.run(run())
+
+
+def test_default_registry_only_enables_current_publishers():
+    assert {adapter.key for adapter in default_registry.adapters} == {"good_food", "allrecipes"}
+
+
+def test_nutrition_preview_fetches_recipe_page_once_and_caches_it():
+    async def run():
+        class PreviewFetcher:
+            def __init__(self):
+                self.calls = []
+
+            async def fetch_text(self, url, *, allowed_hosts):
+                self.calls.append((url, allowed_hosts))
+                return """
+                    <script type="application/ld+json">
+                    {
+                      "@context": "https://schema.org",
+                      "@type": "Recipe",
+                      "name": "Preview curry",
+                      "recipeYield": "4 servings",
+                      "recipeIngredient": ["1 tbsp oil"],
+                      "publisher": {"@type": "Organization", "name": "Good Food"},
+                      "nutrition": {
+                        "calories": "410 kcal",
+                        "proteinContent": "31 g",
+                        "carbohydrateContent": "28 g",
+                        "fatContent": "19 g"
+                      }
+                    }
+                    </script>
+                """
+
+        fetcher = PreviewFetcher()
+        service = LiveSearchService(
+            fetcher,
+            policy=SearchPolicy(debounce_ms=0, preview_cache_ttl_seconds=30),
+        )
+        url = "https://www.bbcgoodfood.com/recipes/preview-curry"
+        first = await service.nutrition_preview(url)
+        second = await service.nutrition_preview(url)
+
+        assert first.publisher_nutrition is not None
+        assert first.publisher_nutrition.energy_kcal == 410
+        assert first.publisher_nutrition.protein_g == 31
+        assert second is first
+        assert len(fetcher.calls) == 1
 
     asyncio.run(run())

@@ -26,7 +26,7 @@ export function PlanPage() {
       const participants=members.filter(member=>member.active).map(member=>member.id)
       const recipeIds=recipes.items.filter(recipe=>recipe.eligibility==='planner_ready').map(recipe=>recipe.id)
       if(!participants.length)throw new ApiError(422,'Add at least one active household member.')
-      if(!recipeIds.length)throw new ApiError(422,'Calculate at least one planner-ready recipe first.')
+      if(!recipeIds.length)throw new ApiError(422,'Save at least one recipe with complete website nutrition first.')
       const slots=[]
       for(let day=0;day<days;day+=1){
         const date=new Date(`${startDate}T12:00:00`);date.setDate(date.getDate()+day);const meal_date=date.toISOString().slice(0,10)
@@ -38,7 +38,7 @@ export function PlanPage() {
     finally{setGenerating(false)}
   }
   if (generated) return livePlan?<LiveGeneratedPlan plan={livePlan} onBack={()=>{setGenerated(false);setLivePlan(null)}}/>:<GeneratedPlan onBack={() => setGenerated(false)}/>
-  return <div className="page"><PageHeader eyebrow="Automatic planning" title="Build your next meal plan" description="We will choose from planner-ready recipes and stay within every person's target tolerance." />
+  return <div className="page"><PageHeader eyebrow="Automatic planning" title="Build your next meal plan" description="We will use recipes with complete website-reported nutrition and stay within every person's target tolerance." />
     {error&&<Notice tone="warning" title="Plan not feasible">{error}</Notice>}
     <div className="planner-layout"><aside className="wizard-sidebar"><ol>{wizardSteps.map((name,index) => <li key={name} className={index < step ? 'done' : index === step ? 'active' : ''}><button onClick={() => setStep(index)}><span>{index < step ? <Check size={15}/> : index + 1}</span><div><strong>{name}</strong><small>{['Choose the planning period','Pick meals to cover','Choose who is eating','Plan leftovers together','Use, prefer or exclude','Check every constraint'][index]}</small></div></button></li>)}</ol></aside>
       <Card className="wizard-panel"><div className="wizard-panel-heading"><p className="eyebrow">Step {step + 1} of {wizardSteps.length}</p><h2>{['When are you planning for?','Which meals should we plan?','Who is eating?','How should batches last?','Any ingredients in mind?','Ready to build your week'][step]}</h2><p>{['Choose any period from one day upwards.','Leave a meal unplanned when you are eating elsewhere. Its allowance is preserved by default.','Everyone shares the same recipe, with individual portion sizes.','Cooking once for several dates saves time and drives the shopping quantities.','Guide the choices using what you already have or want to avoid.','These are the hard rules the planner will use.'][step]}</p></div>

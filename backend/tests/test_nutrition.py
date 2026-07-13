@@ -1,5 +1,8 @@
 from decimal import Decimal
 
+import pytest
+
+from app.errors import DomainError
 from app.models import (
     FoodNutrient,
     FoodRecord,
@@ -107,3 +110,31 @@ def test_complete_publisher_nutrition_is_primary_even_without_food_matches(db):
     assert result.per_serving_values["energy_kcal"] == 412
     assert result.total_values["energy_kcal"] == 1648
     assert recipe.eligibility == "planner_ready"
+
+
+def test_url_recipe_never_falls_back_to_ingredient_calculation(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    recipe = Recipe(
+        household_id=household.id,
+        title="Publisher recipe without nutrition",
+        source_type="url",
+        source_url="https://www.bbcgoodfood.com/recipes/no-nutrition",
+    )
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id,
+        version_number=1,
+        title=recipe.title,
+        yield_servings=4,
+    )
+    db.add(version)
+    db.flush()
+
+    with pytest.raises(DomainError) as error:
+        calculate_recipe(db, version.id)
+
+    assert error.value.code == "PUBLISHER_NUTRITION_UNAVAILABLE"
+    assert recipe.eligibility != "planner_ready"
