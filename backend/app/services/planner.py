@@ -90,6 +90,7 @@ def choose_shared_recipe(
     prior_recipe_uses: dict[str, int] | None = None,
     preferred_terms: frozenset[str] = frozenset(),
     disliked_terms: frozenset[str] = frozenset(),
+    enforce_nutrition_bounds: bool = True,
 ) -> PlannerChoice:
     if not candidates:
         raise ValueError("No planner-ready recipe candidates")
@@ -106,7 +107,9 @@ def choose_shared_recipe(
             best_portion: Decimal | None = None
             best_error: Decimal | None = None
             for portion in PORTIONS:
-                if not _within_hard_bounds(participant, candidate.nutrition, portion):
+                if enforce_nutrition_bounds and not _within_hard_bounds(
+                    participant, candidate.nutrition, portion
+                ):
                     continue
                 error = Decimal("0")
                 for key, target_value in targets.items():

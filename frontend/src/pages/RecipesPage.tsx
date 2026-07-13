@@ -1,13 +1,13 @@
-import { Check, ChefHat, ExternalLink, Filter, Link2, Search, Sparkles } from 'lucide-react'
+import { Check, ChefHat, ExternalLink, Filter, Link2, Search, Sparkles, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { Link, useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NutritionStrip } from '../components/Nutrition'
 import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader, Segmented } from '../components/ui'
-import { mealKindLabels } from '../components/MealTypePicker'
+import { MealTypePicker, mealKindLabels, type RecipeMealType } from '../components/MealTypePicker'
 import { demoRecipes } from '../data/demo'
 import type { Nutrition, Recipe } from '../types'
-import { api, ApiError, isDemoMode, type BackendRecipe, type DiscoveryResult, type RecipeSourceKey } from '../api/client'
+import { api, ApiError, isDemoMode, type BackendRecipe, type BackendRecipeDetail, type DiscoveryResult, type RecipeSourceKey } from '../api/client'
 
 const SOURCE_OPTIONS: Array<{ value: RecipeSourceKey; label: string }> = [
   { value: 'good_food', label: 'Good Food' },
@@ -21,12 +21,49 @@ export function savedRecipePlanningBadge(recipe: Pick<Recipe, 'state' | 'mealKin
   return { tone: 'green', label: 'Used for planning' }
 }
 
+export function importedRecipeNeedsReview(recipe: BackendRecipeDetail): boolean {
+  if (!recipe.yield_servings || !recipe.ingredients.length) return true
+  return recipe.ingredients.some(ingredient =>
+    ingredient.included
+    && (
+      ingredient.needs_review
+      || (!ingredient.shopping_excluded && (ingredient.quantity == null || !ingredient.unit))
+    )
+  )
+}
+
+function reviewPayload(recipe: BackendRecipeDetail, mealTypes: RecipeMealType[]) {
+  return {
+    expected_version: recipe.version,
+    title: recipe.title,
+    yield_servings: Number(recipe.yield_servings),
+    meal_types: mealTypes,
+    ingredients: recipe.ingredients.map(ingredient => ({
+      original_text: ingredient.original_text,
+      quantity: ingredient.quantity ?? null,
+      unit: ingredient.unit ?? null,
+      quantity_grams: ingredient.quantity_grams ?? null,
+      food_phrase: ingredient.food_phrase ?? ingredient.original_text,
+      preparation: ingredient.preparation,
+      included: ingredient.included,
+      optional: ingredient.optional,
+      needs_review: false,
+      shopping_excluded: ingredient.shopping_excluded,
+      food_record_id: ingredient.food_record_id,
+    })),
+  }
+}
+
 export function RecipesPage() {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [query, setQuery] = useState('')
   const [scope, setScope] = useState<'all' | 'saved'>('all')
-  const [saving, setSaving] = useState<string[]>([])
-  const [importJobs, setImportJobs] = useState<Record<string, string>>({})
+  const [pendingRecipe, setPendingRecipe] = useState<Recipe | null>(null)
+  const [pendingMealTypes, setPendingMealTypes] = useState<RecipeMealType[]>([])
+  const [finishing, setFinishing] = useState(false)
   const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [selectedSources, setSelectedSources] = useState<RecipeSourceKey[]>(ALL_SOURCES)
 
@@ -59,20 +96,49 @@ export function RecipesPage() {
   const toggleSource = (source: RecipeSourceKey) => {
     setSelectedSources(current => current.includes(source) ? current.filter(item => item !== source) : [...current, source])
   }
-  const save = async (recipe: Recipe) => {
-    setSaving(items => [...items, recipe.id])
+  const openSave = (recipe: Recipe) => {
+    setPendingRecipe(recipe)
+    setPendingMealTypes([])
+    setError('')
+    setMessage('')
+  }
+  const finishSave = async () => {
+    if (!pendingRecipe || !pendingMealTypes.length) return
+    setFinishing(true)
     setError('')
     try {
       if (isDemoMode) {
-        await new Promise(resolve => window.setTimeout(resolve, 500))
-      } else {
-        const job = await api.startImport(recipe.sourceUrl)
-        setImportJobs(items => ({ ...items, [recipe.id]: job.id }))
+        await new Promise(resolve => window.setTimeout(resolve, 300))
+        setMessage(`${pendingRecipe.title} was saved for ${pendingMealTypes.join(', ')}.`)
+        setPendingRecipe(null)
+        return
       }
+      const job = await api.startImport(pendingRecipe.sourceUrl)
+      let completed = await api.job(job.id)
+      for (let attempt = 0; attempt < 90 && ['queued', 'running'].includes(completed.status); attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 1000))
+        completed = await api.job(job.id)
+      }
+      if (completed.status === 'failed') throw new ApiError(422, completed.error_detail ?? 'The recipe page could not be imported.')
+      const recipeId = completed.result?.recipe_id
+      if (!recipeId) throw new ApiError(504, 'The import is still running. Please try again.')
+      const imported = await api.getRecipe(recipeId)
+      if (importedRecipeNeedsReview(imported)) {
+        const params = new URLSearchParams({ returnTo: '/recipes', suggestedMealTypes: pendingMealTypes.join(',') })
+        navigate(`/imports/${job.id}/review?${params}`)
+        return
+      }
+      await api.saveRecipeReview(imported.id, reviewPayload(imported, pendingMealTypes))
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['recipes'] }),
+        queryClient.invalidateQueries({ queryKey: ['recipe', imported.id] }),
+      ])
+      setMessage(`${imported.title} was saved and is ready for meal planning.`)
+      setPendingRecipe(null)
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'The recipe could not be saved.')
     } finally {
-      setSaving(items => items.filter(item => item !== recipe.id))
+      setFinishing(false)
     }
   }
 
@@ -83,10 +149,12 @@ export function RecipesPage() {
     <div className="search-controls"><Segmented value={scope} onChange={setScope} label="Recipe source" options={[{ value: 'all', label: 'Everywhere' }, { value: 'saved', label: 'My recipes' }]}/><div className="source-pills"><span>Searching:</span>{SOURCE_OPTIONS.filter(option => selectedSources.includes(option.value)).map(option => <Badge key={option.value}>{option.label}</Badge>)}{selectedSources.length === 0 && <Badge tone="warning">No websites selected</Badge>}</div></div>
     {remoteSearch.isFetching && <div className="search-status"><Loading label="Searching recipe websites…"/><span>Saved recipes are already shown below</span></div>}
     {error && <Notice tone="warning" title="Recipe could not be saved">{error}</Notice>}
+    {message && <Notice tone="success" title="Recipe saved">{message}</Notice>}
     {results.length
-      ? <div className="recipe-grid">{results.map(recipe => <RecipeCard key={recipe.id} recipe={recipe} saving={saving.includes(recipe.id)} importJob={importJobs[recipe.id]} onSave={() => save(recipe)}/>)}</div>
+      ? <div className="recipe-grid">{results.map(recipe => <RecipeCard key={recipe.id} recipe={recipe} saving={finishing && pendingRecipe?.id === recipe.id} onSave={() => openSave(recipe)}/>)}</div>
       : <EmptyState icon={<ChefHat size={40}/>} title="No recipes found" description="Try a broader search, or import a recipe by URL." action={<Link className="button button--primary" to="/recipes/import">Import recipe</Link>}/>
     }
+    {pendingRecipe && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !finishing) setPendingRecipe(null) }}><Card className="recipe-save-modal" role="dialog" aria-modal="true" aria-labelledby="recipe-save-title"><button type="button" className="modal-close" aria-label="Close meal type selection" disabled={finishing} onClick={() => setPendingRecipe(null)}><X/></button><p className="eyebrow">Save recipe</p><h2 id="recipe-save-title">Where should {pendingRecipe.title} be used?</h2><p className="muted">Choose every meal this recipe suits. The ingredient review will only open if something needs your input.</p><MealTypePicker value={pendingMealTypes} onChange={setPendingMealTypes}/>{finishing && <Loading label="Importing and checking ingredients…"/>}<div className="button-row"><Button variant="ghost" disabled={finishing} onClick={() => setPendingRecipe(null)}>Cancel</Button><Button disabled={finishing || !pendingMealTypes.length} onClick={finishSave}>{finishing ? 'Checking recipe…' : 'Finish saving'}</Button></div></Card></div>}
   </div>
 }
 
@@ -96,7 +164,7 @@ function RecipeThumbnail({ url }: { url?: string }) {
   return url && !failed ? <img src={url} alt="" loading="lazy" onError={() => setFailed(true)}/> : <ChefHat/>
 }
 
-function RecipeCard({ recipe, saving, importJob, onSave }: { recipe: Recipe; saving: boolean; importJob?: string; onSave: () => void }) {
+function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolean; onSave: () => void }) {
   const saved = recipe.source === 'Saved recipe' || recipe.state === 'ready'
   const missingMealTypes = saved && recipe.mealKinds.length === 0
   const planningBadge = saved ? savedRecipePlanningBadge(recipe) : null
@@ -139,7 +207,7 @@ function RecipeCard({ recipe, saving, importJob, onSave }: { recipe: Recipe; sav
       <p className="recipe-meta">{yieldServings ? `Serves ${yieldServings}` : 'Yield not reported'}{recipe.mealKinds.length ? ` · ${recipe.mealKinds.join(' · ')}` : ''}</p>
       {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>Nutrition from {nutritionSource} · per serving</span><Badge tone={planningBadge?.tone ?? 'green'}>{planningBadge?.label ?? 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
       {missingMealTypes && <div className="recipe-planning-note recipe-planning-note--warning" role="status"><strong>Not used for meal planning</strong><span>Add breakfast, lunch, dinner or snack so the planner knows where this recipe belongs.</span></div>}
-      <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{missingMealTypes ? 'Add meal types' : 'Edit meal types'}</Link> : importJob ? <Link to={`/imports/${importJob}/review`} className="button button--secondary">Finish saving</Link> : <Button disabled={saving} onClick={onSave}>{saving ? 'Saving…' : 'Save recipe'}</Button>}</div>
+      <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{missingMealTypes ? 'Add meal types' : 'Edit meal types'}</Link> : <Button disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}</div>
     </div>
   </Card></div>
 }

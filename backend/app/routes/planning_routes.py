@@ -6,6 +6,7 @@ import re
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from ..auth import AuthContext, get_auth_context, require_csrf
 from ..db import get_db
@@ -493,6 +494,7 @@ def generate_plan(
                     prior_recipe_uses=recipe_uses,
                     preferred_terms=preferred_terms,
                     disliked_terms=disliked_terms,
+                    enforce_nutrition_bounds=not payload.ignore_nutrition_tolerances,
                 )
             except PlannerInfeasibleError:
                 if not unused_candidates:
@@ -504,13 +506,30 @@ def generate_plan(
                     prior_recipe_uses=recipe_uses,
                     preferred_terms=preferred_terms,
                     disliked_terms=disliked_terms,
+                    enforce_nutrition_bounds=not payload.ignore_nutrition_tolerances,
                 )
         except PlannerInfeasibleError as exc:
             raise DomainError(
                 "NUTRITION_TARGET_INFEASIBLE",
                 f"{slot.meal_date} {slot.meal_type}: {exc}",
                 422,
+                actions=[
+                    {
+                        "kind": "retry_best_effort",
+                        "label": "Continue anyway",
+                        "suggestion": "Choose the closest available portions without enforcing nutrition tolerances.",
+                    }
+                ],
             ) from exc
+        if payload.ignore_nutrition_tolerances:
+            diagnostics.append(
+                {
+                    "code": "NUTRITION_TOLERANCE_RELAXED",
+                    "batch_key": batch_key,
+                    "meal_type": meal_type,
+                    "cook_date": min(item.meal_date for item in slots).isoformat(),
+                }
+            )
         remaining_must_use -= choice.candidate.food_record_ids
         recipe_uses[choice.candidate.recipe_id] = (
             recipe_uses.get(choice.candidate.recipe_id, 0) + len(slots)
@@ -553,6 +572,8 @@ def generate_plan(
             "No feasible selected recipe covers every must-use ingredient",
             422,
         )
+    plan.diagnostics = list(diagnostics)
+    flag_modified(plan, "diagnostics")
     plan.status = PlanStatus.READY.value
     db.commit()
     db.refresh(plan)

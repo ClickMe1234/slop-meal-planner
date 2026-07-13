@@ -118,7 +118,7 @@ export function PlanPage() {
   const [startDate, setStartDate] = useState(localToday)
   const [days, setDays] = useState(7)
   const [livePlan, setLivePlan] = useState<BackendPlanDetail | null>(() => restoredPlanId === 'demo' ? readDemoPlan() : null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<ApiError | null>(null)
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([])
   const [membersInitialised, setMembersInitialised] = useState(false)
   const [attendance, setAttendance] = useState<AttendanceOverrides>({})
@@ -143,23 +143,18 @@ export function PlanPage() {
     setMembersInitialised(true)
   }, [members, membersInitialised])
 
-  const targetQueries = useQueries({
-    queries: members.map(member => ({
-      queryKey: ['target', member.id],
-      queryFn: () => api.getTarget(member.id),
-      enabled: !isDemoMode,
-      retry: false,
-    })),
+  const targetsQuery = useQuery({
+    queryKey: ['targets'],
+    queryFn: api.listTargets,
+    enabled: !isDemoMode,
+    retry: false,
   })
   const targetsByMember = useMemo(() => new Map<string, BackendTarget>(
     isDemoMode
       ? [[demoMember.id, demoTarget]]
-      : targetQueries.flatMap((query, index) => query.data ? [[members[index].id, query.data] as const] : []),
-  ), [members, targetQueries])
-  const selectedTargetLoading = !isDemoMode && selectedMemberIds.some(memberId => {
-    const index = members.findIndex(member => member.id === memberId)
-    return index >= 0 && targetQueries[index]?.isLoading
-  })
+      : (targetsQuery.data ?? []).map(target => [target.member_id, target] as const),
+  ), [targetsQuery.data])
+  const selectedTargetLoading = !isDemoMode && targetsQuery.isLoading
   const selectedWithoutTarget = selectedMemberIds.filter(memberId => !targetsByMember.has(memberId))
 
   const restrictionQueries = useQueries({
@@ -255,13 +250,13 @@ export function PlanPage() {
     setSearchParams({}, { replace: true })
   }
 
-  const generate = async () => {
+  const generate = async (ignoreNutritionTolerances = false) => {
     if (generationBlocked) {
       if (longBatch && !foodSafetyAcknowledged) setStep(3)
       return
     }
     setGenerating(true)
-    setError('')
+    setError(null)
     try {
       if (isDemoMode) {
         await new Promise(resolve => window.setTimeout(resolve, 500))
@@ -283,12 +278,13 @@ export function PlanPage() {
         must_use_food_record_ids: ingredientGuidance.must.map(item => item.id),
         prefer_food_record_ids: ingredientGuidance.prefer.map(item => item.id),
         exclude_food_record_ids: ingredientGuidance.exclude.map(item => item.id),
+        ignore_nutrition_tolerances: ignoreNutritionTolerances,
       })
       const detail = await api.getPlan(plan.id)
       setLivePlan(detail)
       setSearchParams({ plan: plan.id }, { replace: true })
     } catch (reason) {
-      setError(reason instanceof ApiError ? reason.message : 'The plan could not be generated.')
+      setError(reason instanceof ApiError ? reason : new ApiError(0, 'The plan could not be generated.'))
     } finally {
       setGenerating(false)
     }
@@ -310,7 +306,7 @@ export function PlanPage() {
 
   return <div className="page">
     <PageHeader eyebrow="Automatic planning" title="Build your next meal plan" description="Set exactly who needs each meal and when you want to cook. Portions, ingredients and shopping quantities follow those choices."/>
-    {error && <Notice tone="warning" title="Plan not feasible">{error}</Notice>}
+    {error && <Card className="planner-generation-error"><Notice tone="warning" title="Plan not feasible">{error.message}</Notice>{error.code === 'NUTRITION_TARGET_INFEASIBLE' && <Button variant="secondary" disabled={generating} onClick={() => generate(true)}>Continue anyway</Button>}</Card>}
     <div className="planner-layout">
       <aside className="wizard-sidebar"><ol>{wizardSteps.map((name, index) => <li key={name} className={index < step ? 'done' : index === step ? 'active' : ''}><button type="button" disabled={index > maxVisitedStep} onClick={() => openStep(index)}><span>{index < step ? <Check size={15}/> : index + 1}</span><div><strong>{name}</strong><small>{stepDescriptions[index]}</small></div></button></li>)}</ol></aside>
       <Card className="wizard-panel">
@@ -327,7 +323,7 @@ export function PlanPage() {
           <Button variant="ghost" disabled={step === 0 || generating} onClick={() => setStep(current => current - 1)}><ChevronLeft/>Back</Button>
           {step < wizardSteps.length - 1
             ? <Button disabled={stepBlocked} onClick={next}>Continue<ChevronRight/></Button>
-            : <Button disabled={generating || generationBlocked} onClick={generate}><WandSparkles/>{generating ? 'Building your plan…' : 'Generate meal plan'}</Button>}
+            : <Button disabled={generating || generationBlocked} onClick={() => generate()}><WandSparkles/>{generating ? 'Building your plan…' : 'Generate meal plan'}</Button>}
         </div>
       </Card>
     </div>

@@ -125,7 +125,7 @@ npm.cmd test
 npm.cmd run build
 ```
 
-The current repository passes 48 backend tests, 17 frontend tests, TypeScript
+The current repository passes 50 backend tests, 20 frontend tests, TypeScript
 compilation, the production PWA build, the initial and incremental Alembic
 upgrades, and Compose YAML parsing. A Docker Desktop smoke test also passed: the
 PostgreSQL, Redis, web, worker and scheduler services started; migrations ran;

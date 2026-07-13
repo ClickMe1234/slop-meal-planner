@@ -312,6 +312,7 @@ class PlanGenerateRequest(APIModel):
     must_use_food_record_ids: list[str] = Field(default_factory=list)
     prefer_food_record_ids: list[str] = Field(default_factory=list)
     exclude_food_record_ids: list[str] = Field(default_factory=list)
+    ignore_nutrition_tolerances: bool = False
 
     @model_validator(mode="after")
     def validate_planning_period(self):

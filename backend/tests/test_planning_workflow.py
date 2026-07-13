@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.models import MealPlan, PlanStatus, ShoppingItem, ShoppingList
+from app.models import MealPlan, PlanStatus, RecipeVersion, ShoppingItem, ShoppingList
 
 
 PUBLISHER_NUTRITION = {
@@ -18,13 +18,13 @@ def _headers(owner):
     return {"X-CSRF-Token": owner["csrf_token"]}
 
 
-def _set_dinner_target(client, owner, member_id):
+def _set_dinner_target(client, owner, member_id, calorie_target=500):
     response = client.put(
         f"/api/v1/household-members/{member_id}/target",
         headers=_headers(owner),
         json={
             "mode": "calorie",
-            "calorie_target": 500,
+            "calorie_target": calorie_target,
             "tolerance_percent": 5,
             "allocations": [{"meal_type": "dinner", "percentage": 100}],
         },
@@ -141,7 +141,12 @@ def test_grouped_batch_supports_per_date_attendance_preferences_and_replacement(
         headers=_headers(owner),
         json={"name": "Partner"},
     ).json()
-    _set_dinner_target(client, owner, partner["id"])
+    _set_dinner_target(client, owner, partner["id"], calorie_target=250)
+    targets = client.get("/api/v1/household-members/targets").json()
+    assert {target["member_id"]: float(target["calorie_target"]) for target in targets} == {
+        owner_member_id: 500,
+        partner["id"]: 250,
+    }
     preferred = client.post(
         f"/api/v1/household-members/{owner_member_id}/restrictions",
         headers=_headers(owner),
@@ -190,8 +195,8 @@ def test_grouped_batch_supports_per_date_attendance_preferences_and_replacement(
     assert detail["plan"]["end_date"] == "2026-07-22"
     assert {item["recipe_id"] for item in detail["occurrences"]} == {spinach["id"]}
     assert [len(item["portions"]) for item in detail["occurrences"]] == [2, 1]
-    assert float(detail["occurrences"][0]["batch_servings"]) == 3
-    assert detail["daily_nutrition"][0]["totals"]["energy_kcal"] == 1000
+    assert float(detail["occurrences"][0]["batch_servings"]) == 2.5
+    assert detail["daily_nutrition"][0]["totals"]["energy_kcal"] == 750
     assert detail["daily_nutrition"][1]["totals"]["energy_kcal"] == 500
 
     occurrence_id = detail["occurrences"][0]["id"]
@@ -209,7 +214,57 @@ def test_grouped_batch_supports_per_date_attendance_preferences_and_replacement(
         broccoli["id"]
     }
     assert [len(item["portions"]) for item in replaced_detail["occurrences"]] == [2, 1]
-    assert float(replaced_detail["occurrences"][0]["batch_servings"]) == 3
+    assert float(replaced_detail["occurrences"][0]["batch_servings"]) == 2.5
+
+
+def test_infeasible_plan_can_be_retried_in_best_effort_mode(
+    client, owner, session_factory
+):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    recipe = _create_recipe(client, owner, "Very light dinner", ["dinner"])
+    # Make the only recipe far below the target at every supported portion.
+    with session_factory() as db:
+        version = db.scalar(select(RecipeVersion).where(RecipeVersion.recipe_id == recipe["id"]))
+        version.publisher_nutrition = {
+            "basis": "per serving",
+            "energy_kcal": 100,
+            "protein_g": 5,
+            "carbohydrate_g": 10,
+            "fat_g": 3,
+        }
+        db.commit()
+
+    payload = {
+        "name": "Best effort plan",
+        "recipe_ids": [recipe["id"]],
+        "slots": [{
+            "meal_date": "2026-07-20",
+            "meal_type": "dinner",
+            "participant_member_ids": [member_id],
+        }],
+    }
+    infeasible = client.post(
+        "/api/v1/meal-plans/generate", headers=_headers(owner), json=payload
+    )
+    assert infeasible.status_code == 422
+    assert infeasible.json()["code"] == "NUTRITION_TARGET_INFEASIBLE"
+    assert infeasible.json()["actions"][0]["kind"] == "retry_best_effort"
+
+    retried = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={**payload, "ignore_nutrition_tolerances": True},
+    )
+    assert retried.status_code == 201, retried.text
+    assert any(
+        item["code"] == "NUTRITION_TOLERANCE_RELAXED"
+        for item in retried.json()["diagnostics"]
+    )
+    detail = client.get(f"/api/v1/meal-plans/{retried.json()['id']}").json()
+    assert detail["occurrences"][0]["portions"] == [
+        {"member_id": member_id, "servings": 2.0}
+    ]
 
 
 def test_replacement_preserves_plan_specific_ingredient_guidance(client, owner):

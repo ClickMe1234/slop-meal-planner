@@ -97,6 +97,7 @@ export const api = {
   changePassword: (currentPassword: string, newPassword: string) => request<void>('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
   setTarget: (memberId: string, payload: Record<string, unknown>) => request(`/household-members/${memberId}/target`, { method: 'PUT', body: JSON.stringify(payload) }),
   listMembers: () => request<BackendMember[]>('/household-members'),
+  listTargets: () => request<BackendTarget[]>('/household-members/targets'),
   createMember: (name: string) => request<BackendMember>('/household-members', { method: 'POST', body: JSON.stringify({ name }) }),
   updateMember: (memberId: string, payload: { expected_version: number; name?: string; active?: boolean }) => request<BackendMember>(`/household-members/${memberId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   getTarget: (memberId: string) => request<BackendTarget>(`/household-members/${memberId}/target`),
@@ -170,6 +171,7 @@ export interface BackendRecipeDetail extends BackendRecipe {
     unit?: string
     quantity_grams?: number
     food_phrase?: string
+    preparation?: string
     included: boolean
     optional: boolean
     needs_review: boolean
@@ -201,6 +203,12 @@ export interface BackendTarget {
   protein_target_g?: number
   carbohydrate_target_g?: number
   fat_target_g?: number
+  protein_min_g?: number
+  protein_max_g?: number
+  carbohydrate_min_g?: number
+  carbohydrate_max_g?: number
+  fat_min_g?: number
+  fat_max_g?: number
   tolerance_percent: number
   allocations: Array<{ meal_type: string; percentage: number }>
   version: number

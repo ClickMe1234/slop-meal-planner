@@ -237,7 +237,11 @@ function LiveImportReviewPage() {
   const requestedReturnTo = searchParams.get('returnTo')
   const returnTo = requestedReturnTo?.startsWith('/') && !requestedReturnTo.startsWith('//') ? requestedReturnTo : '/recipes'
   const focusIngredient = searchParams.get('focusIngredient') ?? ''
-  const suggestedMealType = normaliseRecipeMealTypes(searchParams.get('suggestedMealType') ? [searchParams.get('suggestedMealType')!] : [])[0]
+  const suggestedMealTypes = normaliseRecipeMealTypes(
+    (searchParams.get('suggestedMealTypes') ?? searchParams.get('suggestedMealType') ?? '')
+      .split(',')
+      .filter(Boolean),
+  )
   const job = useQuery({
     queryKey: ['job', jobId],
     queryFn: () => api.job(jobId),
@@ -252,7 +256,7 @@ function LiveImportReviewPage() {
     if (!recipe.data) return
     setYieldServings(String(recipe.data.yield_servings ?? ''))
     const savedMealTypes = recipeMealTypes(recipe.data)
-    setMealTypes(savedMealTypes.length ? savedMealTypes : suggestedMealType ? [suggestedMealType] : [])
+    setMealTypes(savedMealTypes.length ? savedMealTypes : suggestedMealTypes)
     setRows(recipe.data.ingredients.map(item => ({
       id: item.id,
       original_text: item.original_text,
@@ -266,7 +270,7 @@ function LiveImportReviewPage() {
       optional: item.optional,
       shopping_excluded: item.shopping_excluded ?? false,
     })))
-  }, [recipe.data, suggestedMealType])
+  }, [recipe.data, suggestedMealTypes.join(',')])
 
   useEffect(() => {
     if (!focusIngredient || focusedIngredient.current === focusIngredient || !rows.some(row => row.id === focusIngredient)) return

@@ -59,6 +59,21 @@ def test_planner_never_silently_relaxes_hard_tolerance():
         choose_shared_recipe([candidate], [participant])
 
 
+def test_planner_can_explicitly_choose_the_closest_portion_outside_tolerance():
+    candidate = RecipeCandidate("too-light", "v1", {"energy_kcal": Decimal("100")})
+    participant = ParticipantTarget(
+        "member", "calorie", Decimal("25"), Decimal("2000"), None, None, None,
+        tolerance_percent=Decimal("5"),
+    )
+
+    choice = choose_shared_recipe(
+        [candidate], [participant], enforce_nutrition_bounds=False
+    )
+
+    assert choice.candidate.recipe_id == "too-light"
+    assert choice.portions == {"member": Decimal("2.00")}
+
+
 def test_stored_preference_terms_softly_rank_feasible_recipes():
     participant = ParticipantTarget(
         "member", "calorie", Decimal("25"), Decimal("2000"), None, None, None
