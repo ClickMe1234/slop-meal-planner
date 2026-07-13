@@ -36,6 +36,7 @@ from ..services.planner import (
     ParticipantTarget,
     PlannerInfeasibleError,
     RecipeCandidate,
+    aggregate_nutrition_violations,
     choose_shared_recipe,
 )
 from ..services.shopping import build_shopping_list
@@ -435,6 +436,10 @@ def generate_plan(
         for meal_type in {slot.meal_type.casefold() for slot in payload.slots}
     }
     recipe_uses: dict[str, int] = {}
+    daily_targets: dict[tuple, list[ParticipantTarget]] = defaultdict(list)
+    daily_nutrition: dict[tuple, dict[str, Decimal]] = defaultdict(
+        lambda: defaultdict(lambda: Decimal("0"))
+    )
     for batch_key, slots in grouped_slots.items():
         slot = slots[0]
         member_ids = sorted(
@@ -494,7 +499,9 @@ def generate_plan(
                     prior_recipe_uses=recipe_uses,
                     preferred_terms=preferred_terms,
                     disliked_terms=disliked_terms,
-                    enforce_nutrition_bounds=not payload.ignore_nutrition_tolerances,
+                    # Allocations are soft meal-level targets. Hard nutrition
+                    # bounds are checked after all of the day's meals combine.
+                    enforce_nutrition_bounds=False,
                 )
             except PlannerInfeasibleError:
                 if not unused_candidates:
@@ -506,7 +513,7 @@ def generate_plan(
                     prior_recipe_uses=recipe_uses,
                     preferred_terms=preferred_terms,
                     disliked_terms=disliked_terms,
-                    enforce_nutrition_bounds=not payload.ignore_nutrition_tolerances,
+                    enforce_nutrition_bounds=False,
                 )
         except PlannerInfeasibleError as exc:
             raise DomainError(
@@ -559,6 +566,15 @@ def generate_plan(
             db.add(occurrence)
             db.flush()
             for member_id in grouped_slot.participant_member_ids:
+                participant = next(
+                    item for item in participants if item.member_id == member_id
+                )
+                daily_key = (grouped_slot.meal_date, member_id)
+                daily_targets[daily_key].append(participant)
+                for nutrient, value in choice.candidate.nutrition.items():
+                    daily_nutrition[daily_key][nutrient] += (
+                        value * choice.portions[member_id]
+                    )
                 db.add(
                     PortionAllocation(
                         meal_occurrence_id=occurrence.id,
@@ -566,6 +582,31 @@ def generate_plan(
                         servings=choice.portions[member_id],
                     )
                 )
+    if not payload.ignore_nutrition_tolerances:
+        failures: list[str] = []
+        for (meal_date, member_id), targets in daily_targets.items():
+            violations = aggregate_nutrition_violations(
+                targets, daily_nutrition[(meal_date, member_id)]
+            )
+            if violations:
+                member = db.get(HouseholdMember, member_id)
+                failures.append(
+                    f"{meal_date} {member.name if member else member_id}: "
+                    + "; ".join(violations)
+                )
+        if failures:
+            raise DomainError(
+                "NUTRITION_TARGET_INFEASIBLE",
+                "Combined daily nutrition is outside tolerance. " + " | ".join(failures),
+                422,
+                actions=[
+                    {
+                        "kind": "retry_best_effort",
+                        "label": "Continue anyway",
+                        "suggestion": "Choose the closest daily plan without enforcing nutrition tolerances.",
+                    }
+                ],
+            )
     if remaining_must_use:
         raise DomainError(
             "MUST_USE_INGREDIENT_INFEASIBLE",

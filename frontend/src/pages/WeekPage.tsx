@@ -5,6 +5,7 @@ import { NutritionRings } from '../components/Nutrition'
 import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader } from '../components/ui'
 import { demoWeek } from '../data/demo'
 import { api, isDemoMode } from '../api/client'
+import { compareMealTypes } from './planner'
 
 export function WeekPage() {
   return isDemoMode ? <DemoWeekPage/> : <LiveWeekPage/>
@@ -37,7 +38,7 @@ function LiveWeekPage(){
   if(!current||!detail.data)return <div className="page"><PageHeader eyebrow="Meal planning" title="This week" description="Your accepted plan will appear here."/><EmptyState icon={<Clock3/>} title="No active plan" description="Generate a plan after adding planner-ready recipes."/></div>
   const dates=Array.from(new Set(detail.data.occurrences.map(item=>item.meal_date))).sort()
   const date=dates[Math.min(selected,Math.max(0,dates.length-1))]
-  const meals=detail.data.occurrences.filter(item=>item.meal_date===date)
+  const meals=detail.data.occurrences.filter(item=>item.meal_date===date).sort((left,right)=>compareMealTypes(left.meal_type,right.meal_type))
   const memberId=session.data?.member_id
   const totals=meals.reduce((sum,item)=>{const servings=Number(item.portions.find(portion=>portion.member_id===memberId)?.servings??0);const nutrition=item.nutrition_per_serving??{};return{calories:sum.calories+Number(nutrition.energy_kcal??0)*servings,protein:sum.protein+Number(nutrition.protein_g??0)*servings,carbs:sum.carbs+Number(nutrition.carbohydrate_g??0)*servings,fat:sum.fat+Number(nutrition.fat_g??0)*servings}},{calories:0,protein:0,carbs:0,fat:0})
   const targetCalories=target.data?.mode==='calorie'?Number(target.data.calorie_target??0):Number(target.data?.protein_target_g??0)*4+Number(target.data?.carbohydrate_target_g??0)*4+Number(target.data?.fat_target_g??0)*9

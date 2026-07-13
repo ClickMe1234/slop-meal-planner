@@ -7,6 +7,13 @@ export type MealType = typeof MEAL_TYPES[number]
 export type AttendanceOverrides = Record<string, boolean>
 export type CookStarts = Record<string, boolean>
 
+export function compareMealTypes(left: string, right: string): number {
+  const leftIndex = MEAL_TYPES.indexOf(left as MealType)
+  const rightIndex = MEAL_TYPES.indexOf(right as MealType)
+  return (leftIndex === -1 ? MEAL_TYPES.length : leftIndex)
+    - (rightIndex === -1 ? MEAL_TYPES.length : rightIndex)
+}
+
 export interface PlannerDate {
   iso: string
   weekday: string
@@ -127,7 +134,7 @@ export function buildPlanSlots({
   }
 
   return slots.sort((left, right) => left.meal_date.localeCompare(right.meal_date)
-    || MEAL_TYPES.indexOf(left.meal_type) - MEAL_TYPES.indexOf(right.meal_type))
+    || compareMealTypes(left.meal_type, right.meal_type))
 }
 
 export function hasLongBatch(slots: PlannerSlot[]): boolean {
