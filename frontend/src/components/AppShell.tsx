@@ -1,5 +1,5 @@
 import { CalendarDays, ChefHat, ClipboardList, Heart, LogOut, Menu, Moon, PackageOpen, Settings, Sun, WandSparkles, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, isDemoMode } from '../api/client'
@@ -21,12 +21,18 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
   const username = session.data?.username ?? 'Zach'
   const role = session.data?.role ?? 'owner'
   const nextTheme: ThemeChoice = theme === 'dark' ? 'light' : 'dark'
+  const currentItem = items.find(item => location.pathname.startsWith(item.to))
+  useEffect(() => {
+    document.body.classList.toggle('nav-is-open', menuOpen)
+    return () => document.body.classList.remove('nav-is-open')
+  }, [menuOpen])
   const logout = async () => {
     if (!isDemoMode) await api.logout()
     localStorage.removeItem('savour-demo-session')
     navigate('/login')
   }
   return <div className="app-shell">
+    <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className={`sidebar ${menuOpen ? 'sidebar--open' : ''}`}>
       <div className="brand"><div className="brand-mark"><Heart size={20} fill="currentColor" /></div><div><strong>Savour</strong><span>meal planner</span></div></div>
       <button className="mobile-close" aria-label="Close navigation" onClick={() => setMenuOpen(false)}><X /></button>
@@ -39,7 +45,7 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
     </aside>
     {menuOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
     <div className="app-main">
-      <div className="mobile-topbar"><button aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu /></button><div className="brand"><div className="brand-mark"><Heart size={17} fill="currentColor" /></div><strong>Savour</strong></div><NavLink to="/settings" aria-label="Settings"><Settings /></NavLink></div>
+      <div className="mobile-topbar"><button aria-label="Open account and navigation" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><Menu /></button><div className="mobile-context"><span>{currentItem?.label ?? 'Savour'}</span><strong>Savour</strong></div><NavLink to="/settings" aria-label="Settings"><Settings /></NavLink></div>
       <main id="main-content"><Outlet /></main>
     </div>
     <nav className="bottom-nav" aria-label="Mobile navigation">{items.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} className={({ isActive }) => isActive ? 'active' : ''}><Icon size={21} /><span>{label}</span></NavLink>)}</nav>
