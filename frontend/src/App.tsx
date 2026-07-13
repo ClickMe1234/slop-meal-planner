@@ -27,6 +27,7 @@ export default function App() {
       <Route path="/recipes/new" element={<CustomRecipePage/>}/>
       <Route path="/recipes/import" element={<RecipeImportPage/>}/>
       <Route path="/imports/:jobId/review" element={<ImportReviewPage/>}/>
+      <Route path="/recipes/:recipeId/review" element={<ImportReviewPage/>}/>
       <Route path="/pantry" element={<PantryPage/>}/>
       <Route path="/shopping" element={<ShoppingPage/>}/>
       <Route path="/settings" element={<HouseholdSettings/>}/>

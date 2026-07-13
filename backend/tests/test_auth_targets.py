@@ -25,6 +25,48 @@ def test_owner_setup_login_and_calorie_target(client, owner):
     assert response.json()["calorie_target"] == "2000.00"
 
 
+def test_login_username_is_trimmed_and_case_insensitive(client, owner):
+    client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+    )
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": "  OwNeR  ", "password": "correct-horse-battery-staple"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["user"]["username"] == "owner"
+
+
+def test_household_member_and_restrictions_can_be_edited(client, owner):
+    created = client.post(
+        "/api/v1/household-members",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+        json={"name": "Partner"},
+    )
+    assert created.status_code == 201, created.text
+    member = created.json()
+    updated = client.patch(
+        f"/api/v1/household-members/{member['id']}",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+        json={"expected_version": member["version"], "name": "Alex"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["name"] == "Alex"
+
+    added = client.post(
+        f"/api/v1/household-members/{member['id']}/restrictions",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+        json={"kind": "allergy", "value": "Peanuts", "hard": True},
+    )
+    assert added.status_code == 201, added.text
+    deleted = client.delete(
+        f"/api/v1/household-members/{member['id']}/restrictions/{added.json()['id']}",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+    )
+    assert deleted.status_code == 204, deleted.text
+
+
 def test_csrf_is_required(client, owner):
     response = client.post("/api/v1/household-members", json={"name": "Partner"})
     assert response.status_code == 403

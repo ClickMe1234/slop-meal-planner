@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import AuthContext, get_auth_context, require_csrf, require_owner
 from ..db import get_db
+from ..config import get_settings
 from ..errors import DomainError, NotFoundError
 from ..discovery import canonicalize_url
 from ..discovery.errors import DiscoveryError
@@ -28,7 +29,9 @@ from ..schemas import (
     RecipeReviewUpdate,
     RecipeSummary,
 )
-from ..services.nutrition import calculate_recipe, latest_calculation
+from ..services.food_search import fetch_and_cache_usda_foods, normalise_food_query
+from ..services.ingredients import parse_ingredient
+from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
 
 router = APIRouter(tags=["recipes and food data"])
 
@@ -45,20 +48,69 @@ def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
     version = _latest_version(db, recipe.id)
     if version is None:
         raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+    ingredients = []
+    for row in version.ingredients:
+        item = {column.name: getattr(row, column.name) for column in row.__table__.columns}
+        # Drafts created before ingredient parsing was introduced are enriched
+        # on read. Saving the review persists these fields in the next immutable
+        # recipe version without rewriting the historical import.
+        if recipe.source_type == "url" and row.quantity is None and row.unit is None:
+            parsed = parse_ingredient(row.original_text)
+            item.update(
+                quantity=parsed.quantity,
+                unit=parsed.unit,
+                quantity_grams=parsed.quantity_grams,
+                food_phrase=(
+                    parsed.food_phrase
+                    if not row.food_phrase or row.food_phrase == row.original_text
+                    else row.food_phrase
+                ),
+                preparation=row.preparation or parsed.preparation,
+                optional=row.optional or parsed.optional,
+                included=row.included and not parsed.optional,
+            )
+        ingredients.append(item)
     calculation = latest_calculation(db, version.id)
-    ingredients = [
-        {column.name: getattr(row, column.name) for column in row.__table__.columns}
-        for row in version.ingredients
-    ]
+    reported_values = publisher_values(version)
+    nutrition_values = (
+        calculation.per_serving_values
+        if calculation is not None and calculation.status == "publisher"
+        else ({key: float(value) for key, value in reported_values.items()} if reported_values else None)
+    )
+    effective_eligibility = (
+        RecipeEligibility.PLANNER_READY
+        if reported_values is not None and version.yield_servings
+        else recipe.eligibility
+    )
+    recipe_fields = RecipeSummary.model_validate(recipe).model_dump(
+        exclude={
+            "eligibility",
+            "yield_servings",
+            "publisher_nutrition",
+            "calculated_nutrition",
+            "nutrition_method",
+            "review_count",
+        }
+    )
+    summary = RecipeSummary(
+        **recipe_fields,
+        eligibility=effective_eligibility,
+        yield_servings=version.yield_servings,
+        publisher_nutrition=version.publisher_nutrition,
+        calculated_nutrition=nutrition_values,
+        nutrition_method="publisher" if reported_values is not None else None,
+        review_count=(
+            0
+            if recipe.source_type == "url"
+            else sum(1 for ingredient in version.ingredients if ingredient.included and ingredient.needs_review)
+        ),
+    )
     return RecipeDetail(
-        **RecipeSummary.model_validate(recipe).model_dump(),
+        **summary.model_dump(),
         recipe_version_id=version.id,
         version_number=version.version_number,
-        yield_servings=version.yield_servings,
         custom_instructions=version.custom_instructions,
-        publisher_nutrition=version.publisher_nutrition,
         ingredients=ingredients,
-        calculated_nutrition=calculation.per_serving_values if calculation else None,
     )
 
 
@@ -82,7 +134,13 @@ def list_recipes(
         .limit(page_size)
     ).all()
     return {
-        "items": [RecipeSummary.model_validate(recipe).model_dump(mode="json") for recipe in recipes],
+        "items": [
+            _recipe_detail(db, recipe).model_dump(
+                mode="json",
+                include=set(RecipeSummary.model_fields),
+            )
+            for recipe in recipes
+        ],
         "page": page,
         "page_size": page_size,
         "total": total,
@@ -121,6 +179,8 @@ def create_recipe(
     db.flush()
     for position, item in enumerate(payload.ingredients):
         db.add(RecipeIngredient(recipe_version_id=version.id, position=position, **item.model_dump()))
+    if publisher_values(version) is not None and version.yield_servings:
+        recipe.eligibility = RecipeEligibility.PLANNER_READY.value
     db.commit()
     db.refresh(recipe)
     return _recipe_detail(db, recipe)
@@ -180,8 +240,8 @@ def save_recipe_review(
         )
     recipe.title = payload.title
     recipe.eligibility = (
-        RecipeEligibility.NEEDS_REVIEW.value
-        if any(item.needs_review for item in payload.ingredients)
+        RecipeEligibility.PLANNER_READY.value
+        if publisher_values(next_version) is not None
         else RecipeEligibility.DRAFT.value
     )
     recipe.version += 1
@@ -260,10 +320,20 @@ def search_foods(
     _: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
+    cleaned_query = normalise_food_query(q.strip()) if q.strip() else ""
     conditions = []
-    if q.strip():
-        conditions.append(func.lower(FoodRecord.name).contains(q.strip().lower()))
+    if cleaned_query:
+        terms = tuple(dict.fromkeys(cleaned_query.lower().split()))
+        conditions.append(or_(*(func.lower(FoodRecord.name).contains(term) for term in terms)))
     total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
+    remote_error = None
+    settings = get_settings()
+    if cleaned_query and total < 3 and settings.remote_food_search_enabled:
+        try:
+            fetch_and_cache_usda_foods(db, cleaned_query, api_key=settings.usda_api_key)
+            total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
+        except Exception:
+            remote_error = "FoodData Central could not be reached. Existing local matches are still shown."
     rows = db.scalars(
         select(FoodRecord)
         .where(*conditions)
@@ -282,7 +352,13 @@ def search_foods(
                 ],
             ).model_dump(mode="json")
         )
-    return {"items": items, "page": page, "page_size": page_size, "total": total}
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "remote_error": remote_error,
+    }
 
 
 @router.post("/foods", response_model=FoodRecordOut, status_code=201)

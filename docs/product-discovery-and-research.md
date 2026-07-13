@@ -1,5 +1,10 @@
 # Meal Planner Product Discovery and Research
 
+> Implementation update — 13 July 2026: automatic planning now uses only a
+> complete per-serving nutrition set reported by the recipe publisher.
+> Ingredient matching/calculation is parked. Good Food and Allrecipes discovery
+> remain active; Great British Chefs is temporarily disabled.
+
 **Status:** Living discovery and decision record; initial implementation completed 12 July 2026
 **Research date:** 12 July 2026
 **Primary region assumed:** United Kingdom
@@ -86,6 +91,12 @@ recipe- and household-oriented rather than primarily a food diary.
 - Eventually account for household stock and practical purchase quantities.
 
 ## 3. Executive findings
+
+> **Decision update — 13 July 2026:** complete publisher-reported per-serving
+> calories, protein, carbohydrate and fat are now the planner's primary recipe
+> nutrition source. Ingredient matching/calculation is the fallback. This
+> supersedes the older calculated-only recommendations retained below as the
+> original research record; publisher per-100g values remain reference-only.
 
 ### 3.1 Confirmed product decisions as of 12 July 2026
 

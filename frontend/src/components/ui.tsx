@@ -9,8 +9,8 @@ export function Card({ className = '', ...props }: HTMLAttributes<HTMLDivElement
   return <div className={`card ${className}`} {...props} />
 }
 
-export function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'green' | 'warm' | 'blue' | 'warning' }) {
-  return <span className={`badge badge--${tone}`}>{children}</span>
+export function Badge({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'default' | 'green' | 'warm' | 'blue' | 'warning' }) {
+  return <span className={`badge badge--${tone === 'default' ? 'neutral' : tone}`}>{children}</span>
 }
 
 export function PageHeader({ eyebrow, title, description, actions }: { eyebrow?: string; title: string; description?: string; actions?: ReactNode }) {

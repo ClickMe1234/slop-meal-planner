@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 from ..auth import AuthContext, get_auth_context
 from ..db import get_db
 from ..discovery import LiveSearchService
+from ..discovery.errors import DiscoveryError, FetchError
 from ..discovery.http import PoliteHttpFetcher
 from ..discovery.urls import canonicalize_url
+from ..errors import DomainError
 from ..models import Recipe
 
 router = APIRouter(prefix="/recipe-discovery", tags=["recipe discovery"])
@@ -38,10 +40,36 @@ def _json_safe(value):
     return value
 
 
+@router.get("/nutrition-preview")
+async def preview_recipe_nutrition(
+    url: str = Query(max_length=4096),
+    context: AuthContext = Depends(get_auth_context),
+):
+    """Return publisher-reported nutrition without saving or calculating."""
+
+    del context  # Authentication is required, but the preview is not household-specific.
+    try:
+        recipe = await _live_service().nutrition_preview(url)
+    except DiscoveryError as exc:
+        status = 502 if isinstance(exc, FetchError) else 422
+        raise DomainError(exc.code, str(exc), status) from exc
+    return _json_safe(
+        {
+            "url": recipe.canonical_url,
+            "publisher": recipe.publisher,
+            "yield_servings": recipe.yield_servings,
+            "publisher_nutrition": (
+                asdict(recipe.publisher_nutrition) if recipe.publisher_nutrition else None
+            ),
+        }
+    )
+
+
 @router.get("")
 async def discover_recipes(
     q: str = Query(default="", max_length=200),
     request_key: str | None = Query(default=None, max_length=100),
+    sources: str | None = Query(default=None, max_length=200),
     context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
@@ -50,7 +78,14 @@ async def discover_recipes(
     scoped_request_key = (
         f"{context.user.household_id}:{context.user.id}:{request_key}" if request_key else None
     )
-    response = await _live_service().search(q, request_key=scoped_request_key)
+    selected_sources = None
+    if sources is not None:
+        selected_sources = tuple(dict.fromkeys(item.strip() for item in sources.split(",") if item.strip()))
+        supported = {adapter.key for adapter in _live_service().registry.adapters}
+        unknown = set(selected_sources) - supported
+        if unknown:
+            raise DomainError("UNSUPPORTED_RECIPE_SOURCE", f"Unsupported recipe source: {', '.join(sorted(unknown))}", 422)
+    response = await _live_service().search(q, request_key=scoped_request_key, sources=selected_sources)
     saved_rows = db.scalars(
         select(Recipe.source_url).where(
             Recipe.household_id == context.user.household_id,

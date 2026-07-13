@@ -1,5 +1,72 @@
 from decimal import Decimal
 
+from sqlalchemy import select
+
+from app.models import Household, Recipe, RecipeVersion
+
+
+def test_existing_import_drafts_are_enriched_with_detected_units(client, owner):
+    headers = {"X-CSRF-Token": owner["csrf_token"]}
+    recipe = client.post(
+        "/api/v1/recipes",
+        headers=headers,
+        json={
+            "title": "Imported chickpeas",
+            "source_type": "url",
+            "source_url": "https://www.bbcgoodfood.com/recipes/chickpeas",
+            "yield_servings": 4,
+            "ingredients": [
+                {
+                    "original_text": "2 x 400g cans chickpeas, drained",
+                    "food_phrase": "2 x 400g cans chickpeas, drained",
+                    "needs_review": True,
+                }
+            ],
+        },
+    )
+    assert recipe.status_code == 201, recipe.text
+
+    ingredient = client.get(f"/api/v1/recipes/{recipe.json()['id']}").json()["ingredients"][0]
+    assert ingredient["quantity"] == "2"
+    assert ingredient["unit"] == "can"
+    assert ingredient["quantity_grams"] == "800"
+    assert ingredient["food_phrase"] == "chickpeas"
+
+
+def test_existing_publisher_import_is_derived_as_planner_ready(client, owner, session_factory):
+    with session_factory() as db:
+        household = db.scalar(select(Household))
+        recipe = Recipe(
+            household_id=household.id,
+            title="Existing publisher recipe",
+            eligibility="needs_review",
+            source_type="url",
+            source_url="https://www.bbcgoodfood.com/recipes/existing",
+            publisher="Good Food",
+        )
+        db.add(recipe)
+        db.flush()
+        db.add(RecipeVersion(
+            recipe_id=recipe.id,
+            version_number=1,
+            title=recipe.title,
+            yield_servings=4,
+            publisher_nutrition={
+                "basis": "per serving",
+                "energy_kcal": 400,
+                "protein_g": 20,
+                "carbohydrate_g": 50,
+                "fat_g": 10,
+            },
+        ))
+        db.commit()
+        recipe_id = recipe.id
+
+    listed = next(item for item in client.get("/api/v1/recipes").json()["items"] if item["id"] == recipe_id)
+    assert listed["eligibility"] == "planner_ready"
+    assert listed["nutrition_method"] == "publisher"
+    assert listed["calculated_nutrition"]["energy_kcal"] == 400
+
 
 def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     csrf = owner["csrf_token"]
@@ -44,7 +111,16 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
         json={
             "title": "Rice bowl",
             "yield_servings": 1,
-            "source_type": "custom",
+            "source_type": "url",
+            "source_url": "https://www.bbcgoodfood.com/recipes/rice-bowl",
+            "publisher": "Good Food",
+            "publisher_nutrition": {
+                "basis": "per serving",
+                "energy_kcal": 500,
+                "protein_g": 10,
+                "carbohydrate_g": 100,
+                "fat_g": 5,
+            },
             "ingredients": [
                 {
                     "original_text": "100 g cooked rice",
@@ -63,6 +139,10 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     )
     assert calculation.status_code == 200, calculation.text
     assert calculation.json()["per_serving_values"]["energy_kcal"] == 500
+    listed_recipe = client.get("/api/v1/recipes").json()["items"][0]
+    assert listed_recipe["yield_servings"] == "1.00"
+    assert listed_recipe["nutrition_method"] == "publisher"
+    assert listed_recipe["calculated_nutrition"]["energy_kcal"] == 500
 
     generated = client.post(
         "/api/v1/meal-plans/generate",

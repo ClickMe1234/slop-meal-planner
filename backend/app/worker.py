@@ -25,6 +25,8 @@ from .models import (
     RecipeVersion,
     UserSession,
 )
+from .services.ingredients import parse_ingredient
+from .services.nutrition import publisher_values
 
 celery_app = Celery(
     "meal_planner",
@@ -122,7 +124,7 @@ def process_recipe_import(self, job_id: str) -> dict:
             )
             if existing is not None:
                 job.status = JobStatus.AWAITING_REVIEW.value
-                job.stage = "ingredient_review"
+                job.stage = "recipe_review"
                 job.progress = 100
                 job.result = {"recipe_id": existing.id, "already_saved": True}
                 db.commit()
@@ -153,17 +155,28 @@ def process_recipe_import(self, job_id: str) -> dict:
             db.add(version)
             db.flush()
             for position, line in enumerate(extracted.ingredient_lines):
+                parsed = parse_ingredient(line)
                 db.add(
                     RecipeIngredient(
                         recipe_version_id=version.id,
                         position=position,
                         original_text=line,
-                        food_phrase=line,
-                        needs_review=True,
+                        quantity=parsed.quantity,
+                        unit=parsed.unit,
+                        quantity_grams=parsed.quantity_grams,
+                        food_phrase=parsed.food_phrase,
+                        preparation=parsed.preparation,
+                        included=not parsed.optional,
+                        optional=parsed.optional,
+                        needs_review=False,
                     )
                 )
+            if publisher_values(version) is not None and version.yield_servings:
+                recipe.eligibility = RecipeEligibility.PLANNER_READY.value
+            else:
+                recipe.eligibility = RecipeEligibility.DRAFT.value
             job.status = JobStatus.AWAITING_REVIEW.value
-            job.stage = "ingredient_review"
+            job.stage = "recipe_review"
             job.progress = 80
             job.result = {
                 "recipe_id": recipe.id,

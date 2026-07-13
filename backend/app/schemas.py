@@ -207,6 +207,11 @@ class RecipeSummary(APIModel):
     publisher: str | None
     image_url: str | None
     version: int
+    yield_servings: Decimal | None = None
+    publisher_nutrition: dict[str, Any] | None = None
+    calculated_nutrition: dict[str, Any] | None = None
+    nutrition_method: str | None = None
+    review_count: int = 0
 
 
 class RecipeDetail(RecipeSummary):
@@ -214,9 +219,7 @@ class RecipeDetail(RecipeSummary):
     version_number: int
     yield_servings: Decimal | None
     custom_instructions: str | None
-    publisher_nutrition: dict[str, Any] | None
     ingredients: list[dict[str, Any]]
-    calculated_nutrition: dict[str, Any] | None = None
 
 
 class FoodNutrientIn(APIModel):

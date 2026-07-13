@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .errors import DiscoveryError
-from .models import CombinedSearchResponse, SearchResult, SourceSearchResponse
+from .extraction import extract_recipe
+from .models import CombinedSearchResponse, ExtractedRecipe, SearchResult, SourceSearchResponse
 from .registry import SourceRegistry, default_registry
+from .urls import canonicalize_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +24,8 @@ class SearchPolicy:
     maximum_cache_entries: int = 256
     minimum_query_length: int = 2
     maximum_results_per_source: int = 24
+    preview_cache_ttl_seconds: int = 3600
+    maximum_preview_cache_entries: int = 512
 
 
 class LiveSearchService:
@@ -48,6 +53,8 @@ class LiveSearchService:
         self.policy = policy
         self.saved_url_lookup = saved_url_lookup
         self._cache: dict[str, tuple[float, tuple[SourceSearchResponse, ...]]] = {}
+        self._preview_cache: dict[str, tuple[float, ExtractedRecipe]] = {}
+        self._preview_locks: dict[str, asyncio.Lock] = {}
         self._generations: dict[str, int] = {}
         self._generation_lock = asyncio.Lock()
 
@@ -55,10 +62,24 @@ class LiveSearchService:
     def normalise_query(query: str) -> str:
         return " ".join(query.casefold().split())[:200]
 
-    async def search_remote(self, query: str, *, request_key: str | None = None) -> CombinedSearchResponse:
+    async def search_remote(
+        self,
+        query: str,
+        *,
+        request_key: str | None = None,
+        sources: tuple[str, ...] | None = None,
+    ) -> CombinedSearchResponse:
         normalised = self.normalise_query(query)
         if len(normalised) < self.policy.minimum_query_length:
             return CombinedSearchResponse(normalised, (), self.policy.debounce_ms)
+
+        selected = set(sources) if sources is not None else None
+        adapters = tuple(
+            adapter for adapter in self.registry.adapters
+            if selected is None or adapter.key in selected
+        )
+        source_key = ",".join(sorted(adapter.key for adapter in adapters))
+        cache_key = f"{source_key}:{normalised}"
 
         generation = None
         if request_key:
@@ -70,28 +91,29 @@ class LiveSearchService:
             return CombinedSearchResponse(normalised, (), self.policy.debounce_ms, superseded=True)
 
         now = time.monotonic()
-        cached = self._cache.get(normalised)
+        cached = self._cache.get(cache_key)
         cache_hit = cached is not None and now <= cached[0]
-        if cache_hit:
-            sources = cached[1]
-        else:
-            sources = tuple(await asyncio.gather(*(self._search_source(adapter, normalised) for adapter in self.registry.adapters)))
+        if not cache_hit:
+            source_results = tuple(await asyncio.gather(*(self._search_source(adapter, normalised) for adapter in adapters)))
             ttl = (
                 self.policy.error_cache_ttl_seconds
-                if any(source.error_code for source in sources)
+                if any(source.error_code for source in source_results)
                 else self.policy.cache_ttl_seconds
             )
             self._cache = {key: value for key, value in self._cache.items() if now <= value[0]}
             if len(self._cache) >= self.policy.maximum_cache_entries:
                 self._cache.pop(next(iter(self._cache)))
-            self._cache[normalised] = (now + ttl, sources)
+            self._cache[cache_key] = (now + ttl, source_results)
+
+        if cache_hit:
+            source_results = cached[1]
 
         if self.saved_url_lookup:
-            urls = tuple(result.url for source in sources for result in source.results)
+            urls = tuple(result.url for source in source_results for result in source.results)
             saved = self.saved_url_lookup(urls)
             if inspect.isawaitable(saved):
                 saved = await saved
-            sources = tuple(
+            source_results = tuple(
                 SourceSearchResponse(
                     source=source.source,
                     results=tuple(
@@ -108,18 +130,71 @@ class LiveSearchService:
                     error_code=source.error_code,
                     error_message=source.error_message,
                 )
-                for source in sources
+                for source in source_results
             )
-        return CombinedSearchResponse(normalised, sources, self.policy.debounce_ms, cache_hit=cache_hit)
+        return CombinedSearchResponse(normalised, source_results, self.policy.debounce_ms, cache_hit=cache_hit)
 
-    async def search(self, query: str, *, request_key: str | None = None) -> CombinedSearchResponse:
-        return await self.search_remote(query, request_key=request_key)
+    async def search(
+        self,
+        query: str,
+        *,
+        request_key: str | None = None,
+        sources: tuple[str, ...] | None = None,
+    ) -> CombinedSearchResponse:
+        return await self.search_remote(query, request_key=request_key, sources=sources)
+
+    async def nutrition_preview(self, url: str) -> ExtractedRecipe:
+        """Fetch and cache publisher nutrition without importing the recipe."""
+
+        canonical = canonicalize_url(url)
+        adapter = self.registry.for_url(canonical)
+        now = time.monotonic()
+        cached = self._preview_cache.get(canonical)
+        if cached is not None and now <= cached[0]:
+            return cached[1]
+
+        lock = self._preview_locks.setdefault(canonical, asyncio.Lock())
+        async with lock:
+            now = time.monotonic()
+            cached = self._preview_cache.get(canonical)
+            if cached is not None and now <= cached[0]:
+                return cached[1]
+
+            html = await self.fetcher.fetch_text(canonical, allowed_hosts=set(adapter.hosts))
+            recipe = extract_recipe(html, canonical)
+            expired_keys = [
+                key for key, value in self._preview_cache.items() if now > value[0]
+            ]
+            for key in expired_keys:
+                self._preview_cache.pop(key, None)
+                self._preview_locks.pop(key, None)
+            if len(self._preview_cache) >= self.policy.maximum_preview_cache_entries:
+                evicted = next(iter(self._preview_cache))
+                self._preview_cache.pop(evicted)
+                self._preview_locks.pop(evicted, None)
+            self._preview_cache[canonical] = (
+                now + self.policy.preview_cache_ttl_seconds,
+                recipe,
+            )
+            return recipe
 
     async def _search_source(self, adapter, query: str) -> SourceSearchResponse:
         try:
             url = adapter.search_url(query)
             html = await self.fetcher.fetch_text(url, allowed_hosts=set(adapter.hosts))
-            results = adapter.parse_search_results(html, search_url=url)[: self.policy.maximum_results_per_source]
+            parsed = adapter.parse_search_results(html, search_url=url)
+            ranked = sorted(
+                (
+                    (self._relevance_score(result, query), result)
+                    for result in parsed
+                ),
+                key=lambda item: (-item[0], item[1].title.casefold()),
+            )
+            results = tuple(
+                result
+                for score, result in ranked
+                if score > 0
+            )[: self.policy.maximum_results_per_source]
             return SourceSearchResponse(adapter.key, results)
         except DiscoveryError as exc:
             return SourceSearchResponse(adapter.key, error_code=exc.code, error_message=str(exc))
@@ -130,3 +205,22 @@ class LiveSearchService:
                 error_code="SOURCE_PARSE_FAILED",
                 error_message=f"{adapter.display_name} results could not be read. {adapter.limitation()}",
             )
+
+    @staticmethod
+    def _relevance_score(result: SearchResult, query: str) -> int:
+        """Reject navigation/category cards and put the closest titles first."""
+
+        phrase = " ".join(query.casefold().split())
+        terms = tuple(dict.fromkeys(re.findall(r"[a-z0-9]+", phrase)))
+        haystack = f"{result.title} {result.url.replace('-', ' ')}".casefold()
+        matches = sum(1 for term in terms if term in haystack)
+        if not matches:
+            return 0
+        score = matches * 20
+        if matches == len(terms):
+            score += 40
+        if phrase and phrase in haystack:
+            score += 100
+        if result.title.casefold().startswith(phrase):
+            score += 20
+        return score

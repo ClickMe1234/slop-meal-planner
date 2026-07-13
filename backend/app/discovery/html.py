@@ -35,8 +35,18 @@ class RecipeHtmlParser(HTMLParser):
         elif tag == "a" and values.get("href"):
             self._anchor = Anchor(values["href"])
         elif tag == "img" and self._anchor is not None:
-            self._anchor.image_url = values.get("src") or values.get("data-src") or None
-            self._anchor.image_alt = values.get("alt") or None
+            # Publisher srcset URLs can contain literal commas in resize query
+            # values (for example ``resize=372,338``). Treating every comma as
+            # a candidate separator produced invalid paths such as ``/338``.
+            # The ordinary image URL is lower resolution but consistently valid.
+            self._anchor.image_url = (
+                values.get("data-src")
+                or values.get("data-lazy-src")
+                or values.get("src")
+                or self._anchor.image_url
+                or None
+            )
+            self._anchor.image_alt = values.get("alt") or self._anchor.image_alt or None
         elif tag == "meta":
             key = values.get("property") or values.get("name") or values.get("itemprop")
             content = values.get("content")

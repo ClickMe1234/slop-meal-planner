@@ -22,12 +22,78 @@ def _as_json(values: dict[str, Decimal]) -> dict[str, float]:
     return {key: round(float(value), 3) for key, value in values.items()}
 
 
+def publisher_values(version: RecipeVersion) -> dict[str, Decimal] | None:
+    """Return a complete publisher-reported per-serving nutrition set."""
+
+    nutrition = version.publisher_nutrition
+    if not isinstance(nutrition, dict):
+        return None
+    basis = str(nutrition.get("basis") or "").casefold().replace(" ", "")
+    if "100g" in basis or "100ml" in basis:
+        return None
+    values: dict[str, Decimal] = {}
+    for code in REQUIRED_NUTRIENTS:
+        value = nutrition.get(code)
+        if value is None:
+            return None
+        try:
+            values[code] = Decimal(str(value))
+        except Exception:
+            return None
+    return values
+
+
+def _volume_in_ml(quantity: Decimal | None, unit: str | None) -> Decimal | None:
+    if quantity is None or not unit:
+        return None
+    factors = {
+        "ml": Decimal("1"), "millilitre": Decimal("1"), "millilitres": Decimal("1"),
+        "l": Decimal("1000"), "litre": Decimal("1000"), "litres": Decimal("1000"),
+        "tsp": Decimal("5"), "teaspoon": Decimal("5"), "teaspoons": Decimal("5"),
+        "tbsp": Decimal("15"), "tablespoon": Decimal("15"), "tablespoons": Decimal("15"),
+        "cup": Decimal("240"), "cups": Decimal("240"),
+    }
+    factor = factors.get(unit.casefold())
+    return Decimal(quantity) * factor if factor is not None else None
+
+
 def calculate_recipe(db: Session, recipe_version_id: str) -> NutritionCalculation:
     version = db.get(RecipeVersion, recipe_version_id)
     if version is None:
         raise NotFoundError("Recipe version")
     if not version.yield_servings or version.yield_servings <= 0:
         raise DomainError("MISSING_YIELD", "Confirm a positive serving yield before calculating")
+
+    recipe = db.get(Recipe, version.recipe_id)
+    reported_values = publisher_values(version)
+    if reported_values is not None:
+        totals = {code: value * Decimal(version.yield_servings) for code, value in reported_values.items()}
+        source = recipe.publisher or recipe.source_url if recipe is not None else "recipe publisher"
+        calculation = NutritionCalculation(
+            recipe_version_id=version.id,
+            status="publisher",
+            total_values=_as_json(totals),
+            per_serving_values=_as_json(reported_values),
+            contributions=[],
+            assumptions=[f"Per-serving nutrition reported by {source or 'the recipe website'} was used."],
+            dataset_snapshot={
+                "nutrition_source": "publisher",
+                "publisher": source or "recipe website",
+            },
+        )
+        db.add(calculation)
+        if recipe is not None:
+            recipe.eligibility = RecipeEligibility.PLANNER_READY.value
+            recipe.version += 1
+        db.flush()
+        return calculation
+
+    if recipe is not None and recipe.source_type == "url":
+        raise DomainError(
+            "PUBLISHER_NUTRITION_UNAVAILABLE",
+            "The recipe website did not report a complete per-serving nutrition set",
+        )
+
     if not version.ingredients:
         raise DomainError("MISSING_INGREDIENTS", "The recipe has no ingredients")
 
@@ -55,7 +121,7 @@ def calculate_recipe(db: Session, recipe_version_id: str) -> NutritionCalculatio
             if amount is None and ingredient.unit in ("g", "gram", "grams"):
                 amount = ingredient.quantity
         elif food.basis_unit == "ml":
-            amount = ingredient.quantity if ingredient.unit in ("ml", "millilitre", "millilitres") else None
+            amount = _volume_in_ml(ingredient.quantity, ingredient.unit)
         else:
             amount = None
         if amount is None:
@@ -107,7 +173,6 @@ def calculate_recipe(db: Session, recipe_version_id: str) -> NutritionCalculatio
         dataset_snapshot=dataset_snapshot,
     )
     db.add(calculation)
-    recipe = db.get(Recipe, version.recipe_id)
     if recipe is not None:
         recipe.eligibility = RecipeEligibility.PLANNER_READY.value
         recipe.version += 1
@@ -121,4 +186,3 @@ def latest_calculation(db: Session, recipe_version_id: str) -> NutritionCalculat
         .where(NutritionCalculation.recipe_version_id == recipe_version_id)
         .order_by(NutritionCalculation.calculated_at.desc())
     )
-

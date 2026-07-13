@@ -10,14 +10,16 @@ export const demoRecipes: Recipe[] = [
     yield: 4,
     state: 'ready',
     nutrition: { calories: 524, protein: 48, carbs: 39, fat: 18, basis: 'per_serving' },
+    nutritionSource: 'publisher',
+    nutritionSourceName: 'Good Food',
     mealKinds: ['Lunch', 'Dinner'],
     ingredients: ['600g chicken thighs', '2 × 400g tins chickpeas', '2 tbsp harissa', '1 lemon']
   },
   {
     id: 'mushroom-risotto',
     title: 'Wild mushroom risotto',
-    source: 'Great British Chefs',
-    sourceUrl: 'https://www.greatbritishchefs.com/',
+    source: 'Saved recipe',
+    sourceUrl: '#',
     imageUrl: 'https://images.unsplash.com/photo-1476124369491-e7addf5db371?auto=format&fit=crop&w=900&q=75',
     yield: 4,
     state: 'no_nutrition',
@@ -32,6 +34,7 @@ export const demoRecipes: Recipe[] = [
     yield: 1,
     state: 'source_estimate',
     publisherNutrition: { calories: 386, protein: 17, carbs: 56, fat: 10, basis: 'per_serving' },
+    nutritionSourceName: 'Allrecipes',
     mealKinds: ['Breakfast']
   },
   {
@@ -43,6 +46,8 @@ export const demoRecipes: Recipe[] = [
     yield: 4,
     state: 'needs_review',
     nutrition: { calories: 441, protein: 13, carbs: 51, fat: 21, basis: 'per_serving' },
+    nutritionSource: 'publisher',
+    nutritionSourceName: 'Good Food',
     reviewCount: 2,
     mealKinds: ['Dinner']
   },
@@ -53,8 +58,7 @@ export const demoRecipes: Recipe[] = [
     sourceUrl: '#',
     imageUrl: 'https://images.unsplash.com/photo-1590412200988-a436970781fa?auto=format&fit=crop&w=900&q=75',
     yield: 2,
-    state: 'ready',
-    nutrition: { calories: 418, protein: 24, carbs: 28, fat: 23, basis: 'per_serving' },
+    state: 'no_nutrition',
     mealKinds: ['Breakfast', 'Lunch', 'Dinner']
   }
 ]

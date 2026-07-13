@@ -114,7 +114,9 @@ class SourceAdapter(ABC):
         if isinstance(value, str):
             return value
         if isinstance(value, list):
-            return next((x for x in value if isinstance(x, str)), None)
+            candidates = [SourceAdapter._image(item) for item in value]
+            candidates = [item for item in candidates if item]
+            return candidates[-1] if candidates else None
         if isinstance(value, dict):
             result = value.get("url") or value.get("contentUrl")
             return result if isinstance(result, str) else None
