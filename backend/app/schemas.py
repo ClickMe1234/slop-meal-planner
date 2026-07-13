@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .models import JobStatus, MealType, PlanStatus, RecipeEligibility, TargetMode, UserRole
+from .models import JobStatus, MealType, PlanStatus, RecipeEligibility, RecipeTag, TargetMode, UserRole
 
 MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
 
@@ -184,7 +184,7 @@ class RecipeCreate(APIModel):
     image_url: str | None = None
     custom_instructions: str | None = None
     publisher_nutrition: dict[str, Any] | None = None
-    meal_types: list[MealType] = Field(default_factory=list)
+    meal_types: list[RecipeTag] = Field(default_factory=list)
     ingredients: list[RecipeIngredientIn] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -201,7 +201,7 @@ class RecipeCreate(APIModel):
 class RecipeReviewUpdate(VersionedUpdate):
     title: str = Field(min_length=1, max_length=300)
     yield_servings: Decimal = Field(gt=0)
-    meal_types: list[MealType] | None = None
+    meal_types: list[RecipeTag] | None = None
     ingredients: list[RecipeIngredientIn] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -225,7 +225,7 @@ class RecipeSummary(APIModel):
     calculated_nutrition: dict[str, Any] | None = None
     nutrition_method: str | None = None
     review_count: int = 0
-    meal_types: list[MealType] = Field(default_factory=list)
+    meal_types: list[RecipeTag] = Field(default_factory=list)
     planner_eligible: bool = False
     planner_warnings: list[str] = Field(default_factory=list)
 
@@ -343,6 +343,18 @@ class PlanOut(APIModel):
 
 class PlanRecipeReplaceRequest(APIModel):
     recipe_id: str
+    expected_plan_version: int = Field(ge=1)
+    ignore_nutrition_tolerances: bool = False
+
+
+class PlanSideCreateRequest(APIModel):
+    recipe_id: str
+    expected_plan_version: int = Field(ge=1)
+    component_slot: int | None = Field(default=None, ge=1, le=2)
+    ignore_nutrition_tolerances: bool = False
+
+
+class PlanSideRemoveRequest(APIModel):
     expected_plan_version: int = Field(ge=1)
     ignore_nutrition_tolerances: bool = False
 

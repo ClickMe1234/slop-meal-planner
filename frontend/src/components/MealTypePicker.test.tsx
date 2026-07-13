@@ -25,6 +25,6 @@ describe('MealTypePicker', () => {
   })
 
   it('normalises, deduplicates and rejects unsupported values', () => {
-    expect(normaliseRecipeMealTypes(['Dinner', 'dinner', ' brunch ', 'SNACK'])).toEqual(['dinner', 'snack'])
+    expect(normaliseRecipeMealTypes(['Dinner', 'dinner', ' brunch ', 'SNACK', 'SIDE'])).toEqual(['dinner', 'snack', 'side'])
   })
 })

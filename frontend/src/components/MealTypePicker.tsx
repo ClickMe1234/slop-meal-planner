@@ -6,6 +6,7 @@ export const RECIPE_MEAL_TYPES = [
   { value: 'lunch', label: 'Lunch' },
   { value: 'dinner', label: 'Dinner' },
   { value: 'snack', label: 'Snack' },
+  { value: 'side', label: 'Side' },
 ] as const
 
 export type RecipeMealType = typeof RECIPE_MEAL_TYPES[number]['value']

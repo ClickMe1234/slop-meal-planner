@@ -9,6 +9,8 @@ import {
   ChevronUp,
   CircleAlert,
   Search,
+  Plus,
+  Trash2,
   Users,
   WandSparkles,
   X,
@@ -324,6 +326,7 @@ export function PlanPage() {
       plan={displayedPlan}
       memberNames={Object.fromEntries(members.map(member => [member.id, member.name]))}
       onBack={closePlan}
+      onPlanChange={setLivePlan}
     />
   }
   if (restoredPlanId && !isDemoMode && restoredPlan.isLoading) {
@@ -441,20 +444,27 @@ function ReviewStep({ dates, slots, members, guidance, profileRestrictionCount, 
   return <div className="constraint-review"><dl><div><dt>Dates</dt><dd>{formatDateRange(dates)} · {dates.length} {dates.length === 1 ? 'day' : 'days'}</dd></div><div><dt>Meal slots</dt><dd>{slots.length} total · {mealCounts}</dd></div><div><dt>People</dt><dd>{members.map(member => member.name).join(', ')}</dd></div><div><dt>Cooking</dt><dd>{batchCount(slots)} new recipe {batchCount(slots) === 1 ? 'batch' : 'batches'}</dd></div><div><dt>Plan guidance</dt><dd>{guidance.must.length} must use · {guidance.prefer.length} preferred · {guidance.exclude.length} excluded</dd></div><div><dt>Profile rules</dt><dd>{profileRestrictionCount} applied automatically</dd></div></dl><Notice title="Recipes are meal-tagged">Only planner-ready recipes tagged for the relevant breakfast, lunch, dinner or snack slot will be considered.</Notice>{generating && <ProgressBar value={72} label="Balancing nutrition, portions, batches and preferences…"/>}</div>
 }
 
-function GeneratedPlan({ plan, memberNames, onBack }: { plan: BackendPlanDetail; memberNames: Record<string, string>; onBack: () => void }) {
+function GeneratedPlan({ plan, memberNames, onBack, onPlanChange }: { plan: BackendPlanDetail; memberNames: Record<string, string>; onBack: () => void; onPlanChange: (plan: BackendPlanDetail) => void }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const editable = plan.plan.status === 'ready'
   const [accepting, setAccepting] = useState(false)
   const [acceptError, setAcceptError] = useState<{ message: string; code?: string; actions: ApiAction[] } | null>(null)
+  const [removingSideId, setRemovingSideId] = useState('')
+  const [failedRemovalId, setFailedRemovalId] = useState('')
   const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({})
   const grouped = useMemo(() => plan.occurrences.reduce<Record<string, BackendPlanDetail['occurrences']>>((result, item) => {
     ;(result[item.meal_date] ??= []).push(item)
     return result
   }, {}), [plan.occurrences])
   for (const occurrences of Object.values(grouped)) {
-    occurrences.sort((left, right) => compareMealTypes(left.meal_type, right.meal_type))
+    occurrences.sort((left, right) => compareMealTypes(left.meal_type, right.meal_type) || left.component_slot - right.component_slot)
   }
+  const batchDates = plan.occurrences.reduce<Record<string, string[]>>((result, item) => {
+    const mainBatchId = item.parent_batch_id ?? item.batch_id
+    if (item.component_slot === 0 && !(result[mainBatchId] ?? []).includes(item.meal_date)) (result[mainBatchId] ??= []).push(item.meal_date)
+    return result
+  }, {})
   const planDayCount = Math.max(1, Math.round((new Date(`${plan.plan.end_date}T12:00:00`).getTime() - new Date(`${plan.plan.start_date}T12:00:00`).getTime()) / (24 * 60 * 60 * 1000)) + 1)
   const dates = plannerDates(plan.plan.start_date, planDayCount).map(date => date.iso)
 
@@ -480,6 +490,29 @@ function GeneratedPlan({ plan, memberNames, onBack }: { plan: BackendPlanDetail;
     }
   }
 
+  const removeSide = async (sideBatchId: string, ignoreNutritionTolerances = false) => {
+    setRemovingSideId(sideBatchId)
+    setFailedRemovalId('')
+    setAcceptError(null)
+    try {
+      if (isDemoMode) {
+        const updated = { ...plan, occurrences: plan.occurrences.filter(item => item.batch_id !== sideBatchId) }
+        storeDemoPlan(updated)
+        onPlanChange(updated)
+      } else {
+        const updated = await api.removePlanSide(plan.plan.id, sideBatchId, plan.plan.version, ignoreNutritionTolerances)
+        queryClient.setQueryData(['plan', plan.plan.id], updated)
+        onPlanChange(updated)
+      }
+    } catch (reason) {
+      const error = reason instanceof ApiError ? reason : new ApiError(0, 'The added item could not be removed.')
+      setAcceptError({ message: error.message, code: error.code, actions: error.actions })
+      if (error.code === 'NUTRITION_TARGET_INFEASIBLE') setFailedRemovalId(sideBatchId)
+    } finally {
+      setRemovingSideId('')
+    }
+  }
+
   return <div className="page"><PageHeader eyebrow={`${plan.plan.start_date} – ${plan.plan.end_date}`} title={editable ? 'Your plan is ready' : 'Your accepted plan'} description={editable ? 'Review each day, customise any recipe, then accept the plan to create the shopping list.' : 'This plan is accepted. Review its meals or open the current shopping list.'} actions={<><Button variant="secondary" onClick={onBack}>{editable ? 'Edit setup' : 'Build another plan'}</Button><Button disabled={accepting} onClick={accept}>{accepting ? 'Opening…' : editable ? 'Accept plan' : 'Open shopping list'}<ArrowRight/></Button></>}/>{acceptError && <Card className="planner-action-error" role="alert"><CircleAlert/><div><h3>{acceptError.code === 'SHOPPING_REVIEW_REQUIRED' ? 'Shopping quantities need attention' : 'Plan needs attention'}</h3><p>{acceptError.message}</p>{acceptError.actions.map((action, index) => <div className="planner-error-action" key={`${action.href}-${index}`}><span>{action.suggestion ?? 'Review the suggested change, then return and accept the plan again.'}</span>{action.href && <Link className="button button--secondary" to={appendReturnTo(action.href, `/plan?plan=${plan.plan.id}`)}>{action.label ?? 'Review issue'}</Link>}</div>)}</div></Card>}<Notice tone="success" title={editable ? 'Plan generated' : 'Plan accepted'}>Each day shows the portion-adjusted calories and macros for every person eating.</Notice><div className="generated-grid">{dates.map(date => {
     const occurrences = grouped[date] ?? []
     const memberNutrition = memberNutritionTotals(occurrences)
@@ -487,7 +520,26 @@ function GeneratedPlan({ plan, memberNames, onBack }: { plan: BackendPlanDetail;
     return <Card key={date} className={`generated-day${collapsed ? ' is-collapsed' : ''}`}><div className="generated-day-head generated-day-head--rich"><div className="generated-day-date"><strong>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long' })}</strong><small>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</small></div><div className="day-member-nutrition">{memberNutrition.map(item => <div className="day-member-nutrition-row" key={item.memberId}><span>{memberNames[item.memberId] ?? 'Household member'}</span><NutritionStrip compact nutrition={item.nutrition}/></div>)}</div><button type="button" className="day-collapse-button" onClick={() => setCollapsedDays(current => ({ ...current, [date]: !collapsed }))} aria-expanded={!collapsed} aria-controls={`planned-day-${date}`} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${date}`}>{collapsed ? <ChevronDown/> : <ChevronUp/>}</button></div><div id={`planned-day-${date}`} hidden={collapsed}>{!occurrences.length && <div className="generated-day-empty">No meals needed</div>}{occurrences.map(item => {
       const servings = occurrenceServings(item)
       const kcal = Number(item.nutrition_per_serving?.energy_kcal ?? 0) * servings
-      return <div className="generated-meal" key={item.id}><span>{capitalise(item.meal_type)}</span><div className="generated-meal-copy"><strong>{item.recipe_title}</strong><small>{item.portions.map(portion => `${memberNames[portion.member_id] ?? 'Household member'} ${Number(portion.servings)} serving${Number(portion.servings) === 1 ? '' : 's'}`).join(' · ')}</small></div><small>{Math.round(kcal)} kcal</small>{editable && <Link className="generated-meal-customise" to={`/plan/${plan.plan.id}/occurrences/${item.id}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><WandSparkles size={15}/>Customise</Link>}</div>
+      const isSide = item.component_slot > 0
+      const sideItems = isSide ? [] : occurrences.filter(side => side.parent_batch_id === item.batch_id)
+      const nextSideSlot = [1, 2].find(slot => !sideItems.some(side => side.component_slot === slot))
+      const coveredDates = batchDates[item.parent_batch_id ?? item.batch_id] ?? [item.meal_date]
+      const shortBatchDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+      const coverage = coveredDates.length > 1 ? `${shortBatchDate(coveredDates[0])}–${shortBatchDate(coveredDates.at(-1) as string)}` : shortBatchDate(coveredDates[0])
+      return <div className={`generated-meal${isSide ? ' generated-meal--side' : ''}`} key={item.id}>
+        <span>{isSide ? item.meal_type === 'snack' ? 'Snack' : 'Side' : capitalise(item.meal_type)}</span>
+        <div className="generated-meal-copy"><strong>{item.recipe_title}</strong><small>{item.portions.map(portion => `${memberNames[portion.member_id] ?? 'Household member'} ${Number(portion.servings)} serving${Number(portion.servings) === 1 ? '' : 's'}`).join(' · ')}</small>{!isSide && <small>Cooking batch · {coverage}</small>}</div>
+        <small>{Math.round(kcal)} kcal</small>
+        {editable && <div className="generated-meal-actions">
+          {isSide ? <>
+            <Link className="generated-meal-customise" to={`/plan/${plan.plan.id}/batches/${item.parent_batch_id}/sides/${item.component_slot}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><WandSparkles size={15}/>Replace</Link>
+            <button type="button" className="generated-meal-remove" disabled={removingSideId === item.batch_id} onClick={() => void removeSide(item.batch_id, failedRemovalId === item.batch_id)}><Trash2 size={15}/>{removingSideId === item.batch_id ? 'Removing…' : failedRemovalId === item.batch_id ? 'Continue anyway' : 'Remove'}</button>
+          </> : <>
+            <Link className="generated-meal-customise" to={`/plan/${plan.plan.id}/occurrences/${item.id}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><WandSparkles size={15}/>Customise</Link>
+            {nextSideSlot && <Link className="generated-meal-customise generated-meal-add" to={`/plan/${plan.plan.id}/batches/${item.batch_id}/sides/${nextSideSlot}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><Plus size={15}/>{item.meal_type === 'snack' ? 'Add snacks' : 'Add side'}</Link>}
+          </>}
+        </div>}
+      </div>
     })}</div></Card>
   })}</div></div>
 }
@@ -552,6 +604,7 @@ function buildDemoPlan(dates: PlannerDate[], slots: PlannerSlot[]): BackendPlanD
         meal_date: slot.meal_date,
         meal_type: slot.meal_type,
         batch_id: slot.batch_key,
+        component_slot: 0,
         recipe_id: recipe.id,
         recipe_title: recipe.title,
         batch_servings: batchServings[slot.batch_key],

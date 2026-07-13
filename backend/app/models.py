@@ -49,6 +49,14 @@ class MealType(str, enum.Enum):
     SNACK = "snack"
 
 
+class RecipeTag(str, enum.Enum):
+    BREAKFAST = "breakfast"
+    LUNCH = "lunch"
+    DINNER = "dinner"
+    SNACK = "snack"
+    SIDE = "side"
+
+
 class RecipeEligibility(str, enum.Enum):
     DRAFT = "draft"
     NEEDS_REVIEW = "needs_review"
@@ -178,7 +186,7 @@ class RecipeMealType(IdMixin, Base):
     __table_args__ = (
         UniqueConstraint("recipe_id", "meal_type"),
         CheckConstraint(
-            "meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')",
+            "meal_type IN ('breakfast', 'lunch', 'dinner', 'snack', 'side')",
             name="ck_recipe_meal_type_valid",
         ),
     )
@@ -316,16 +324,23 @@ class MealBatch(IdMixin, Base):
     servings: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     planned_cook_date: Mapped[date] = mapped_column(Date, nullable=False)
     cooked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    parent_batch_id: Mapped[str | None] = mapped_column(
+        ForeignKey("meal_batch.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    component_slot: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class MealOccurrence(IdMixin, AuditMixin, Base):
     __tablename__ = "meal_occurrence"
-    __table_args__ = (UniqueConstraint("meal_plan_id", "meal_date", "meal_type"),)
+    __table_args__ = (
+        UniqueConstraint("meal_plan_id", "meal_date", "meal_type", "component_slot"),
+    )
 
     meal_plan_id: Mapped[str] = mapped_column(ForeignKey("meal_plan.id", ondelete="CASCADE"), index=True)
     batch_id: Mapped[str] = mapped_column(ForeignKey("meal_batch.id", ondelete="CASCADE"), index=True)
     meal_date: Mapped[date] = mapped_column(Date, nullable=False)
     meal_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    component_slot: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     unplanned_allowance: Mapped[bool] = mapped_column(Boolean, default=False)
 

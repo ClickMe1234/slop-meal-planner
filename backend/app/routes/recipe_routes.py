@@ -15,7 +15,7 @@ from ..models import (
     JobStatus,
     MealBatch,
     MealPlan,
-    MealType,
+    RecipeTag,
     PantryReservation,
     PlanStatus,
     Recipe,
@@ -52,9 +52,9 @@ def _latest_version(db: Session, recipe_id: str) -> RecipeVersion | None:
     )
 
 
-def _meal_types(db: Session, recipe: Recipe) -> list[MealType]:
+def _meal_types(db: Session, recipe: Recipe) -> list[RecipeTag]:
     return [
-        MealType(value)
+        RecipeTag(value)
         for value in db.scalars(
             select(RecipeMealType.meal_type)
             .where(RecipeMealType.recipe_id == recipe.id)
@@ -63,7 +63,7 @@ def _meal_types(db: Session, recipe: Recipe) -> list[MealType]:
     ]
 
 
-def _replace_meal_types(db: Session, recipe: Recipe, meal_types: list[MealType]) -> None:
+def _replace_meal_types(db: Session, recipe: Recipe, meal_types: list[RecipeTag]) -> None:
     db.execute(delete(RecipeMealType).where(RecipeMealType.recipe_id == recipe.id))
     for meal_type in meal_types:
         db.add(RecipeMealType(recipe_id=recipe.id, meal_type=meal_type.value))
@@ -165,7 +165,7 @@ def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
 @router.get("/recipes", response_model=dict)
 def list_recipes(
     q: str = Query(default="", max_length=200),
-    meal_type: MealType | None = Query(default=None),
+    meal_type: list[RecipeTag] = Query(default=[]),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=24, ge=1, le=100),
     context: AuthContext = Depends(get_auth_context),
@@ -174,9 +174,11 @@ def list_recipes(
     conditions = [Recipe.household_id == context.user.household_id, Recipe.archived_at.is_(None)]
     if q.strip():
         conditions.append(func.lower(Recipe.title).contains(q.strip().lower()))
-    if meal_type is not None:
+    if meal_type:
         conditions.append(
-            Recipe.meal_type_tags.any(RecipeMealType.meal_type == meal_type.value)
+            Recipe.meal_type_tags.any(
+                RecipeMealType.meal_type.in_([item.value for item in meal_type])
+            )
         )
     total = db.scalar(select(func.count(Recipe.id)).where(*conditions)) or 0
     recipes = db.scalars(

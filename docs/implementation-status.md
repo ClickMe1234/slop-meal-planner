@@ -13,7 +13,8 @@ This file connects the product specification to the first runnable release.
 7. Select who attends each meal and when each meal gets a new cooked batch.
 8. Generate a multi-day plan from meal-tagged, planner-ready recipes.
 9. Review daily calories/macros, collapse days, swap a whole cooked batch, and
-   accept it atomically while reserving pantry stock and building shopping.
+   add up to two batch-wide sides or snacks before accepting it atomically while
+   reserving pantry stock and building shopping.
 10. Use the generated shopping list online or from its local offline copy.
 11. Explicitly add checked purchases to the pantry.
 12. Mark a cooked batch to consume its reservations.
@@ -32,6 +33,11 @@ This file connects the product specification to the first runnable release.
 - Recipes carry optional breakfast/lunch/dinner/snack tags in the backend. An
   untagged recipe remains saved but is visibly excluded from planning until
   tagged.
+- Recipes can also carry a side tag. Breakfast, lunch and dinner batches accept
+  added recipes tagged side or snack; snack batches accept only additional
+  snacks. Added components inherit the main batch's dates and participants.
+- Changing a main recipe or an added component re-quantifies fixed recipes
+  across the whole plan in quarter-serving increments before acceptance.
 - Allocations beyond 48 hours require an acknowledgement; freezing is not
   modelled.
 - Optional ingredients default to excluded until explicitly included.

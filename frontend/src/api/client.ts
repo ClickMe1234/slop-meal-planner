@@ -75,13 +75,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.status === 204 ? undefined as T : response.json() as Promise<T>
 }
 
-async function listAllRecipes(query = '', mealType?: BackendMealType): Promise<{ items: BackendRecipe[]; total: number }> {
+async function listAllRecipes(query = '', mealType?: BackendMealType | BackendMealType[]): Promise<{ items: BackendRecipe[]; total: number }> {
   const items: BackendRecipe[] = []
   let page = 1
   let total = 0
   do {
     const result = await request<{ items: BackendRecipe[]; total: number }>(
-      `/recipes?q=${encodeURIComponent(query)}&page=${page}&page_size=100${mealType ? `&meal_type=${encodeURIComponent(mealType)}` : ''}`,
+      `/recipes?q=${encodeURIComponent(query)}&page=${page}&page_size=100${(Array.isArray(mealType) ? mealType : mealType ? [mealType] : []).map(value => `&meal_type=${encodeURIComponent(value)}`).join('')}`,
     )
     total = result.total
     if (!result.items.length) break
@@ -141,6 +141,8 @@ export const api = {
   listPlans: () => request<BackendPlan[]>('/meal-plans'),
   getPlan: (id: string) => request<BackendPlanDetail>(`/meal-plans/${id}`),
   replacePlanRecipe: (planId: string, occurrenceId: string, recipeId: string, expectedPlanVersion: number, ignoreNutritionTolerances = false) => request<BackendPlanDetail>(`/meal-plans/${planId}/occurrences/${occurrenceId}/recipe`, { method: 'PUT', body: JSON.stringify({ recipe_id: recipeId, expected_plan_version: expectedPlanVersion, ignore_nutrition_tolerances: ignoreNutritionTolerances }) }),
+  addPlanSide: (planId: string, batchId: string, recipeId: string, expectedPlanVersion: number, componentSlot?: number, ignoreNutritionTolerances = false) => request<BackendPlanDetail>(`/meal-plans/${planId}/batches/${batchId}/sides`, { method: 'POST', body: JSON.stringify({ recipe_id: recipeId, expected_plan_version: expectedPlanVersion, component_slot: componentSlot, ignore_nutrition_tolerances: ignoreNutritionTolerances }) }),
+  removePlanSide: (planId: string, sideBatchId: string, expectedPlanVersion: number, ignoreNutritionTolerances = false) => request<BackendPlanDetail>(`/meal-plans/${planId}/batches/${sideBatchId}/sides`, { method: 'DELETE', body: JSON.stringify({ expected_plan_version: expectedPlanVersion, ignore_nutrition_tolerances: ignoreNutritionTolerances }) }),
   acceptPlan: (id: string) => request<BackendPlan>(`/meal-plans/${id}/accept`, { method: 'POST' }),
   markBatchCooked: (planId: string, batchId: string) => request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, { method: 'POST' }),
   buildShoppingList: (planId: string) => request<BackendShoppingList>('/shopping-lists/build', { method: 'POST', body: JSON.stringify({ meal_plan_id: planId, name: 'Current shopping list' }) }),
@@ -150,7 +152,7 @@ export const api = {
 
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE !== 'false'
 
-export type BackendMealType = 'breakfast' | 'lunch' | 'dinner' | 'snack'
+export type BackendMealType = 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'side'
 
 export interface BackendRecipe {
   id: string
@@ -330,6 +332,8 @@ export interface BackendPlanDetail {
     meal_date: string
     meal_type: string
     batch_id: string
+    parent_batch_id?: string
+    component_slot: number
     recipe_id: string
     recipe_title: string
     source_url?: string
