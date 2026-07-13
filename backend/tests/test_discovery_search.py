@@ -1,6 +1,7 @@
 import asyncio
+from decimal import Decimal
 
-from app.discovery.models import SearchResult
+from app.discovery.models import CombinedSearchResponse, SearchResult, SourceSearchResponse, bayesian_rating_score
 from app.discovery.registry import default_registry
 from app.discovery.search import LiveSearchService, SearchPolicy
 
@@ -80,6 +81,34 @@ def test_remote_search_only_calls_selected_publishers():
 
 def test_default_registry_only_enables_current_publishers():
     assert {adapter.key for adapter in default_registry.adapters} == {"good_food", "allrecipes"}
+
+
+def test_bayesian_rating_rank_rewards_strong_review_evidence():
+    established = SearchResult(
+        "good_food",
+        "Established curry",
+        "https://example/established",
+        star_rating=Decimal("4.5"),
+        rating_count=500,
+    )
+    single_vote = SearchResult(
+        "allrecipes",
+        "New curry",
+        "https://example/new",
+        star_rating=Decimal("5"),
+        rating_count=1,
+    )
+    response = CombinedSearchResponse(
+        "curry",
+        (
+            SourceSearchResponse("allrecipes", (single_vote,)),
+            SourceSearchResponse("good_food", (established,)),
+        ),
+        0,
+    )
+
+    assert bayesian_rating_score(Decimal("4.5"), 500) > bayesian_rating_score(Decimal("5"), 1)
+    assert response.results == (established, single_vote)
 
 
 def test_nutrition_preview_fetches_recipe_page_once_and_caches_it():

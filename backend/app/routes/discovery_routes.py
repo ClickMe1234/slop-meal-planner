@@ -108,7 +108,15 @@ async def discover_recipes(
     return {
         "query": response.query,
         "sources": sources,
-        "results": [result for source in sources for result in source["results"]],
+        "results": [
+            next(
+                result
+                for source in sources
+                for result in source["results"]
+                if result["url"] == ranked.url
+            )
+            for ranked in response.results
+        ],
         "debounce_ms": response.debounce_ms,
         "cache_hit": response.cache_hit,
         "superseded": response.superseded,

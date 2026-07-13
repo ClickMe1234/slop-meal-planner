@@ -243,6 +243,8 @@ export interface DiscoveryResult {
     fat_g?: number
   }
   already_saved: boolean
+  star_rating?: number
+  rating_count?: number
 }
 
 export interface DiscoveryResponse {

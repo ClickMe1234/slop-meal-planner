@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NutritionStrip } from '../components/Nutrition'
+import { RecipeRating } from '../components/RecipeRating'
 import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import { MealTypePicker, mealKindLabels, type RecipeMealType } from '../components/MealTypePicker'
 import { demoRecipes } from '../data/demo'
@@ -204,6 +205,7 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
     <div className="recipe-image"><RecipeThumbnail url={recipe.imageUrl}/><div className="recipe-source">{recipe.source}</div>{saved && <span className="saved-mark" aria-label="Saved recipe"><Check size={16}/></span>}</div>
     <div className="recipe-content">
       <div className="recipe-title"><h2>{recipe.title}</h2>{recipe.sourceUrl && <a href={recipe.sourceUrl} target="_blank" rel="noreferrer" aria-label={`Open ${recipe.title} source`}><ExternalLink size={17}/></a>}</div>
+      <RecipeRating rating={recipe.starRating} count={recipe.ratingCount}/>
       <p className="recipe-meta">{yieldServings ? `Serves ${yieldServings}` : 'Yield not reported'}{recipe.mealKinds.length ? ` · ${recipe.mealKinds.join(' · ')}` : ''}</p>
       {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>Nutrition from {nutritionSource} · per serving</span><Badge tone={planningBadge?.tone ?? 'green'}>{planningBadge?.label ?? 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
       {missingMealTypes && <div className="recipe-planning-note recipe-planning-note--warning" role="status"><strong>Not used for meal planning</strong><span>Add breakfast, lunch, dinner or snack so the planner knows where this recipe belongs.</span></div>}
@@ -274,6 +276,8 @@ function mapDiscoveryResult(recipe: DiscoveryResult): Recipe {
     publisherNutrition: preview,
     nutritionSourceName: source,
     state: preview ? 'source_estimate' : 'no_nutrition',
+    starRating: recipe.star_rating,
+    ratingCount: recipe.rating_count,
     mealKinds: [],
   }
 }

@@ -56,6 +56,8 @@ def test_supported_adapter_urls_and_good_food_result_parsing():
     assert [result.title for result in results] == ["Red lentil soup", "Another soup"]
     assert results[0].url == "https://www.bbcgoodfood.com/recipes/red-lentil-soup"
     assert results[0].publisher_nutrition.energy_kcal == Decimal("280")
+    assert results[0].star_rating == Decimal("4.6")
+    assert results[0].rating_count == 842
     assert results[1].image_url == "https://www.bbcgoodfood.com/images/another.jpg"
 
     assert AllrecipesAdapter().supports_url("https://www.allrecipes.com/recipe/123/stew/")
@@ -97,3 +99,28 @@ def test_allrecipes_search_card_removes_rating_count_from_title():
     )[0]
     assert result.title == "Chicken Soup"
     assert result.image_url == "https://www.allrecipes.com/thmb/chicken.jpg"
+    assert result.rating_count == 1234
+
+
+def test_allrecipes_search_card_extracts_rating_and_count_from_text():
+    html = '''<a href="/recipe/123/chicken-soup/">
+      <img src="https://www.allrecipes.com/thmb/chicken.jpg" alt="Chicken Soup">
+      Chicken Soup 4.9 27 Ratings
+    </a>'''
+    result = AllrecipesAdapter().parse_search_results(
+        html,
+        search_url="https://www.allrecipes.com/search?q=chicken",
+    )[0]
+    assert result.title == "Chicken Soup"
+    assert result.star_rating == Decimal("4.9")
+    assert result.rating_count == 27
+
+
+def test_allrecipes_search_card_extracts_compact_rating_text():
+    result = AllrecipesAdapter().parse_search_results(
+        '<a href="/recipe/123/chicken-soup/">Chicken Soup 4.8 (1,204)</a>',
+        search_url="https://www.allrecipes.com/search?q=chicken",
+    )[0]
+    assert result.title == "Chicken Soup"
+    assert result.star_rating == Decimal("4.8")
+    assert result.rating_count == 1204
