@@ -33,6 +33,7 @@ import {
   batchCount,
   buildPlanSlots,
   capitalise,
+  compareMealTypes,
   cookStartKey,
   emptyIngredientGuidance,
   firstPlannedDate,
@@ -419,6 +420,9 @@ function GeneratedPlan({ plan, memberNames, onBack }: { plan: BackendPlanDetail;
     ;(result[item.meal_date] ??= []).push(item)
     return result
   }, {}), [plan.occurrences])
+  for (const occurrences of Object.values(grouped)) {
+    occurrences.sort((left, right) => compareMealTypes(left.meal_type, right.meal_type))
+  }
   const planDayCount = Math.max(1, Math.round((new Date(`${plan.plan.end_date}T12:00:00`).getTime() - new Date(`${plan.plan.start_date}T12:00:00`).getTime()) / (24 * 60 * 60 * 1000)) + 1)
   const dates = plannerDates(plan.plan.start_date, planDayCount).map(date => date.iso)
 

@@ -7,6 +7,7 @@ from app.services.planner import (
     ParticipantTarget,
     PlannerInfeasibleError,
     RecipeCandidate,
+    aggregate_nutrition_violations,
     choose_shared_recipe,
 )
 from app.services.shopping import round_purchase
@@ -72,6 +73,22 @@ def test_planner_can_explicitly_choose_the_closest_portion_outside_tolerance():
 
     assert choice.candidate.recipe_id == "too-light"
     assert choice.portions == {"member": Decimal("2.00")}
+
+
+def test_daily_bounds_allow_meal_allocation_deviations_to_offset():
+    breakfast = ParticipantTarget(
+        "member", "calorie", Decimal("50"), Decimal("1000"), None, None, None
+    )
+    dinner = ParticipantTarget(
+        "member", "calorie", Decimal("50"), Decimal("1000"), None, None, None
+    )
+
+    assert aggregate_nutrition_violations(
+        [breakfast, dinner], {"energy_kcal": Decimal("1000")}
+    ) == []
+    assert aggregate_nutrition_violations(
+        [breakfast, dinner], {"energy_kcal": Decimal("900")}
+    )
 
 
 def test_stored_preference_terms_softly_rank_feasible_recipes():

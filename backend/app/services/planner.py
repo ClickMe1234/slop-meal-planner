@@ -83,6 +83,66 @@ def _within_hard_bounds(
     return True
 
 
+def aggregate_nutrition_violations(
+    targets: list[ParticipantTarget], nutrition: dict[str, Decimal]
+) -> list[str]:
+    """Return hard-bound failures after combining a participant's planned meals.
+
+    Meal allocations determine how much of the daily target is covered by the
+    supplied targets, but are deliberately not enforced meal by meal.
+    """
+    if not targets:
+        return []
+    if len({target.member_id for target in targets}) != 1:
+        raise ValueError("aggregate targets must belong to one participant")
+    if len({target.mode for target in targets}) != 1:
+        raise ValueError("aggregate targets must use one target mode")
+
+    expected: dict[str, Decimal] = {}
+    for target in targets:
+        for nutrient, value in _target_values(target).items():
+            expected[nutrient] = expected.get(nutrient, Decimal("0")) + value
+
+    tolerance = targets[0].tolerance_percent / Decimal("100")
+    violations: list[str] = []
+    labels = {
+        "energy_kcal": "calories",
+        "protein_g": "protein",
+        "carbohydrate_g": "carbohydrate",
+        "fat_g": "fat",
+    }
+    for nutrient, target_value in expected.items():
+        actual = nutrition.get(nutrient, Decimal("0"))
+        low = target_value * (Decimal("1") - tolerance)
+        high = target_value * (Decimal("1") + tolerance)
+        if actual < low or actual > high:
+            violations.append(
+                f"{labels[nutrient]} {actual.normalize()} is outside "
+                f"{low.normalize()}-{high.normalize()}"
+            )
+
+    if targets[0].mode == "calorie":
+        allocation = sum((target.allocation for target in targets), Decimal("0"))
+        first = targets[0]
+        for nutrient, low_daily, high_daily in (
+            ("protein_g", first.protein_min_g, first.protein_max_g),
+            ("carbohydrate_g", first.carbohydrate_min_g, first.carbohydrate_max_g),
+            ("fat_g", first.fat_min_g, first.fat_max_g),
+        ):
+            actual = nutrition.get(nutrient, Decimal("0"))
+            low = low_daily * allocation / Decimal("100") if low_daily is not None else None
+            high = high_daily * allocation / Decimal("100") if high_daily is not None else None
+            if low is not None and actual < low:
+                violations.append(
+                    f"{labels[nutrient]} {actual.normalize()} is below {low.normalize()}"
+                )
+            if high is not None and actual > high:
+                violations.append(
+                    f"{labels[nutrient]} {actual.normalize()} is above {high.normalize()}"
+                )
+    return violations
+
+
 def choose_shared_recipe(
     candidates: list[RecipeCandidate],
     participants: list[ParticipantTarget],

@@ -3,6 +3,7 @@ import type { BackendPlanDetail } from '../api/client'
 import {
   attendanceKey,
   buildPlanSlots,
+  compareMealTypes,
   cookStartKey,
   hasLongBatch,
   memberNutritionTotals,
@@ -11,6 +12,14 @@ import {
 } from './planner'
 
 describe('planner helpers', () => {
+  it('orders meal types consistently for display', () => {
+    expect(['breakfast', 'dinner', 'lunch', 'snack'].sort(compareMealTypes)).toEqual([
+      'breakfast',
+      'lunch',
+      'dinner',
+      'snack',
+    ])
+  })
   it('builds dated attendance slots and starts a new recipe only on selected cook days', () => {
     const dates = plannerDates('2026-07-13', 4)
     const slots = buildPlanSlots({

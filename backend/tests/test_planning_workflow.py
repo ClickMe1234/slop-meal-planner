@@ -291,6 +291,72 @@ def test_infeasible_plan_can_be_retried_in_best_effort_mode(
     )
 
 
+def test_generation_treats_meal_splits_as_soft_daily_targets(
+    client, owner, session_factory
+):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    target = client.put(
+        f"/api/v1/household-members/{member_id}/target",
+        headers=_headers(owner),
+        json={
+            "mode": "calorie",
+            "calorie_target": 1000,
+            "tolerance_percent": 5,
+            "allocations": [
+                {"meal_type": "breakfast", "percentage": 50},
+                {"meal_type": "dinner", "percentage": 50},
+            ],
+        },
+    )
+    assert target.status_code == 200, target.text
+    breakfast = _create_recipe(client, owner, "Light breakfast", ["breakfast"])
+    dinner = _create_recipe(client, owner, "Heavy dinner", ["dinner"])
+    with session_factory() as db:
+        breakfast_version = db.scalar(
+            select(RecipeVersion).where(RecipeVersion.recipe_id == breakfast["id"])
+        )
+        dinner_version = db.scalar(
+            select(RecipeVersion).where(RecipeVersion.recipe_id == dinner["id"])
+        )
+        breakfast_version.publisher_nutrition = {
+            **PUBLISHER_NUTRITION,
+            "energy_kcal": 460,
+        }
+        dinner_version.publisher_nutrition = {
+            **PUBLISHER_NUTRITION,
+            "energy_kcal": 540,
+        }
+        db.commit()
+
+    generated = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={
+            "name": "Soft meal splits",
+            "recipe_ids": [breakfast["id"], dinner["id"]],
+            "slots": [
+                {
+                    "meal_date": "2026-07-20",
+                    "meal_type": "breakfast",
+                    "participant_member_ids": [member_id],
+                },
+                {
+                    "meal_date": "2026-07-20",
+                    "meal_type": "dinner",
+                    "participant_member_ids": [member_id],
+                },
+            ],
+        },
+    )
+
+    assert generated.status_code == 201, generated.text
+    detail = client.get(f"/api/v1/meal-plans/{generated.json()['id']}").json()
+    assert [item["portions"][0]["servings"] for item in detail["occurrences"]] == [
+        1.0,
+        1.0,
+    ]
+
+
 def test_replacement_preserves_plan_specific_ingredient_guidance(client, owner):
     member_id = client.get("/api/v1/auth/me").json()["member_id"]
     _set_dinner_target(client, owner, member_id)

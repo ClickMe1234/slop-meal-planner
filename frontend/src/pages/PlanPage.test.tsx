@@ -79,6 +79,40 @@ describe('PlanPage wizard', () => {
     expect(screen.getByText('Oats')).not.toBeVisible()
   })
 
+  it('shows meals in breakfast, lunch, dinner, snack order', () => {
+    const meal = (mealType: string): BackendPlanDetail['occurrences'][number] => ({
+      id: mealType,
+      meal_date: '2026-07-13',
+      meal_type: mealType,
+      batch_id: `${mealType}-batch`,
+      recipe_id: `${mealType}-recipe`,
+      recipe_title: `${mealType} recipe`,
+      batch_servings: 1,
+      portions: [{ member_id: 'demo-you', servings: 1 }],
+    })
+    storeDemoPlan({
+      plan: {
+        id: 'demo',
+        name: 'Shuffled plan',
+        start_date: '2026-07-13',
+        end_date: '2026-07-13',
+        status: 'ready',
+        diagnostics: [],
+        version: 1,
+      },
+      occurrences: [meal('breakfast'), meal('dinner'), meal('lunch'), meal('snack')],
+    })
+
+    const { container } = render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan?plan=demo']}><PlanPage/></MemoryRouter></QueryClientProvider>)
+
+    expect([...container.querySelectorAll('.generated-meal > span')].map(element => element.textContent)).toEqual([
+      'Breakfast',
+      'Lunch',
+      'Dinner',
+      'Snack',
+    ])
+  })
+
   it('renders empty range days and locks recipe changes after acceptance', () => {
     const plan: BackendPlanDetail = {
       plan: {
