@@ -1,4 +1,4 @@
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
   CalendarRange,
@@ -110,6 +110,7 @@ function clampDays(value: number): number {
 
 export function PlanPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const restoredPlanId = searchParams.get('plan')
   const [step, setStep] = useState(0)
@@ -126,6 +127,8 @@ export function PlanPage() {
   const [foodSafetyAcknowledged, setFoodSafetyAcknowledged] = useState(false)
   const [ingredientQuery, setIngredientQuery] = useState('')
   const [ingredientGuidance, setIngredientGuidance] = useState<IngredientGuidance>(emptyIngredientGuidance)
+  const [overwritePrompt, setOverwritePrompt] = useState<{ ignoreNutritionTolerances: boolean } | null>(null)
+  const [overwriteConfirmed, setOverwriteConfirmed] = useState(false)
 
   const membersQuery = useQuery({
     queryKey: ['members'],
@@ -149,6 +152,14 @@ export function PlanPage() {
     enabled: !isDemoMode,
     retry: false,
   })
+  const plansQuery = useQuery({
+    queryKey: ['plans'],
+    queryFn: api.listPlans,
+    enabled: !isDemoMode,
+  })
+  const existingPlan = isDemoMode
+    ? readDemoPlan()?.plan
+    : plansQuery.data?.find(plan => plan.status === 'accepted' || plan.status === 'ready')
   const targetsByMember = useMemo(() => new Map<string, BackendTarget>(
     isDemoMode
       ? [[demoMember.id, demoTarget]]
@@ -281,6 +292,7 @@ export function PlanPage() {
         ignore_nutrition_tolerances: ignoreNutritionTolerances,
       })
       const detail = await api.getPlan(plan.id)
+      await queryClient.invalidateQueries({ queryKey: ['plans'] })
       setLivePlan(detail)
       setSearchParams({ plan: plan.id }, { replace: true })
     } catch (reason) {
@@ -288,6 +300,21 @@ export function PlanPage() {
     } finally {
       setGenerating(false)
     }
+  }
+
+  const requestGeneration = (ignoreNutritionTolerances = false) => {
+    if (existingPlan && !overwriteConfirmed) {
+      setOverwritePrompt({ ignoreNutritionTolerances })
+      return
+    }
+    void generate(ignoreNutritionTolerances)
+  }
+
+  const confirmOverwrite = () => {
+    const request = overwritePrompt
+    setOverwritePrompt(null)
+    setOverwriteConfirmed(true)
+    if (request) void generate(request.ignoreNutritionTolerances)
   }
 
   if (displayedPlan) {
@@ -306,7 +333,7 @@ export function PlanPage() {
 
   return <div className="page">
     <PageHeader eyebrow="Automatic planning" title="Build your next meal plan" description="Set exactly who needs each meal and when you want to cook. Portions, ingredients and shopping quantities follow those choices."/>
-    {error && <Card className="planner-generation-error"><Notice tone="warning" title="Plan not feasible">{error.message}</Notice>{error.code === 'NUTRITION_TARGET_INFEASIBLE' && <Button variant="secondary" disabled={generating} onClick={() => generate(true)}>Continue anyway</Button>}</Card>}
+    {error && <Card className="planner-generation-error"><Notice tone="warning" title="Plan not feasible">{error.message}</Notice>{error.code === 'NUTRITION_TARGET_INFEASIBLE' && <Button variant="secondary" disabled={generating} onClick={() => requestGeneration(true)}>Continue anyway</Button>}</Card>}
     <div className="planner-layout">
       <aside className="wizard-sidebar"><ol>{wizardSteps.map((name, index) => <li key={name} className={index < step ? 'done' : index === step ? 'active' : ''}><button type="button" disabled={index > maxVisitedStep} onClick={() => openStep(index)}><span>{index < step ? <Check size={15}/> : index + 1}</span><div><strong>{name}</strong><small>{stepDescriptions[index]}</small></div></button></li>)}</ol></aside>
       <Card className="wizard-panel">
@@ -323,10 +350,11 @@ export function PlanPage() {
           <Button variant="ghost" disabled={step === 0 || generating} onClick={() => setStep(current => current - 1)}><ChevronLeft/>Back</Button>
           {step < wizardSteps.length - 1
             ? <Button disabled={stepBlocked} onClick={next}>Continue<ChevronRight/></Button>
-            : <Button disabled={generating || generationBlocked} onClick={() => generate()}><WandSparkles/>{generating ? 'Building your plan…' : 'Generate meal plan'}</Button>}
+            : <Button disabled={generating || generationBlocked} onClick={() => requestGeneration()}><WandSparkles/>{generating ? 'Building your plan…' : 'Generate meal plan'}</Button>}
         </div>
       </Card>
     </div>
+    {overwritePrompt && <div className="modal-backdrop" role="presentation"><Card className="recipe-save-modal" role="dialog" aria-modal="true" aria-labelledby="overwrite-plan-title"><p className="eyebrow">Replace current plan</p><h2 id="overwrite-plan-title">Create a new meal plan?</h2><p>Your current plan, <strong>{existingPlan?.name}</strong>, will remain active while you review the new plan. Accepting the new plan will replace it on This week and rebuild the active shopping list.</p><Notice tone="warning" title="Your current plan will be overwritten">Pantry reservations from the current plan will be released when the new plan is accepted.</Notice><div className="button-row"><Button variant="ghost" onClick={() => setOverwritePrompt(null)}>Keep current plan</Button><Button onClick={confirmOverwrite}>Create new plan</Button></div></Card></div>}
   </div>
 }
 
@@ -382,6 +410,7 @@ function ReviewStep({ dates, slots, members, guidance, profileRestrictionCount, 
 
 function GeneratedPlan({ plan, memberNames, onBack }: { plan: BackendPlanDetail; memberNames: Record<string, string>; onBack: () => void }) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const editable = plan.plan.status === 'ready'
   const [accepting, setAccepting] = useState(false)
   const [acceptError, setAcceptError] = useState<{ message: string; code?: string; actions: ApiAction[] } | null>(null)
@@ -402,6 +431,10 @@ function GeneratedPlan({ plan, memberNames, onBack }: { plan: BackendPlanDetail;
     setAcceptError(null)
     try {
       await api.acceptPlan(plan.plan.id)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['plans'] }),
+        queryClient.invalidateQueries({ queryKey: ['plan'] }),
+      ])
       navigate('/shopping')
     } catch (reason) {
       if (reason instanceof ApiError) setAcceptError({ message: reason.message, code: reason.code, actions: reason.actions })

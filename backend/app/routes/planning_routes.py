@@ -4,7 +4,7 @@ from decimal import Decimal
 import re
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -828,6 +828,25 @@ def accept_plan(
     if plan.status == PlanStatus.ACCEPTED.value and existing_list is not None:
         return plan
     _validate_mutable_plan_constraints(db, plan)
+    previous_plans = db.scalars(
+        select(MealPlan).where(
+            MealPlan.household_id == plan.household_id,
+            MealPlan.status == PlanStatus.ACCEPTED.value,
+            MealPlan.id != plan.id,
+        )
+    ).all()
+    for previous_plan in previous_plans:
+        previous_batch_ids = db.scalars(
+            select(MealBatch.id).where(MealBatch.meal_plan_id == previous_plan.id)
+        ).all()
+        if previous_batch_ids:
+            db.execute(
+                delete(PantryReservation).where(
+                    PantryReservation.meal_batch_id.in_(previous_batch_ids)
+                )
+            )
+        previous_plan.status = PlanStatus.SUPERSEDED.value
+        previous_plan.version += 1
     batches = db.scalars(select(MealBatch).where(MealBatch.meal_plan_id == plan.id)).all()
     reserve_plan_batches(db, context.user.household_id, list(batches))
     # A READY plan may have a stale list from an older client that built one

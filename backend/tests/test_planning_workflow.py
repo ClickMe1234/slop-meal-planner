@@ -651,3 +651,38 @@ def test_legacy_accepted_plan_without_list_can_be_recovered(client, owner, sessi
             select(ShoppingList).where(ShoppingList.meal_plan_id == plan["id"])
         ).all()
         assert len(lists) == 1
+
+
+def test_accepting_a_new_plan_supersedes_the_current_plan(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    recipe = _create_recipe(client, owner, "Replacement dinner", ["dinner"])
+
+    def generate_for(meal_date):
+        return _generate(
+            client,
+            owner,
+            [recipe["id"]],
+            [{
+                "meal_date": meal_date,
+                "meal_type": "dinner",
+                "participant_member_ids": [member_id],
+            }],
+        )
+
+    first = generate_for("2026-07-20")
+    assert client.post(
+        f"/api/v1/meal-plans/{first['id']}/accept", headers=_headers(owner)
+    ).status_code == 200
+
+    second = generate_for("2026-07-27")
+    assert client.post(
+        f"/api/v1/meal-plans/{second['id']}/accept", headers=_headers(owner)
+    ).status_code == 200
+
+    plans = client.get("/api/v1/meal-plans").json()
+    statuses = {plan["id"]: plan["status"] for plan in plans}
+    assert statuses[first["id"]] == "superseded"
+    assert statuses[second["id"]] == "accepted"
+    assert [plan["id"] for plan in plans if plan["status"] == "accepted"] == [second["id"]]
+    assert client.get("/api/v1/shopping-lists/active").json()["meal_plan_id"] == second["id"]

@@ -109,4 +109,35 @@ describe('PlanPage wizard', () => {
     expect(screen.getByText('No meals needed')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /customise/i })).not.toBeInTheDocument()
   })
+
+  it('warns before creating a plan that will replace the current plan', async () => {
+    storeDemoPlan({
+      plan: {
+        id: 'current-plan',
+        name: 'Current family plan',
+        start_date: '2026-07-13',
+        end_date: '2026-07-19',
+        status: 'accepted',
+        diagnostics: [],
+        version: 2,
+      },
+      occurrences: [],
+    })
+    const user = userEvent.setup()
+    renderPlanner()
+    for (let day = 1; day < 7; day += 1) {
+      await user.click(screen.getByRole('button', { name: 'Plan one fewer day' }))
+    }
+
+    for (let step = 0; step < 5; step += 1) {
+      await user.click(screen.getByRole('button', { name: /continue/i }))
+    }
+    await user.click(screen.getByRole('button', { name: /generate meal plan/i }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Create a new meal plan?' })
+    expect(dialog).toHaveTextContent('Current family plan')
+    expect(dialog).toHaveTextContent('will be overwritten')
+    await user.click(screen.getByRole('button', { name: 'Keep current plan' }))
+    expect(dialog).not.toBeInTheDocument()
+  })
 })

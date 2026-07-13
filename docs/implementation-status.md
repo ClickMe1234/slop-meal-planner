@@ -46,7 +46,7 @@ This file connects the product specification to the first runnable release.
 
 ## Validation completed
 
-- 50 backend tests and 21 frontend tests pass.
+- 51 backend tests and 22 frontend tests pass.
 - The production frontend build and PWA manifest build pass.
 - Docker Desktop smoke test passed for the rebuilt Compose stack (PostgreSQL,
   Redis, web, worker and scheduler), including migrations, readiness, live
