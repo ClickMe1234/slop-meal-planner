@@ -82,11 +82,11 @@ class TargetProfileIn(APIModel):
     protein_target_g: Decimal | None = Field(default=None, ge=0)
     carbohydrate_target_g: Decimal | None = Field(default=None, ge=0)
     fat_target_g: Decimal | None = Field(default=None, ge=0)
-    protein_min_g: Decimal | None = Field(default=None, ge=0)
+    protein_min_g: Decimal | None = Field(default=Decimal("0"), ge=0)
     protein_max_g: Decimal | None = Field(default=None, ge=0)
-    carbohydrate_min_g: Decimal | None = Field(default=None, ge=0)
+    carbohydrate_min_g: Decimal | None = Field(default=Decimal("0"), ge=0)
     carbohydrate_max_g: Decimal | None = Field(default=None, ge=0)
-    fat_min_g: Decimal | None = Field(default=None, ge=0)
+    fat_min_g: Decimal | None = Field(default=Decimal("0"), ge=0)
     fat_max_g: Decimal | None = Field(default=None, ge=0)
     allocations: list[MealAllocationIn] = Field(
         default_factory=lambda: [

@@ -91,6 +91,43 @@ def test_daily_bounds_allow_meal_allocation_deviations_to_offset():
     )
 
 
+def test_calorie_mode_minimum_steers_recipe_ranking_without_penalising_excess():
+    participant = ParticipantTarget(
+        "member", "calorie", Decimal("25"), Decimal("2000"), None, None, None,
+        protein_min_g=Decimal("120"),
+    )
+    low_protein = RecipeCandidate(
+        "low-protein", "v1", {"energy_kcal": Decimal("500"), "protein_g": Decimal("15")}
+    )
+    high_protein = RecipeCandidate(
+        "high-protein", "v2", {"energy_kcal": Decimal("500"), "protein_g": Decimal("35")}
+    )
+
+    choice = choose_shared_recipe(
+        [low_protein, high_protein], [participant], enforce_nutrition_bounds=False
+    )
+
+    assert choice.candidate.recipe_id == "high-protein"
+    assert choice.portions == {"member": Decimal("1.0")}
+
+
+def test_zero_calorie_mode_minimum_preserves_calorie_only_ranking():
+    participant = ParticipantTarget(
+        "member", "calorie", Decimal("25"), Decimal("2000"), None, None, None,
+        protein_min_g=Decimal("0"), carbohydrate_min_g=Decimal("0"), fat_min_g=Decimal("0"),
+    )
+    first = RecipeCandidate(
+        "first", "v1", {"energy_kcal": Decimal("500"), "protein_g": Decimal("5")}
+    )
+    second = RecipeCandidate(
+        "second", "v2", {"energy_kcal": Decimal("500"), "protein_g": Decimal("50")}
+    )
+
+    choice = choose_shared_recipe([first, second], [participant])
+
+    assert choice.candidate.recipe_id == "first"
+
+
 def test_stored_preference_terms_softly_rank_feasible_recipes():
     participant = ParticipantTarget(
         "member", "calorie", Decimal("25"), Decimal("2000"), None, None, None

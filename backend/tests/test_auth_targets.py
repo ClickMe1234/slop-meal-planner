@@ -23,6 +23,9 @@ def test_owner_setup_login_and_calorie_target(client, owner):
     )
     assert response.status_code == 200, response.text
     assert response.json()["calorie_target"] == "2000.00"
+    assert response.json()["protein_min_g"] == "100.00"
+    assert response.json()["carbohydrate_min_g"] == "0.00"
+    assert response.json()["fat_min_g"] == "0.00"
 
 
 def test_login_username_is_trimmed_and_case_insensitive(client, owner):

@@ -47,26 +47,290 @@ export function HouseholdSettings() {
 }
 
 export function TargetSettings() {
-  const queryClient=useQueryClient()
-  const members=useQuery({queryKey:['members'],queryFn:api.listMembers})
-  const [memberId,setMemberId]=useState('')
-  const selectedMemberId=memberId||members.data?.[0]?.id||''
-  const target=useQuery({queryKey:['target',selectedMemberId],queryFn:()=>api.getTarget(selectedMemberId),enabled:Boolean(selectedMemberId),retry:false})
-  const [mode,setMode]=useState<'calorie'|'macros'>('calorie')
-  const [calories,setCalories]=useState(2000)
-  const [protein,setProtein]=useState(130)
-  const [carbs,setCarbs]=useState(225)
-  const [fat,setFat]=useState(67)
-  const [tolerance,setTolerance]=useState(5)
-  const [allocations,setAllocations]=useState({breakfast:25,lunch:30,dinner:35,snack:10})
-  const [saving,setSaving]=useState(false)
-  const [error,setError]=useState('')
-  const [saved,setSaved]=useState(false)
-  useEffect(()=>{setMode('calorie');setCalories(2000);setProtein(130);setCarbs(225);setFat(67);setTolerance(5);setAllocations({breakfast:25,lunch:30,dinner:35,snack:10});setSaved(false);setError('')},[selectedMemberId])
-  useEffect(()=>{if(!target.data)return;setMode(target.data.mode);setCalories(Number(target.data.calorie_target??2000));setProtein(Number(target.data.protein_target_g??130));setCarbs(Number(target.data.carbohydrate_target_g??225));setFat(Number(target.data.fat_target_g??67));setTolerance(Number(target.data.tolerance_percent));setAllocations(values=>({...values,...Object.fromEntries(target.data.allocations.map(item=>[item.meal_type,Number(item.percentage)]))}))},[target.data])
-  const total=Object.values(allocations).reduce((sum,value)=>sum+value,0)
-  const save=async()=>{if(!selectedMemberId||total!==100)return;setSaving(true);setError('');setSaved(false);try{await api.setTarget(selectedMemberId,{mode,tolerance_percent:tolerance,calorie_target:mode==='calorie'?calories:null,protein_target_g:mode==='macros'?protein:null,carbohydrate_target_g:mode==='macros'?carbs:null,fat_target_g:mode==='macros'?fat:null,allocations:Object.entries(allocations).map(([meal_type,percentage])=>({meal_type,percentage}))});await Promise.all([queryClient.invalidateQueries({queryKey:['target',selectedMemberId]}),queryClient.invalidateQueries({queryKey:['targets']})]);setSaved(true)}catch(reason){setError(reason instanceof ApiError?reason.message:'The target could not be saved.')}finally{setSaving(false)}}
-  return <SettingsLayout><div className="settings-heading"><div><h2>Targets & meal allocation</h2><p>Targets are user supplied. Savour does not assess whether they are medically suitable.</p></div><Button disabled={saving||total!==100} onClick={save}>{saving?'Saving…':'Save changes'}</Button></div>{error&&<Notice tone="warning" title="Could not save">{error}</Notice>}{saved&&<Notice tone="success" title="Saved">Nutrition targets and meal allocation were updated.</Notice>}<Card className="settings-section"><label>Household member<select value={selectedMemberId} onChange={event=>setMemberId(event.target.value)}>{members.data?.map(member=><option value={member.id} key={member.id}>{member.name}</option>)}</select></label><h3>Nutrition target</h3><label>Planning mode<Segmented value={mode} onChange={setMode} label="Target mode" options={[{value:'calorie',label:'Calories'},{value:'macros',label:'Macros'}]}/></label>{mode==='calorie'?<div className="form-grid"><label>Daily calories<input type="number" min="1" value={calories} onChange={event=>setCalories(Number(event.target.value))}/></label><label>Hard tolerance<div className="input-suffix"><input type="number" min="1" max="25" value={tolerance} onChange={event=>setTolerance(Number(event.target.value))}/><span>%</span></div></label></div>:<div className="form-grid form-grid--3"><label>Protein<input type="number" min="0" value={protein} onChange={event=>setProtein(Number(event.target.value))}/></label><label>Carbohydrate<input type="number" min="0" value={carbs} onChange={event=>setCarbs(Number(event.target.value))}/></label><label>Fat<input type="number" min="0" value={fat} onChange={event=>setFat(Number(event.target.value))}/></label></div>}<Notice title="How calories and macros work">Choose one target mode. In calorie mode, optional macro minimums and maximums are hard guardrails. 4/4/9 is used only to validate those bounds.</Notice></Card><Card className="settings-section"><h3>Meal allocation</h3><div className="allocation-list allocation-list--compact">{Object.entries(allocations).map(([name,value])=><label key={name}><span>{name[0].toUpperCase()+name.slice(1)}</span><div className="input-suffix"><input type="number" min="0" max="100" value={value} onChange={event=>setAllocations(values=>({...values,[name]:Number(event.target.value)}))}/><span>%</span></div></label>)}</div><p className={total===100?'muted':'field-error'}>Total: {total}% {total!==100&&'— allocations must total 100%'}</p></Card></SettingsLayout>
+  const queryClient = useQueryClient();
+  const members = useQuery({ queryKey: ["members"], queryFn: api.listMembers });
+  const [memberId, setMemberId] = useState("");
+  const selectedMemberId = memberId || members.data?.[0]?.id || "";
+  const target = useQuery({
+    queryKey: ["target", selectedMemberId],
+    queryFn: () => api.getTarget(selectedMemberId),
+    enabled: Boolean(selectedMemberId),
+    retry: false,
+  });
+  const [mode, setMode] = useState<"calorie" | "macros">("calorie");
+  const [calories, setCalories] = useState(2000);
+  const [protein, setProtein] = useState(130);
+  const [carbs, setCarbs] = useState(225);
+  const [fat, setFat] = useState(67);
+  const [proteinMin, setProteinMin] = useState(0);
+  const [carbsMin, setCarbsMin] = useState(0);
+  const [fatMin, setFatMin] = useState(0);
+  const [tolerance, setTolerance] = useState(5);
+  const [allocations, setAllocations] = useState({
+    breakfast: 25,
+    lunch: 30,
+    dinner: 35,
+    snack: 10,
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    setMode("calorie");
+    setCalories(2000);
+    setProtein(130);
+    setCarbs(225);
+    setFat(67);
+    setProteinMin(0);
+    setCarbsMin(0);
+    setFatMin(0);
+    setTolerance(5);
+    setAllocations({ breakfast: 25, lunch: 30, dinner: 35, snack: 10 });
+    setSaved(false);
+    setError("");
+  }, [selectedMemberId]);
+  useEffect(() => {
+    if (!target.data) return;
+    setMode(target.data.mode);
+    setCalories(Number(target.data.calorie_target ?? 2000));
+    setProtein(Number(target.data.protein_target_g ?? 130));
+    setCarbs(Number(target.data.carbohydrate_target_g ?? 225));
+    setFat(Number(target.data.fat_target_g ?? 67));
+    setProteinMin(Number(target.data.protein_min_g ?? 0));
+    setCarbsMin(Number(target.data.carbohydrate_min_g ?? 0));
+    setFatMin(Number(target.data.fat_min_g ?? 0));
+    setTolerance(Number(target.data.tolerance_percent));
+    setAllocations((values) => ({
+      ...values,
+      ...Object.fromEntries(
+        target.data.allocations.map((item) => [
+          item.meal_type,
+          Number(item.percentage),
+        ]),
+      ),
+    }));
+  }, [target.data]);
+  const total = Object.values(allocations).reduce(
+    (sum, value) => sum + value,
+    0,
+  );
+  const save = async () => {
+    if (!selectedMemberId || total !== 100) return;
+    setSaving(true);
+    setError("");
+    setSaved(false);
+    try {
+      await api.setTarget(selectedMemberId, {
+        mode,
+        tolerance_percent: tolerance,
+        calorie_target: mode === "calorie" ? calories : null,
+        protein_target_g: mode === "macros" ? protein : null,
+        carbohydrate_target_g: mode === "macros" ? carbs : null,
+        fat_target_g: mode === "macros" ? fat : null,
+        protein_min_g: mode === "calorie" ? proteinMin : null,
+        carbohydrate_min_g: mode === "calorie" ? carbsMin : null,
+        fat_min_g: mode === "calorie" ? fatMin : null,
+        allocations: Object.entries(allocations).map(
+          ([meal_type, percentage]) => ({ meal_type, percentage }),
+        ),
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["target", selectedMemberId],
+        }),
+        queryClient.invalidateQueries({ queryKey: ["targets"] }),
+      ]);
+      setSaved(true);
+    } catch (reason) {
+      setError(
+        reason instanceof ApiError
+          ? reason.message
+          : "The target could not be saved.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <SettingsLayout>
+      <div className="settings-heading">
+        <div>
+          <h2>Targets & meal allocation</h2>
+          <p>
+            Targets are user supplied. Savour does not assess whether they are
+            medically suitable.
+          </p>
+        </div>
+        <Button disabled={saving || total !== 100} onClick={save}>
+          {saving ? "Saving…" : "Save changes"}
+        </Button>
+      </div>
+      {error && (
+        <Notice tone="warning" title="Could not save">
+          {error}
+        </Notice>
+      )}
+      {saved && (
+        <Notice tone="success" title="Saved">
+          Nutrition targets and meal allocation were updated.
+        </Notice>
+      )}
+      <Card className="settings-section">
+        <label>
+          Household member
+          <select
+            value={selectedMemberId}
+            onChange={(event) => setMemberId(event.target.value)}
+          >
+            {members.data?.map((member) => (
+              <option value={member.id} key={member.id}>
+                {member.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <h3>Nutrition target</h3>
+        <label>
+          Planning mode
+          <Segmented
+            value={mode}
+            onChange={setMode}
+            label="Target mode"
+            options={[
+              { value: "calorie", label: "Calories" },
+              { value: "macros", label: "Macros" },
+            ]}
+          />
+        </label>
+        {mode === "calorie" ? (
+          <>
+            <div className="form-grid">
+              <label>
+                Daily calories
+                <input
+                  type="number"
+                  min="1"
+                  value={calories}
+                  onChange={(event) => setCalories(Number(event.target.value))}
+                />
+              </label>
+              <label>
+                Hard tolerance
+                <div className="input-suffix">
+                  <input
+                    type="number"
+                    min="1"
+                    max="25"
+                    value={tolerance}
+                    onChange={(event) => setTolerance(Number(event.target.value))}
+                  />
+                  <span>%</span>
+                </div>
+              </label>
+            </div>
+            <h4>Daily macro minimums</h4>
+            <p className="muted">
+              Set only the macros you care about. Leave a minimum at 0 to plan
+              without constraining that macro.
+            </p>
+            <div className="form-grid form-grid--3">
+              <MacroMinimumInput label="Minimum protein" value={proteinMin} onChange={setProteinMin} />
+              <MacroMinimumInput label="Minimum carbohydrate" value={carbsMin} onChange={setCarbsMin} />
+              <MacroMinimumInput label="Minimum fat" value={fatMin} onChange={setFatMin} />
+            </div>
+          </>
+        ) : (
+          <div className="form-grid form-grid--3">
+            <label>
+              Protein
+              <input
+                type="number"
+                min="0"
+                value={protein}
+                onChange={(event) => setProtein(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Carbohydrate
+              <input
+                type="number"
+                min="0"
+                value={carbs}
+                onChange={(event) => setCarbs(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Fat
+              <input
+                type="number"
+                min="0"
+                value={fat}
+                onChange={(event) => setFat(Number(event.target.value))}
+              />
+            </label>
+          </div>
+        )}
+        <Notice title="How calories and macros work">
+          In calorie mode, calories stay the main target and positive macro
+          minimums steer recipe selection and act as hard daily floors. A 0 g
+          minimum is ignored.
+        </Notice>
+      </Card>
+      <Card className="settings-section">
+        <h3>Meal allocation</h3>
+        <div className="allocation-list allocation-list--compact">
+          {Object.entries(allocations).map(([name, value]) => (
+            <label key={name}>
+              <span>{name[0].toUpperCase() + name.slice(1)}</span>
+              <div className="input-suffix">
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={value}
+                  onChange={(event) =>
+                    setAllocations((values) => ({
+                      ...values,
+                      [name]: Number(event.target.value),
+                    }))
+                  }
+                />
+                <span>%</span>
+              </div>
+            </label>
+          ))}
+        </div>
+        <p className={total === 100 ? "muted" : "field-error"}>
+          Total: {total}% {total !== 100 && "— allocations must total 100%"}
+        </p>
+      </Card>
+    </SettingsLayout>
+  );
+}
+
+function MacroMinimumInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label>
+      {label}
+      <div className="input-suffix">
+        <input
+          type="number"
+          min="0"
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <span>g</span>
+      </div>
+    </label>
+  );
 }
 
 export function PreferenceSettings() {

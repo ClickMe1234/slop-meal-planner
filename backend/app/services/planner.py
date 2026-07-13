@@ -56,6 +56,21 @@ def _target_values(target: ParticipantTarget) -> dict[str, Decimal]:
     }
 
 
+def _minimum_values(target: ParticipantTarget) -> dict[str, Decimal]:
+    """Return allocated calorie-mode minimums that should influence ranking."""
+    if target.mode != "calorie":
+        return {}
+    return {
+        nutrient: Decimal(value) * target.allocation / 100
+        for nutrient, value in (
+            ("protein_g", target.protein_min_g),
+            ("carbohydrate_g", target.carbohydrate_min_g),
+            ("fat_g", target.fat_min_g),
+        )
+        if value is not None and value > 0
+    }
+
+
 def _within_hard_bounds(
     target: ParticipantTarget, nutrition: dict[str, Decimal], portion: Decimal
 ) -> bool:
@@ -164,6 +179,7 @@ def choose_shared_recipe(
         candidate_is_feasible = True
         for participant in participants:
             targets = _target_values(participant)
+            minimums = _minimum_values(participant)
             best_portion: Decimal | None = None
             best_error: Decimal | None = None
             for portion in PORTIONS:
@@ -176,6 +192,11 @@ def choose_shared_recipe(
                     actual = candidate.nutrition.get(key, Decimal("0")) * portion
                     denominator = max(target_value, Decimal("1"))
                     error += abs(actual - target_value) / denominator
+                # A minimum is one-sided: shortage makes a choice worse, while
+                # exceeding it is not penalised. Zero preserves calorie-only ranking.
+                for key, minimum in minimums.items():
+                    actual = candidate.nutrition.get(key, Decimal("0")) * portion
+                    error += max(minimum - actual, Decimal("0")) / minimum
                 # Break nutrition ties in favour of an ordinary serving size.
                 error += abs(portion - Decimal("1")) / Decimal("1000")
                 if best_error is None or error < best_error:
