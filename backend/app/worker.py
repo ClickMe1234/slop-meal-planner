@@ -25,6 +25,7 @@ from .models import (
     RecipeVersion,
     UserSession,
 )
+from .services.ingredients import parse_ingredient
 
 celery_app = Celery(
     "meal_planner",
@@ -153,12 +154,19 @@ def process_recipe_import(self, job_id: str) -> dict:
             db.add(version)
             db.flush()
             for position, line in enumerate(extracted.ingredient_lines):
+                parsed = parse_ingredient(line)
                 db.add(
                     RecipeIngredient(
                         recipe_version_id=version.id,
                         position=position,
                         original_text=line,
-                        food_phrase=line,
+                        quantity=parsed.quantity,
+                        unit=parsed.unit,
+                        quantity_grams=parsed.quantity_grams,
+                        food_phrase=parsed.food_phrase,
+                        preparation=parsed.preparation,
+                        included=not parsed.optional,
+                        optional=parsed.optional,
                         needs_review=True,
                     )
                 )

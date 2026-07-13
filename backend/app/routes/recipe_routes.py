@@ -29,7 +29,8 @@ from ..schemas import (
     RecipeReviewUpdate,
     RecipeSummary,
 )
-from ..services.food_search import fetch_and_cache_usda_foods
+from ..services.food_search import fetch_and_cache_usda_foods, normalise_food_query
+from ..services.ingredients import parse_ingredient
 from ..services.nutrition import calculate_recipe, latest_calculation
 
 router = APIRouter(tags=["recipes and food data"])
@@ -47,20 +48,46 @@ def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
     version = _latest_version(db, recipe.id)
     if version is None:
         raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+    ingredients = []
+    for row in version.ingredients:
+        item = {column.name: getattr(row, column.name) for column in row.__table__.columns}
+        # Drafts created before ingredient parsing was introduced are enriched
+        # on read. Saving the review persists these fields in the next immutable
+        # recipe version without rewriting the historical import.
+        if recipe.source_type == "url" and row.quantity is None and row.unit is None:
+            parsed = parse_ingredient(row.original_text)
+            item.update(
+                quantity=parsed.quantity,
+                unit=parsed.unit,
+                quantity_grams=parsed.quantity_grams,
+                food_phrase=(
+                    parsed.food_phrase
+                    if not row.food_phrase or row.food_phrase == row.original_text
+                    else row.food_phrase
+                ),
+                preparation=row.preparation or parsed.preparation,
+                optional=row.optional or parsed.optional,
+                included=row.included and not parsed.optional,
+            )
+        ingredients.append(item)
     calculation = latest_calculation(db, version.id)
-    ingredients = [
-        {column.name: getattr(row, column.name) for column in row.__table__.columns}
-        for row in version.ingredients
-    ]
+    recipe_fields = RecipeSummary.model_validate(recipe).model_dump(
+        exclude={"yield_servings", "publisher_nutrition", "calculated_nutrition", "nutrition_method", "review_count"}
+    )
+    summary = RecipeSummary(
+        **recipe_fields,
+        yield_servings=version.yield_servings,
+        publisher_nutrition=version.publisher_nutrition,
+        calculated_nutrition=calculation.per_serving_values if calculation else None,
+        nutrition_method=calculation.status if calculation else None,
+        review_count=sum(1 for ingredient in version.ingredients if ingredient.included and ingredient.needs_review),
+    )
     return RecipeDetail(
-        **RecipeSummary.model_validate(recipe).model_dump(),
+        **summary.model_dump(),
         recipe_version_id=version.id,
         version_number=version.version_number,
-        yield_servings=version.yield_servings,
         custom_instructions=version.custom_instructions,
-        publisher_nutrition=version.publisher_nutrition,
         ingredients=ingredients,
-        calculated_nutrition=calculation.per_serving_values if calculation else None,
     )
 
 
@@ -84,7 +111,13 @@ def list_recipes(
         .limit(page_size)
     ).all()
     return {
-        "items": [RecipeSummary.model_validate(recipe).model_dump(mode="json") for recipe in recipes],
+        "items": [
+            _recipe_detail(db, recipe).model_dump(
+                mode="json",
+                include=set(RecipeSummary.model_fields),
+            )
+            for recipe in recipes
+        ],
         "page": page,
         "page_size": page_size,
         "total": total,
@@ -262,10 +295,11 @@ def search_foods(
     _: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
-    cleaned_query = q.strip()
+    cleaned_query = normalise_food_query(q.strip()) if q.strip() else ""
     conditions = []
     if cleaned_query:
-        conditions.append(func.lower(FoodRecord.name).contains(cleaned_query.lower()))
+        terms = tuple(dict.fromkeys(cleaned_query.lower().split()))
+        conditions.append(or_(*(func.lower(FoodRecord.name).contains(term) for term in terms)))
     total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
     remote_error = None
     settings = get_settings()

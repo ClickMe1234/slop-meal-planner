@@ -65,3 +65,15 @@ def test_irrelevant_category_cards_are_removed_and_exact_matches_rank_first():
 
     assert score(exact, "chicken curry") > score(partial, "chicken curry") > 0
     assert score(category, "chicken curry") == 0
+
+
+def test_remote_search_only_calls_selected_publishers():
+    async def run():
+        fetcher = FakeFetcher()
+        service = LiveSearchService(fetcher, policy=SearchPolicy(debounce_ms=0))
+        result = await service.search_remote("soup", sources=("good_food", "allrecipes"))
+        assert {source.source for source in result.sources} == {"good_food", "allrecipes"}
+        assert len(fetcher.calls) == 2
+        assert not any("greatbritishchefs" in url for url in fetcher.calls)
+
+    asyncio.run(run())

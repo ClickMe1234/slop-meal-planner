@@ -71,7 +71,7 @@ export const api = {
   getRecipe: (id: string) => request<BackendRecipeDetail>(`/recipes/${id}`),
   saveRecipeReview: (id: string, payload: { expected_version: number; title: string; yield_servings: number; ingredients: Array<Record<string, unknown>> }) => request<BackendRecipeDetail>(`/recipes/${id}/review`, { method: 'PUT', body: JSON.stringify(payload) }),
   searchFoods: (query = '') => request<{ items: BackendFood[]; total: number; remote_error?: string }>(`/foods?q=${encodeURIComponent(query)}&page_size=100`),
-  searchRemote: (query: string, requestKey: string) => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}`),
+  searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[]) => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}`),
   startImport: (url: string) => request<JobStatus>('/recipe-imports', { method: 'POST', body: JSON.stringify({ url }) }),
   calculateRecipe: (id: string) => request<{ per_serving_values: Record<string, number> }>(`/recipes/${id}/calculate`, { method: 'POST' }),
   job: (id: string) => request<JobStatus>(`/jobs/${id}`),
@@ -102,6 +102,17 @@ export interface BackendRecipe {
   publisher?: string
   image_url?: string
   version: number
+  yield_servings?: number
+  publisher_nutrition?: {
+    basis?: string
+    energy_kcal?: number
+    protein_g?: number
+    carbohydrate_g?: number
+    fat_g?: number
+  }
+  calculated_nutrition?: Record<string, number>
+  nutrition_method?: 'publisher' | 'complete'
+  review_count?: number
 }
 
 export interface BackendRecipeDetail extends BackendRecipe {
@@ -120,7 +131,6 @@ export interface BackendRecipeDetail extends BackendRecipe {
     needs_review: boolean
     food_record_id?: string
   }>
-  calculated_nutrition?: Record<string, number>
 }
 
 export interface BackendFood {
@@ -189,6 +199,8 @@ export interface DiscoveryResponse {
   cache_hit: boolean
   debounce_ms: number
 }
+
+export type RecipeSourceKey = 'good_food' | 'great_british_chefs' | 'allrecipes'
 
 export interface BackendPantryItem {
   id: string

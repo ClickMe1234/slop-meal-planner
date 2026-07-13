@@ -87,6 +87,12 @@ recipe- and household-oriented rather than primarily a food diary.
 
 ## 3. Executive findings
 
+> **Decision update — 13 July 2026:** complete publisher-reported per-serving
+> calories, protein, carbohydrate and fat are now the planner's primary recipe
+> nutrition source. Ingredient matching/calculation is the fallback. This
+> supersedes the older calculated-only recommendations retained below as the
+> original research record; publisher per-100g values remain reference-only.
+
 ### 3.1 Confirmed product decisions as of 12 July 2026
 
 - This is a private personal/household application. It will not be a subscription

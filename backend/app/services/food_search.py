@@ -8,9 +8,14 @@ from sqlalchemy.orm import Session
 from ..data_import.models import DatasetProvenance, FoodDataBatch
 from ..data_import.persistence import persist_food_batch
 from ..data_import.providers.usda import UsdaFoodDataCentralProvider
+from .ingredients import food_search_phrase
 
 
 REQUIRED_NUTRIENTS = {"energy_kcal", "protein_g", "carbohydrate_g", "fat_g"}
+
+
+def normalise_food_query(query: str) -> str:
+    return food_search_phrase(query) or " ".join(query.split())[:200]
 
 
 def fetch_and_cache_usda_foods(
@@ -28,7 +33,7 @@ def fetch_and_cache_usda_foods(
     calculations use the durable, versioned records in our own database.
     """
 
-    cleaned = " ".join(query.split())[:200]
+    cleaned = normalise_food_query(query)
     if len(cleaned) < 2:
         return 0
     owns_client = client is None

@@ -77,7 +77,8 @@ def _image(value: object) -> str | None:
     if isinstance(value, str):
         return value
     if isinstance(value, list):
-        return next((_image(item) for item in value if _image(item)), None)
+        candidates = [item for item in (_image(item) for item in value) if item]
+        return candidates[-1] if candidates else None
     if isinstance(value, dict):
         return _image(value.get("url") or value.get("contentUrl"))
     return None

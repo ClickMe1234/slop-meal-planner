@@ -19,6 +19,7 @@ export interface Recipe {
   imageUrl?: string
   yield?: number
   nutrition?: Nutrition
+  nutritionSource?: 'publisher' | 'calculated'
   publisherNutrition?: Nutrition
   state: RecipeState
   mealKinds: MealKind[]

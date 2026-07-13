@@ -56,10 +56,24 @@ class LiveSearchService:
     def normalise_query(query: str) -> str:
         return " ".join(query.casefold().split())[:200]
 
-    async def search_remote(self, query: str, *, request_key: str | None = None) -> CombinedSearchResponse:
+    async def search_remote(
+        self,
+        query: str,
+        *,
+        request_key: str | None = None,
+        sources: tuple[str, ...] | None = None,
+    ) -> CombinedSearchResponse:
         normalised = self.normalise_query(query)
         if len(normalised) < self.policy.minimum_query_length:
             return CombinedSearchResponse(normalised, (), self.policy.debounce_ms)
+
+        selected = set(sources) if sources is not None else None
+        adapters = tuple(
+            adapter for adapter in self.registry.adapters
+            if selected is None or adapter.key in selected
+        )
+        source_key = ",".join(sorted(adapter.key for adapter in adapters))
+        cache_key = f"{source_key}:{normalised}"
 
         generation = None
         if request_key:
@@ -71,28 +85,29 @@ class LiveSearchService:
             return CombinedSearchResponse(normalised, (), self.policy.debounce_ms, superseded=True)
 
         now = time.monotonic()
-        cached = self._cache.get(normalised)
+        cached = self._cache.get(cache_key)
         cache_hit = cached is not None and now <= cached[0]
-        if cache_hit:
-            sources = cached[1]
-        else:
-            sources = tuple(await asyncio.gather(*(self._search_source(adapter, normalised) for adapter in self.registry.adapters)))
+        if not cache_hit:
+            source_results = tuple(await asyncio.gather(*(self._search_source(adapter, normalised) for adapter in adapters)))
             ttl = (
                 self.policy.error_cache_ttl_seconds
-                if any(source.error_code for source in sources)
+                if any(source.error_code for source in source_results)
                 else self.policy.cache_ttl_seconds
             )
             self._cache = {key: value for key, value in self._cache.items() if now <= value[0]}
             if len(self._cache) >= self.policy.maximum_cache_entries:
                 self._cache.pop(next(iter(self._cache)))
-            self._cache[normalised] = (now + ttl, sources)
+            self._cache[cache_key] = (now + ttl, source_results)
+
+        if cache_hit:
+            source_results = cached[1]
 
         if self.saved_url_lookup:
-            urls = tuple(result.url for source in sources for result in source.results)
+            urls = tuple(result.url for source in source_results for result in source.results)
             saved = self.saved_url_lookup(urls)
             if inspect.isawaitable(saved):
                 saved = await saved
-            sources = tuple(
+            source_results = tuple(
                 SourceSearchResponse(
                     source=source.source,
                     results=tuple(
@@ -109,12 +124,18 @@ class LiveSearchService:
                     error_code=source.error_code,
                     error_message=source.error_message,
                 )
-                for source in sources
+                for source in source_results
             )
-        return CombinedSearchResponse(normalised, sources, self.policy.debounce_ms, cache_hit=cache_hit)
+        return CombinedSearchResponse(normalised, source_results, self.policy.debounce_ms, cache_hit=cache_hit)
 
-    async def search(self, query: str, *, request_key: str | None = None) -> CombinedSearchResponse:
-        return await self.search_remote(query, request_key=request_key)
+    async def search(
+        self,
+        query: str,
+        *,
+        request_key: str | None = None,
+        sources: tuple[str, ...] | None = None,
+    ) -> CombinedSearchResponse:
+        return await self.search_remote(query, request_key=request_key, sources=sources)
 
     async def _search_source(self, adapter, query: str) -> SourceSearchResponse:
         try:

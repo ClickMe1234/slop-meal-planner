@@ -6,7 +6,7 @@ from decimal import Decimal
 
 @dataclass(frozen=True, slots=True)
 class PublisherNutritionPreview:
-    """Publisher-reported values shown as an estimate, never as calculated truth."""
+    """Publisher-reported values retained separately from ingredient calculations."""
 
     basis: str | None = None
     energy_kcal: Decimal | None = None

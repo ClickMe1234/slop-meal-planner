@@ -60,3 +60,15 @@ def test_supported_adapter_urls_and_good_food_result_parsing():
 
     assert GreatBritishChefsAdapter().supports_url("https://www.greatbritishchefs.com/recipes/stew-recipe")
     assert AllrecipesAdapter().supports_url("https://www.allrecipes.com/recipe/123/stew/")
+
+
+def test_search_result_prefers_largest_lazy_image_candidate():
+    html = '''<a href="/recipes/soup"><picture>
+      <source srcset="/images/soup-480.jpg 480w, /images/soup-1280.jpg 1280w">
+      <img src="/images/soup-placeholder.jpg" alt="Soup">
+    </picture></a>'''
+    result = GoodFoodAdapter().parse_search_results(
+        html,
+        search_url="https://www.bbcgoodfood.com/search?q=soup",
+    )[0]
+    assert result.image_url == "https://www.bbcgoodfood.com/images/soup-1280.jpg"

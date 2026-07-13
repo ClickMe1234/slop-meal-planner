@@ -1,6 +1,34 @@
 from decimal import Decimal
 
 
+def test_existing_import_drafts_are_enriched_with_detected_units(client, owner):
+    headers = {"X-CSRF-Token": owner["csrf_token"]}
+    recipe = client.post(
+        "/api/v1/recipes",
+        headers=headers,
+        json={
+            "title": "Imported chickpeas",
+            "source_type": "url",
+            "source_url": "https://www.bbcgoodfood.com/recipes/chickpeas",
+            "yield_servings": 4,
+            "ingredients": [
+                {
+                    "original_text": "2 x 400g cans chickpeas, drained",
+                    "food_phrase": "2 x 400g cans chickpeas, drained",
+                    "needs_review": True,
+                }
+            ],
+        },
+    )
+    assert recipe.status_code == 201, recipe.text
+
+    ingredient = client.get(f"/api/v1/recipes/{recipe.json()['id']}").json()["ingredients"][0]
+    assert ingredient["quantity"] == "2"
+    assert ingredient["unit"] == "can"
+    assert ingredient["quantity_grams"] == "800"
+    assert ingredient["food_phrase"] == "chickpeas"
+
+
 def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     csrf = owner["csrf_token"]
     headers = {"X-CSRF-Token": csrf}
@@ -63,6 +91,10 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     )
     assert calculation.status_code == 200, calculation.text
     assert calculation.json()["per_serving_values"]["energy_kcal"] == 500
+    listed_recipe = client.get("/api/v1/recipes").json()["items"][0]
+    assert listed_recipe["yield_servings"] == "1.00"
+    assert listed_recipe["nutrition_method"] == "complete"
+    assert listed_recipe["calculated_nutrition"]["energy_kcal"] == 500
 
     generated = client.post(
         "/api/v1/meal-plans/generate",

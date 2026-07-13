@@ -6,11 +6,11 @@ fields already present in returned HTML. It must not log in, solve challenges,
 rotate identities, call undocumented private APIs, or otherwise bypass a site's
 controls. HTTP 403 and 429 responses are surfaced as limitation errors.
 
-The UI should search PostgreSQL immediately. Remote source search begins only
-after the `SearchPolicy.debounce_ms` interval (350 ms by default), is cancellable
-through a stable request key, and is cached for 15 minutes. Search displays only
-publisher-reported nutrition previews. Ingredient matching and repeatable
-nutrition calculation happen after the user chooses a recipe.
+The UI searches PostgreSQL immediately. Remote source search begins only after
+the `SearchPolicy.debounce_ms` interval (350 ms by default), is cancellable,
+limited by the selected website filters, and cached for 15 minutes. Complete
+publisher-reported per-serving nutrition becomes the planning source;
+ingredient matching and repeatable calculation are the fallback.
 
 All fetched URLs must pass `validate_fetch_url`, including every redirect. The
 Docker deployment should additionally deny access from the app container to LAN
