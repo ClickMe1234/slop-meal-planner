@@ -22,6 +22,7 @@ import {
   ApiError,
   isDemoMode,
   type ApiAction,
+  type ApiNutritionIssue,
   type BackendMember,
   type BackendPlanDetail,
   type BackendRestriction,
@@ -334,7 +335,7 @@ export function PlanPage() {
 
   return <div className="page">
     <PageHeader eyebrow="Automatic planning" title="Build your next meal plan" description="Set exactly who needs each meal and when you want to cook. Portions, ingredients and shopping quantities follow those choices."/>
-    {error && <Card className="planner-generation-error"><Notice tone="warning" title="Plan not feasible">{error.message}</Notice>{error.code === 'NUTRITION_TARGET_INFEASIBLE' && <Button variant="secondary" disabled={generating} onClick={() => requestGeneration(true)}>Continue anyway</Button>}</Card>}
+    {error && <Card className="planner-generation-error"><PlanGenerationError error={error}/>{error.code === 'NUTRITION_TARGET_INFEASIBLE' && <Button variant="secondary" disabled={generating} onClick={() => requestGeneration(true)}>Continue anyway</Button>}</Card>}
     <div className="planner-layout">
       <aside className="wizard-sidebar"><ol>{wizardSteps.map((name, index) => <li key={name} className={index < step ? 'done' : index === step ? 'active' : ''}><button type="button" disabled={index > maxVisitedStep} onClick={() => openStep(index)}><span>{index < step ? <Check size={15}/> : index + 1}</span><div><strong>{name}</strong><small>{stepDescriptions[index]}</small></div></button></li>)}</ol></aside>
       <Card className="wizard-panel">
@@ -396,6 +397,37 @@ function CookDaysStep({ dates, selectedMemberIds, attendance, cookStarts, slots,
       return <td key={date.iso}><label className={`cook-choice${checked ? ' selected' : ''}${!planned ? ' disabled' : ''}`}><input type="checkbox" disabled={!planned || forced} checked={checked} onChange={() => onToggle(date.iso, mealType)} aria-label={`Cook new ${mealType} on ${date.shortDate}`}/><span>{!planned ? 'Not needed' : checked ? 'Cook new' : 'Use batch'}</span></label></td>
     })}</tr>
   })}</tbody></table></div><p className="planner-grid-note">The first required meal always starts a batch. Add more ticks wherever you want a different recipe.</p>{longBatch && <Notice tone="warning" title="Long leftover window"><span>At least one batch lasts more than 48 hours. Confirm that you will store it safely. <label className="check-label"><input type="checkbox" checked={foodSafetyAcknowledged} onChange={event => onAcknowledge(event.target.checked)}/>I understand and want to continue</label></span></Notice>}</>
+}
+
+export function PlanGenerationError({ error }: { error: ApiError }) {
+  if (error.code !== 'NUTRITION_TARGET_INFEASIBLE' || !error.issues.length) {
+    return <Notice tone="warning" title="Plan not feasible">{error.message}</Notice>
+  }
+
+  const byDate = error.issues.reduce<Record<string, ApiNutritionIssue[]>>((result, issue) => {
+    ;(result[issue.date] ??= []).push(issue)
+    return result
+  }, {})
+
+  return <Notice tone="warning" title="Some daily targets could not be met">
+    <p>{error.message} You can adjust your targets or continue with the closest available plan.</p>
+    <div className="nutrition-plan-issues">
+      {Object.entries(byDate).map(([date, issues]) => {
+        const matching = new Map<string, { members: string[]; messages: string[] }>()
+        for (const issue of issues) {
+          const messages = issue.violations.map(violation => violation.message)
+          const key = messages.join('|')
+          const group = matching.get(key) ?? { members: [], messages }
+          group.members.push(issue.member)
+          matching.set(key, group)
+        }
+        return <div key={date} className="nutrition-plan-issue-day">
+          <strong>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}</strong>
+          <ul>{[...matching.values()].map(group => <li key={`${group.members.join('-')}-${group.messages.join('-')}`}><b>{group.members.join(' & ')}</b><span>{group.messages.join('; ')}</span></li>)}</ul>
+        </div>
+      })}
+    </div>
+  </Notice>
 }
 
 type ProfileRestriction = BackendRestriction & { memberName: string }

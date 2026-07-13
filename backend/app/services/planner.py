@@ -40,6 +40,7 @@ class PlannerChoice:
 
 
 PORTIONS = tuple(Decimal("0.5") + Decimal("0.25") * i for i in range(7))
+MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
 
 
 class PlannerInfeasibleError(ValueError):
@@ -53,6 +54,21 @@ def _target_values(target: ParticipantTarget) -> dict[str, Decimal]:
         "protein_g": Decimal(target.protein_target_g or 0) * target.allocation / 100,
         "carbohydrate_g": Decimal(target.carbohydrate_target_g or 0) * target.allocation / 100,
         "fat_g": Decimal(target.fat_target_g or 0) * target.allocation / 100,
+    }
+
+
+def _minimum_values(target: ParticipantTarget) -> dict[str, Decimal]:
+    """Return allocated calorie-mode minimums that should influence ranking."""
+    if target.mode != "calorie":
+        return {}
+    return {
+        nutrient: Decimal(value) * target.allocation / 100
+        for nutrient, value in (
+            ("protein_g", target.protein_min_g),
+            ("carbohydrate_g", target.carbohydrate_min_g),
+            ("fat_g", target.fat_min_g),
+        )
+        if value is not None and value > 0
     }
 
 
@@ -76,17 +92,27 @@ def _within_hard_bounds(
             ("fat_g", target.fat_min_g, target.fat_max_g),
         ):
             actual = nutrition.get(nutrient, Decimal("0")) * portion
-            if low is not None and actual < low * target.allocation / Decimal("100"):
+            allocated_low = None
+            if low is not None and low > 0:
+                allocated_low = max(
+                    (low - MACRO_MINIMUM_TOLERANCE_G) * target.allocation / Decimal("100"),
+                    Decimal("0"),
+                )
+            if allocated_low is not None and actual < allocated_low:
                 return False
             if high is not None and actual > high * target.allocation / Decimal("100"):
                 return False
     return True
 
 
-def aggregate_nutrition_violations(
+def _display_decimal(value: Decimal) -> str:
+    return f"{value:f}".rstrip("0").rstrip(".") if "." in f"{value:f}" else f"{value:f}"
+
+
+def aggregate_nutrition_issues(
     targets: list[ParticipantTarget], nutrition: dict[str, Decimal]
-) -> list[str]:
-    """Return hard-bound failures after combining a participant's planned meals.
+) -> list[dict[str, str]]:
+    """Return structured hard-bound failures for a participant's planned meals.
 
     Meal allocations determine how much of the daily target is covered by the
     supplied targets, but are deliberately not enforced meal by meal.
@@ -104,7 +130,7 @@ def aggregate_nutrition_violations(
             expected[nutrient] = expected.get(nutrient, Decimal("0")) + value
 
     tolerance = targets[0].tolerance_percent / Decimal("100")
-    violations: list[str] = []
+    issues: list[dict[str, str]] = []
     labels = {
         "energy_kcal": "calories",
         "protein_g": "protein",
@@ -116,10 +142,18 @@ def aggregate_nutrition_violations(
         low = target_value * (Decimal("1") - tolerance)
         high = target_value * (Decimal("1") + tolerance)
         if actual < low or actual > high:
-            violations.append(
-                f"{labels[nutrient]} {actual.normalize()} is outside "
-                f"{low.normalize()}-{high.normalize()}"
-            )
+            unit = "kcal" if nutrient == "energy_kcal" else "g"
+            issues.append({
+                "nutrient": labels[nutrient],
+                "actual": _display_decimal(actual),
+                "low": _display_decimal(low),
+                "high": _display_decimal(high),
+                "kind": "range",
+                "message": (
+                    f"{labels[nutrient].capitalize()}: {_display_decimal(actual)} {unit} "
+                    f"(allowed {_display_decimal(low)}–{_display_decimal(high)} {unit})"
+                ),
+            })
 
     if targets[0].mode == "calorie":
         allocation = sum((target.allocation for target in targets), Decimal("0"))
@@ -130,17 +164,41 @@ def aggregate_nutrition_violations(
             ("fat_g", first.fat_min_g, first.fat_max_g),
         ):
             actual = nutrition.get(nutrient, Decimal("0"))
-            low = low_daily * allocation / Decimal("100") if low_daily is not None else None
+            low = None
+            if low_daily is not None and low_daily > 0:
+                allocated_minimum = low_daily * allocation / Decimal("100")
+                allocated_tolerance = MACRO_MINIMUM_TOLERANCE_G * allocation / Decimal("100")
+                low = max(allocated_minimum - allocated_tolerance, Decimal("0"))
             high = high_daily * allocation / Decimal("100") if high_daily is not None else None
             if low is not None and actual < low:
-                violations.append(
-                    f"{labels[nutrient]} {actual.normalize()} is below {low.normalize()}"
-                )
+                issues.append({
+                    "nutrient": labels[nutrient],
+                    "actual": _display_decimal(actual),
+                    "low": _display_decimal(low),
+                    "kind": "minimum",
+                    "message": (
+                        f"{labels[nutrient].capitalize()}: {_display_decimal(actual)} g "
+                        f"(minimum {_display_decimal(low)} g after tolerance)"
+                    ),
+                })
             if high is not None and actual > high:
-                violations.append(
-                    f"{labels[nutrient]} {actual.normalize()} is above {high.normalize()}"
-                )
-    return violations
+                issues.append({
+                    "nutrient": labels[nutrient],
+                    "actual": _display_decimal(actual),
+                    "high": _display_decimal(high),
+                    "kind": "maximum",
+                    "message": (
+                        f"{labels[nutrient].capitalize()}: {_display_decimal(actual)} g "
+                        f"(maximum {_display_decimal(high)} g)"
+                    ),
+                })
+    return issues
+
+
+def aggregate_nutrition_violations(
+    targets: list[ParticipantTarget], nutrition: dict[str, Decimal]
+) -> list[str]:
+    return [issue["message"] for issue in aggregate_nutrition_issues(targets, nutrition)]
 
 
 def choose_shared_recipe(
@@ -164,6 +222,7 @@ def choose_shared_recipe(
         candidate_is_feasible = True
         for participant in participants:
             targets = _target_values(participant)
+            minimums = _minimum_values(participant)
             best_portion: Decimal | None = None
             best_error: Decimal | None = None
             for portion in PORTIONS:
@@ -176,6 +235,11 @@ def choose_shared_recipe(
                     actual = candidate.nutrition.get(key, Decimal("0")) * portion
                     denominator = max(target_value, Decimal("1"))
                     error += abs(actual - target_value) / denominator
+                # A minimum is one-sided: shortage makes a choice worse, while
+                # exceeding it is not penalised. Zero preserves calorie-only ranking.
+                for key, minimum in minimums.items():
+                    actual = candidate.nutrition.get(key, Decimal("0")) * portion
+                    error += max(minimum - actual, Decimal("0")) / minimum
                 # Break nutrition ties in favour of an ordinary serving size.
                 error += abs(portion - Decimal("1")) / Decimal("1000")
                 if best_error is None or error < best_error:

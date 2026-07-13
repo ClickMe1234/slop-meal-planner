@@ -6,12 +6,14 @@ class DomainError(Exception):
         status_code: int = 422,
         *,
         actions: list[dict] | None = None,
+        issues: list[dict] | None = None,
     ):
         super().__init__(detail)
         self.code = code
         self.detail = detail
         self.status_code = status_code
         self.actions = actions or []
+        self.issues = issues or []
 
 
 class ConflictError(DomainError):

@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .models import JobStatus, MealType, PlanStatus, RecipeEligibility, TargetMode, UserRole
 
+MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
+
 
 class APIModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -82,11 +84,11 @@ class TargetProfileIn(APIModel):
     protein_target_g: Decimal | None = Field(default=None, ge=0)
     carbohydrate_target_g: Decimal | None = Field(default=None, ge=0)
     fat_target_g: Decimal | None = Field(default=None, ge=0)
-    protein_min_g: Decimal | None = Field(default=None, ge=0)
+    protein_min_g: Decimal | None = Field(default=Decimal("0"), ge=0)
     protein_max_g: Decimal | None = Field(default=None, ge=0)
-    carbohydrate_min_g: Decimal | None = Field(default=None, ge=0)
+    carbohydrate_min_g: Decimal | None = Field(default=Decimal("0"), ge=0)
     carbohydrate_max_g: Decimal | None = Field(default=None, ge=0)
-    fat_min_g: Decimal | None = Field(default=None, ge=0)
+    fat_min_g: Decimal | None = Field(default=Decimal("0"), ge=0)
     fat_max_g: Decimal | None = Field(default=None, ge=0)
     allocations: list[MealAllocationIn] = Field(
         default_factory=lambda: [
@@ -128,9 +130,9 @@ class TargetProfileIn(APIModel):
             calorie_low = self.calorie_target * (Decimal("1") - self.tolerance_percent / 100)
             calorie_high = self.calorie_target * (Decimal("1") + self.tolerance_percent / 100)
             implied_min = (
-                (self.protein_min_g or 0) * 4
-                + (self.carbohydrate_min_g or 0) * 4
-                + (self.fat_min_g or 0) * 9
+                max((self.protein_min_g or 0) - MACRO_MINIMUM_TOLERANCE_G, 0) * 4
+                + max((self.carbohydrate_min_g or 0) - MACRO_MINIMUM_TOLERANCE_G, 0) * 4
+                + max((self.fat_min_g or 0) - MACRO_MINIMUM_TOLERANCE_G, 0) * 9
             )
             if implied_min > calorie_high:
                 raise ValueError("macro minimums imply more energy than the calorie tolerance permits")

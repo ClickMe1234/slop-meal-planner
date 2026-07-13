@@ -80,6 +80,7 @@ def create_app() -> FastAPI:
                 "detail": exc.detail,
                 "field_errors": [],
                 "actions": exc.actions,
+                "issues": exc.issues,
                 "trace_id": trace_id,
             },
         )

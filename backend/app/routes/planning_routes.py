@@ -36,7 +36,7 @@ from ..services.planner import (
     ParticipantTarget,
     PlannerInfeasibleError,
     RecipeCandidate,
-    aggregate_nutrition_violations,
+    aggregate_nutrition_issues,
     choose_shared_recipe,
 )
 from ..services.shopping import build_shopping_list
@@ -583,21 +583,22 @@ def generate_plan(
                     )
                 )
     if not payload.ignore_nutrition_tolerances:
-        failures: list[str] = []
+        failures: list[dict] = []
         for (meal_date, member_id), targets in daily_targets.items():
-            violations = aggregate_nutrition_violations(
+            violations = aggregate_nutrition_issues(
                 targets, daily_nutrition[(meal_date, member_id)]
             )
             if violations:
                 member = db.get(HouseholdMember, member_id)
-                failures.append(
-                    f"{meal_date} {member.name if member else member_id}: "
-                    + "; ".join(violations)
-                )
+                failures.append({
+                    "date": meal_date.isoformat(),
+                    "member": member.name if member else member_id,
+                    "violations": violations,
+                })
         if failures:
             raise DomainError(
                 "NUTRITION_TARGET_INFEASIBLE",
-                "Combined daily nutrition is outside tolerance. " + " | ".join(failures),
+                "The available recipes could not meet every daily nutrition target.",
                 422,
                 actions=[
                     {
@@ -606,6 +607,7 @@ def generate_plan(
                         "suggestion": "Choose the closest daily plan without enforcing nutrition tolerances.",
                     }
                 ],
+                issues=failures,
             )
     if remaining_must_use:
         raise DomainError(

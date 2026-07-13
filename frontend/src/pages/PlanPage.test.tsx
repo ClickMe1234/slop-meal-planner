@@ -3,8 +3,8 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
-import type { BackendPlanDetail } from '../api/client'
-import { PlanPage } from './PlanPage'
+import { ApiError, type BackendPlanDetail } from '../api/client'
+import { PlanGenerationError, PlanPage } from './PlanPage'
 import { storeDemoPlan } from './planner'
 
 function renderPlanner() {
@@ -12,6 +12,27 @@ function renderPlanner() {
 }
 
 describe('PlanPage wizard', () => {
+  it('groups nutrition failures by day and matching household members', () => {
+    const violations = [{ nutrient: 'protein', actual: '119', low: '120', kind: 'minimum' as const, message: 'Protein: 119 g (minimum 120 g after tolerance)' }]
+    const error = new ApiError(
+      422,
+      'The available recipes could not meet every daily nutrition target.',
+      'NUTRITION_TARGET_INFEASIBLE',
+      [],
+      [
+        { date: '2026-07-13', member: 'Alice', violations },
+        { date: '2026-07-13', member: 'Zach', violations },
+      ],
+    )
+
+    render(<PlanGenerationError error={error}/>)
+
+    expect(screen.getByText('Some daily targets could not be met')).toBeInTheDocument()
+    expect(screen.getByText('Alice & Zach')).toBeInTheDocument()
+    expect(screen.getByText('Protein: 119 g (minimum 120 g after tolerance)')).toBeInTheDocument()
+    expect(screen.queryByText(/1.3E\+2/)).not.toBeInTheDocument()
+  })
+
   it('moves from dates directly to live household selection without a static Maya profile', async () => {
     const user = userEvent.setup()
     renderPlanner()
