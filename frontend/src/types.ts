@@ -1,5 +1,5 @@
 export type ThemeChoice = 'light' | 'dark' | 'system'
-export type MealKind = 'Breakfast' | 'Lunch' | 'Dinner' | 'Snack'
+export type MealKind = 'Breakfast' | 'Lunch' | 'Dinner' | 'Snack' | 'Side'
 export type NutritionBasis = 'per_serving' | 'per_100g' | 'recipe_total'
 export type RecipeState = 'ready' | 'source_estimate' | 'no_nutrition' | 'needs_review' | 'calculating'
 

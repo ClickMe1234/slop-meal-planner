@@ -18,8 +18,8 @@ const demoPlan: BackendPlanDetail = {
     version: 1,
   },
   occurrences: [
-    { id: 'monday-breakfast', meal_date: '2026-07-13', meal_type: 'breakfast', batch_id: 'breakfast-batch', recipe_id: 'overnight-oats', recipe_title: 'Berry overnight oats', batch_servings: 2, portions: [{ member_id: 'demo-you', servings: 1 }] },
-    { id: 'tuesday-breakfast', meal_date: '2026-07-14', meal_type: 'breakfast', batch_id: 'breakfast-batch', recipe_id: 'overnight-oats', recipe_title: 'Berry overnight oats', batch_servings: 2, portions: [{ member_id: 'demo-you', servings: 1 }] },
+    { id: 'monday-breakfast', meal_date: '2026-07-13', meal_type: 'breakfast', batch_id: 'breakfast-batch', component_slot: 0, recipe_id: 'overnight-oats', recipe_title: 'Berry overnight oats', batch_servings: 2, portions: [{ member_id: 'demo-you', servings: 1 }] },
+    { id: 'tuesday-breakfast', meal_date: '2026-07-14', meal_type: 'breakfast', batch_id: 'breakfast-batch', component_slot: 0, recipe_id: 'overnight-oats', recipe_title: 'Berry overnight oats', batch_servings: 2, portions: [{ member_id: 'demo-you', servings: 1 }] },
   ],
 }
 
@@ -39,5 +39,23 @@ describe('PlanRecipePickerPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Use this recipe' }))
     await waitFor(() => expect(readDemoPlan()?.occurrences.map(item => item.recipe_title)).toEqual(['Spiced shakshuka', 'Spiced shakshuka']))
+  })
+
+  it('offers side or snack recipes and adds the choice to every date in the batch', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan/demo/batches/breakfast-batch/sides/1/recipes?mealType=breakfast']}><Routes><Route path="/plan/:planId/batches/:batchId/sides/:componentSlot/recipes" element={<PlanRecipePickerPage/>}/><Route path="/plan" element={<div>Plan restored</div>}/></Routes></MemoryRouter></QueryClientProvider>)
+
+    expect(screen.getByRole('heading', { name: 'Add side' })).toBeInTheDocument()
+    expect(screen.getByText('Lemon garlic greens')).toBeInTheDocument()
+    expect(screen.getByText('Apple and peanut butter')).toBeInTheDocument()
+    expect(screen.queryByText('Spiced shakshuka')).not.toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('button', { name: 'Use this recipe' })[0])
+    await waitFor(() => {
+      const sides = readDemoPlan()?.occurrences.filter(item => item.component_slot === 1) ?? []
+      expect(sides).toHaveLength(2)
+      expect(sides.map(item => item.recipe_title)).toEqual(['Lemon garlic greens', 'Lemon garlic greens'])
+      expect(sides.every(item => item.parent_batch_id === 'breakfast-batch')).toBe(true)
+    })
   })
 })

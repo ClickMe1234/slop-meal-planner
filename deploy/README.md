@@ -48,7 +48,7 @@ connection URL. Hex output from the command above is safe. Set:
 - `BACKUP_ROOT=/mnt/user/backups/meal-planner`
 - `ALLOWED_HOSTS` to the Unraid hostname/IP and names used by household devices.
 - `WEB_PORT` to the desired LAN port (default `8080`).
-- `APP_VERSION` to an immutable release such as `0.1.0`; never use `latest`.
+- `APP_VERSION` to an immutable release such as `0.2.0`; never use `latest`.
 
 Create the host folders before first startup:
 

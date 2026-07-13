@@ -32,7 +32,7 @@ def _set_dinner_target(client, owner, member_id, calorie_target=500):
     assert response.status_code == 200, response.text
 
 
-def _create_recipe(client, owner, title, meal_types, ingredients=None):
+def _create_recipe(client, owner, title, meal_types, ingredients=None, nutrition=None):
     response = client.post(
         "/api/v1/recipes",
         headers=_headers(owner),
@@ -42,7 +42,7 @@ def _create_recipe(client, owner, title, meal_types, ingredients=None):
             "source_type": "url",
             "source_url": f"https://example.com/{title.casefold().replace(' ', '-')}",
             "publisher": "Example",
-            "publisher_nutrition": PUBLISHER_NUTRITION,
+            "publisher_nutrition": nutrition or PUBLISHER_NUTRITION,
             "meal_types": meal_types,
             "ingredients": ingredients or [],
         },
@@ -114,6 +114,10 @@ def test_recipe_meal_types_are_optional_filterable_and_required_by_planner(clien
     assert [recipe["id"] for recipe in lunches] == [tagged["id"]]
     assert breakfasts == []
 
+    side = _create_recipe(client, owner, "Flexible side", ["side", "snack"])
+    flexible = client.get("/api/v1/recipes?meal_type=side&meal_type=snack").json()["items"]
+    assert [recipe["id"] for recipe in flexible] == [side["id"]]
+
     empty_attendance = client.post(
         "/api/v1/meal-plans/generate",
         headers=_headers(owner),
@@ -131,6 +135,176 @@ def test_recipe_meal_types_are_optional_filterable_and_required_by_planner(clien
     )
     assert empty_attendance.status_code == 422
     assert empty_attendance.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_sides_apply_to_the_whole_batch_and_rebalance_all_plan_portions(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    main = _create_recipe(
+        client,
+        owner,
+        "Four hundred calorie main",
+        ["dinner"],
+        nutrition={
+            "basis": "per serving",
+            "energy_kcal": 400,
+            "protein_g": 24,
+            "carbohydrate_g": 44,
+            "fat_g": 14,
+        },
+    )
+    side = _create_recipe(
+        client,
+        owner,
+        "One hundred calorie side",
+        ["side"],
+        nutrition={
+            "basis": "per serving",
+            "energy_kcal": 100,
+            "protein_g": 6,
+            "carbohydrate_g": 11,
+            "fat_g": 3,
+        },
+    )
+    snack = _create_recipe(
+        client,
+        owner,
+        "Snack used as side",
+        ["snack"],
+        ingredients=[{
+            "original_text": "100 g carrots",
+            "food_phrase": "carrots",
+            "quantity_grams": 100,
+            "unit": "g",
+        }],
+        nutrition={
+            "basis": "per serving",
+            "energy_kcal": 100,
+            "protein_g": 6,
+            "carbohydrate_g": 11,
+            "fat_g": 3,
+        },
+    )
+    plan = _generate(
+        client,
+        owner,
+        [main["id"]],
+        [
+            {
+                "meal_date": meal_date,
+                "meal_type": "dinner",
+                "participant_member_ids": [member_id],
+                "batch_key": "shared-dinner",
+            }
+            for meal_date in ("2026-07-20", "2026-07-21")
+        ],
+    )
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    main_batch_id = detail["occurrences"][0]["batch_id"]
+
+    added = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/batches/{main_batch_id}/sides",
+        headers=_headers(owner),
+        json={
+            "recipe_id": side["id"],
+            "expected_plan_version": detail["plan"]["version"],
+        },
+    )
+    assert added.status_code == 200, added.text
+    with_side = added.json()
+    side_occurrences = [
+        item for item in with_side["occurrences"] if item["component_slot"] == 1
+    ]
+    assert len(side_occurrences) == 2
+    assert {item["parent_batch_id"] for item in side_occurrences} == {main_batch_id}
+    assert {item["recipe_id"] for item in side_occurrences} == {side["id"]}
+    assert all(item["portions"][0]["member_id"] == member_id for item in side_occurrences)
+    assert [day["totals"]["energy_kcal"] for day in with_side["daily_nutrition"]] == [
+        500,
+        500,
+    ]
+
+    added_snack = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/batches/{main_batch_id}/sides",
+        headers=_headers(owner),
+        json={
+            "recipe_id": snack["id"],
+            "expected_plan_version": with_side["plan"]["version"],
+        },
+    )
+    assert added_snack.status_code == 200, added_snack.text
+    two_sides = added_snack.json()
+    assert {item["component_slot"] for item in two_sides["occurrences"]} == {0, 1, 2}
+
+    limit = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/batches/{main_batch_id}/sides",
+        headers=_headers(owner),
+        json={
+            "recipe_id": side["id"],
+            "expected_plan_version": two_sides["plan"]["version"],
+        },
+    )
+    assert limit.status_code == 422
+    assert limit.json()["code"] == "SIDE_LIMIT_REACHED"
+
+    side_batch_id = next(
+        item["batch_id"]
+        for item in two_sides["occurrences"]
+        if item["component_slot"] == 1
+    )
+    removed = client.request(
+        "DELETE",
+        f"/api/v1/meal-plans/{plan['id']}/batches/{side_batch_id}/sides",
+        headers=_headers(owner),
+        json={"expected_plan_version": two_sides["plan"]["version"]},
+    )
+    assert removed.status_code == 200, removed.text
+    assert {item["component_slot"] for item in removed.json()["occurrences"]} == {0, 2}
+    accepted = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    )
+    assert accepted.status_code == 200, accepted.text
+    shopping = client.get("/api/v1/shopping-lists/active").json()
+    carrots = next(item for item in shopping["items"] if item["display_name"] == "carrots")
+    assert float(carrots["exact_quantity"]) == 200
+
+
+def test_snack_batches_only_accept_additional_snack_recipes(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    target = client.put(
+        f"/api/v1/household-members/{member_id}/target",
+        headers=_headers(owner),
+        json={
+            "mode": "calorie",
+            "calorie_target": 500,
+            "tolerance_percent": 5,
+            "allocations": [{"meal_type": "snack", "percentage": 100}],
+        },
+    )
+    assert target.status_code == 200, target.text
+    main = _create_recipe(client, owner, "Main snack", ["snack"])
+    side_only = _create_recipe(client, owner, "Side only", ["side"])
+    plan = _generate(
+        client,
+        owner,
+        [main["id"]],
+        [{
+            "meal_date": "2026-07-20",
+            "meal_type": "snack",
+            "participant_member_ids": [member_id],
+        }],
+    )
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    blocked = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/batches/{detail['occurrences'][0]['batch_id']}/sides",
+        headers=_headers(owner),
+        json={
+            "recipe_id": side_only["id"],
+            "expected_plan_version": detail["plan"]["version"],
+        },
+    )
+    assert blocked.status_code == 422
+    assert blocked.json()["code"] == "RECIPE_MEAL_TYPE_MISMATCH"
 
 
 def test_grouped_batch_supports_per_date_attendance_preferences_and_replacement(client, owner):

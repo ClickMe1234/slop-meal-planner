@@ -79,6 +79,7 @@ describe('PlanPage wizard', () => {
         meal_date: '2026-07-13',
         meal_type: 'breakfast',
         batch_id: 'breakfast-batch',
+        component_slot: 0,
         recipe_id: 'oats',
         recipe_title: 'Oats',
         batch_servings: 2,
@@ -106,6 +107,7 @@ describe('PlanPage wizard', () => {
       meal_date: '2026-07-13',
       meal_type: mealType,
       batch_id: `${mealType}-batch`,
+      component_slot: 0,
       recipe_id: `${mealType}-recipe`,
       recipe_title: `${mealType} recipe`,
       batch_servings: 1,
@@ -134,6 +136,36 @@ describe('PlanPage wizard', () => {
     ])
   })
 
+  it('shows batch-wide side controls in the generated daily summary', () => {
+    storeDemoPlan({
+      plan: {
+        id: 'demo',
+        name: 'Plan with side',
+        start_date: '2026-07-13',
+        end_date: '2026-07-13',
+        status: 'ready',
+        diagnostics: [],
+        version: 1,
+      },
+      occurrences: [
+        {
+          id: 'dinner', meal_date: '2026-07-13', meal_type: 'dinner', batch_id: 'dinner-batch', component_slot: 0,
+          recipe_id: 'curry', recipe_title: 'Curry', batch_servings: 1, portions: [{ member_id: 'demo-you', servings: 0.75 }],
+        },
+        {
+          id: 'dinner-side', meal_date: '2026-07-13', meal_type: 'dinner', batch_id: 'side-batch', parent_batch_id: 'dinner-batch', component_slot: 1,
+          recipe_id: 'greens', recipe_title: 'Greens', batch_servings: 0.5, portions: [{ member_id: 'demo-you', servings: 0.5 }],
+        },
+      ],
+    })
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan?plan=demo']}><PlanPage/></MemoryRouter></QueryClientProvider>)
+
+    expect(screen.getByText('Side')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Add side' })).toHaveAttribute('href', expect.stringContaining('/sides/2/recipes'))
+    expect(screen.getByRole('link', { name: 'Replace' })).toHaveAttribute('href', expect.stringContaining('/sides/1/recipes'))
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
+  })
+
   it('renders empty range days and locks recipe changes after acceptance', () => {
     const plan: BackendPlanDetail = {
       plan: {
@@ -150,6 +182,7 @@ describe('PlanPage wizard', () => {
         meal_date: '2026-07-13',
         meal_type: 'dinner',
         batch_id: 'dinner-batch',
+        component_slot: 0,
         recipe_id: 'curry',
         recipe_title: 'Curry',
         batch_servings: 1,

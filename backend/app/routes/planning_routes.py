@@ -29,15 +29,25 @@ from ..models import (
     ShoppingList,
     TargetProfile,
 )
-from ..schemas import PlanGenerateRequest, PlanOut, PlanRecipeReplaceRequest
+from ..schemas import (
+    PlanGenerateRequest,
+    PlanOut,
+    PlanRecipeReplaceRequest,
+    PlanSideCreateRequest,
+    PlanSideRemoveRequest,
+)
 from ..services.nutrition import publisher_values
 from ..services.pantry import reserve_plan_batches
 from ..services.planner import (
     ParticipantTarget,
+    PlanPortionVariable,
     PlannerInfeasibleError,
+    PORTIONS,
     RecipeCandidate,
+    SIDE_PORTIONS,
     aggregate_nutrition_issues,
     choose_shared_recipe,
+    rebalance_plan_portions,
 )
 from ..services.shopping import build_shopping_list
 
@@ -49,6 +59,29 @@ def _candidate(db: Session, recipe: Recipe, meal_type: str) -> RecipeCandidate |
         select(RecipeMealType.id).where(
             RecipeMealType.recipe_id == recipe.id,
             RecipeMealType.meal_type == meal_type.casefold(),
+        )
+    )
+    if tagged is None:
+        return None
+    version = db.scalar(
+        select(RecipeVersion)
+        .where(RecipeVersion.recipe_id == recipe.id)
+        .order_by(RecipeVersion.version_number.desc())
+    )
+    return _candidate_from_version(recipe, version)
+
+
+def _side_tags(meal_type: str) -> tuple[str, ...]:
+    return ("snack",) if meal_type.casefold() == "snack" else ("side", "snack")
+
+
+def _side_candidate(
+    db: Session, recipe: Recipe, meal_type: str
+) -> RecipeCandidate | None:
+    tagged = db.scalar(
+        select(RecipeMealType.id).where(
+            RecipeMealType.recipe_id == recipe.id,
+            RecipeMealType.meal_type.in_(_side_tags(meal_type)),
         )
     )
     if tagged is None:
@@ -146,6 +179,18 @@ def _validate_mutable_plan_constraints(
     excluded_foods = frozenset(guidance["exclude_food_record_ids"])
     covered_foods: set[str] = set()
     remediation_occurrence: MealOccurrence | None = None
+    remediation_batch: MealBatch | None = None
+
+    def picker_href(batch: MealBatch, occurrence: MealOccurrence) -> str:
+        if batch.parent_batch_id is not None:
+            return (
+                f"/plan/{plan.id}/batches/{batch.parent_batch_id}/sides/"
+                f"{batch.component_slot}/recipes?mealType={occurrence.meal_type}"
+            )
+        return (
+            f"/plan/{plan.id}/occurrences/{occurrence.id}/recipes"
+            f"?mealType={occurrence.meal_type}"
+        )
     batches = db.scalars(
         select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
     ).all()
@@ -190,25 +235,30 @@ def _validate_mutable_plan_constraints(
             )
         if remediation_occurrence is None:
             remediation_occurrence = occurrences[0]
+            remediation_batch = batch
         meal_types = {occurrence.meal_type for occurrence in occurrences}
         for meal_type in meal_types:
+            required_tags = (
+                _side_tags(meal_type) if batch.parent_batch_id is not None else (meal_type,)
+            )
             tagged = db.scalar(
                 select(RecipeMealType.id).where(
                     RecipeMealType.recipe_id == recipe.id,
-                    RecipeMealType.meal_type == meal_type,
+                    RecipeMealType.meal_type.in_(required_tags),
                 )
             )
             if tagged is None:
+                tag_description = " or ".join(required_tags)
                 raise DomainError(
                     "RECIPE_MEAL_TYPE_REVIEW_REQUIRED",
-                    f"{recipe.title} is no longer tagged for {meal_type}",
+                    f"{recipe.title} is no longer tagged for {tag_description}",
                     actions=[
                         {
                             "kind": "review_recipe",
-                            "label": f"Tag {recipe.title} for {meal_type}",
+                            "label": f"Update tags for {recipe.title}",
                             "href": f"/recipes/{recipe.id}/review",
                             "suggestion": (
-                                f"Add the {meal_type} meal tag, then return and accept the plan again."
+                                f"Add a {tag_description} tag, then return and accept the plan again."
                             ),
                             "recipe_id": recipe.id,
                             "recipe_version_id": candidate.recipe_version_id,
@@ -225,10 +275,7 @@ def _validate_mutable_plan_constraints(
                     {
                         "kind": "replace_recipe",
                         "label": "Choose another recipe",
-                        "href": (
-                            f"/plan/{plan.id}/occurrences/{occurrence.id}/recipes"
-                            f"?mealType={occurrence.meal_type}"
-                        ),
+                        "href": picker_href(batch, occurrence),
                         "suggestion": (
                             "Choose a recipe that does not contain the plan-specific exclusion."
                         ),
@@ -264,10 +311,7 @@ def _validate_mutable_plan_constraints(
                     {
                         "kind": "replace_recipe",
                         "label": "Choose a safe recipe",
-                        "href": (
-                            f"/plan/{plan.id}/occurrences/{occurrence.id}/recipes"
-                            f"?mealType={occurrence.meal_type}"
-                        ),
+                        "href": picker_href(batch, occurrence),
                         "suggestion": (
                             "Choose another recipe that respects the household restriction."
                         ),
@@ -281,15 +325,12 @@ def _validate_mutable_plan_constraints(
     missing_must_use = set(guidance["must_use_food_record_ids"]) - covered_foods
     if missing_must_use:
         actions = []
-        if remediation_occurrence is not None:
+        if remediation_occurrence is not None and remediation_batch is not None:
             actions.append(
                 {
                     "kind": "replace_recipe",
                     "label": "Choose a recipe using it",
-                    "href": (
-                        f"/plan/{plan.id}/occurrences/{remediation_occurrence.id}/recipes"
-                        f"?mealType={remediation_occurrence.meal_type}"
-                    ),
+                    "href": picker_href(remediation_batch, remediation_occurrence),
                     "suggestion": (
                         "Choose a recipe that restores the missing must-use ingredient, "
                         "or build the plan again without that requirement."
@@ -336,6 +377,130 @@ def _target_for(
         fat_min_g=target.fat_min_g,
         fat_max_g=target.fat_max_g,
     )
+
+
+def _rebalance_plan(
+    db: Session,
+    plan: MealPlan,
+    *,
+    ignore_nutrition_tolerances: bool,
+) -> None:
+    """Quantify every fixed recipe together after the plan composition changes."""
+    batches = db.scalars(
+        select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
+    ).all()
+    variables: list[PlanPortionVariable] = []
+    allocations_by_variable: dict[str, list[PortionAllocation]] = {}
+    daily_targets: dict[tuple[str, str], list[ParticipantTarget]] = defaultdict(list)
+
+    for batch in batches:
+        version = db.get(RecipeVersion, batch.recipe_version_id)
+        nutrition = publisher_values(version) if version is not None else None
+        if version is None or nutrition is None:
+            raise DomainError(
+                "INVALID_BATCH",
+                "A planned recipe no longer has complete publisher nutrition",
+            )
+        occurrences = db.scalars(
+            select(MealOccurrence)
+            .where(MealOccurrence.batch_id == batch.id)
+            .order_by(MealOccurrence.meal_date)
+        ).all()
+        member_dates: dict[str, list[str]] = defaultdict(list)
+        member_allocations: dict[str, list[PortionAllocation]] = defaultdict(list)
+        for occurrence in occurrences:
+            allocations = db.scalars(
+                select(PortionAllocation).where(
+                    PortionAllocation.meal_occurrence_id == occurrence.id
+                )
+            ).all()
+            for allocation in allocations:
+                date_text = occurrence.meal_date.isoformat()
+                member_dates[allocation.member_id].append(date_text)
+                member_allocations[allocation.member_id].append(allocation)
+                if batch.parent_batch_id is None:
+                    daily_targets[(date_text, allocation.member_id)].append(
+                        _target_for(
+                            db,
+                            allocation.member_id,
+                            occurrence.meal_type,
+                            plan.household_id,
+                        )
+                    )
+        for member_id, allocations in member_allocations.items():
+            key = f"{batch.id}:{member_id}"
+            variables.append(
+                PlanPortionVariable(
+                    key=key,
+                    member_id=member_id,
+                    dates=tuple(member_dates[member_id]),
+                    nutrition=nutrition,
+                    current=Decimal(allocations[0].servings),
+                    allowed=SIDE_PORTIONS if batch.parent_batch_id is not None else PORTIONS,
+                )
+            )
+            allocations_by_variable[key] = allocations
+
+    portions = rebalance_plan_portions(
+        variables, daily_targets, enforce_nutrition_bounds=False
+    )
+    daily_nutrition: dict[tuple[str, str], dict[str, Decimal]] = defaultdict(
+        lambda: defaultdict(lambda: Decimal("0"))
+    )
+    for variable in variables:
+        portion = portions[variable.key]
+        for date_text in variable.dates:
+            for nutrient, amount in variable.nutrition.items():
+                daily_nutrition[(date_text, variable.member_id)][nutrient] += amount * portion
+
+    failures: list[dict] = []
+    if not ignore_nutrition_tolerances:
+        for (date_text, member_id), targets in daily_targets.items():
+            violations = aggregate_nutrition_issues(
+                targets, daily_nutrition[(date_text, member_id)]
+            )
+            if violations:
+                member = db.get(HouseholdMember, member_id)
+                failures.append(
+                    {
+                        "date": date_text,
+                        "member": member.name if member else member_id,
+                        "violations": violations,
+                    }
+                )
+    if failures:
+        raise DomainError(
+            "NUTRITION_TARGET_INFEASIBLE",
+            "The selected meal combination could not meet every daily nutrition target.",
+            422,
+            actions=[
+                {
+                    "kind": "retry_best_effort",
+                    "label": "Continue anyway",
+                    "suggestion": "Use the closest whole-plan portions for these recipes.",
+                }
+            ],
+            issues=failures,
+        )
+
+    for variable in variables:
+        for allocation in allocations_by_variable[variable.key]:
+            allocation.servings = portions[variable.key]
+    for batch in batches:
+        batch.servings = sum(
+            (
+                Decimal(allocation.servings)
+                for occurrence in db.scalars(
+                    select(MealOccurrence).where(MealOccurrence.batch_id == batch.id)
+                ).all()
+                for allocation in db.scalars(
+                    select(PortionAllocation).where(
+                        PortionAllocation.meal_occurrence_id == occurrence.id
+                    )
+                ).all()
+            ),
+            Decimal("0"),
+        )
 
 
 @router.post("/generate", response_model=PlanOut, status_code=201)
@@ -638,7 +803,11 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
     occurrences = db.scalars(
         select(MealOccurrence)
         .where(MealOccurrence.meal_plan_id == plan.id)
-        .order_by(MealOccurrence.meal_date, MealOccurrence.meal_type)
+        .order_by(
+            MealOccurrence.meal_date,
+            MealOccurrence.meal_type,
+            MealOccurrence.component_slot,
+        )
     ).all()
     items = []
     daily_totals: dict = defaultdict(lambda: defaultdict(Decimal))
@@ -666,6 +835,8 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
                 "meal_type": occurrence.meal_type,
                 "locked": occurrence.locked,
                 "batch_id": batch.id,
+                "parent_batch_id": batch.parent_batch_id,
+                "component_slot": occurrence.component_slot,
                 "recipe_id": recipe.id,
                 "recipe_title": recipe.title,
                 "source_url": recipe.source_url,
@@ -748,6 +919,11 @@ def replace_occurrence_recipe(
         raise DomainError("PLAN_NOT_EDITABLE", "Only a ready plan can have a recipe replaced")
     if plan.version != payload.expected_plan_version:
         raise ConflictError("This plan changed while you were editing it. Reload before replacing a recipe.")
+    if occurrence.component_slot != 0:
+        raise DomainError(
+            "SIDE_REPLACEMENT_ENDPOINT_REQUIRED",
+            "Use the side picker to replace an added item",
+        )
     recipe = db.get(Recipe, payload.recipe_id)
     if (
         recipe is None
@@ -780,57 +956,18 @@ def replace_occurrence_recipe(
     ).all()
     if len({item.meal_type for item in batch_occurrences}) != 1:
         raise DomainError("INVALID_BATCH", "The selected batch mixes meal types")
-    allocations_by_occurrence: dict[str, list[PortionAllocation]] = {}
-    member_ids: set[str] = set()
-    for item in batch_occurrences:
-        allocations = db.scalars(
-            select(PortionAllocation).where(
-                PortionAllocation.meal_occurrence_id == item.id
-            )
-        ).all()
-        allocations_by_occurrence[item.id] = list(allocations)
-        member_ids.update(allocation.member_id for allocation in allocations)
-    participants = [
-        _target_for(db, member_id, occurrence.meal_type, context.user.household_id)
-        for member_id in sorted(member_ids)
-    ]
-    _, preferred_terms, disliked_terms = _restriction_terms(
-        db, sorted(member_ids)
-    )
     _validate_mutable_plan_constraints(
         db,
         plan,
         replacement_batch_id=batch.id,
         replacement_candidate=candidate,
     )
-    try:
-        choice = choose_shared_recipe(
-            [candidate],
-            participants,
-            preferred_terms=preferred_terms,
-            disliked_terms=disliked_terms,
-            enforce_nutrition_bounds=not payload.ignore_nutrition_tolerances,
-        )
-    except PlannerInfeasibleError as exc:
-        raise DomainError(
-            "NUTRITION_TARGET_INFEASIBLE",
-            str(exc),
-            422,
-            actions=[
-                {
-                    "kind": "retry_best_effort",
-                    "label": "Continue anyway",
-                    "suggestion": "Use the closest available portions without enforcing nutrition tolerances.",
-                }
-            ],
-        ) from exc
-    total_servings = Decimal("0")
-    for allocations in allocations_by_occurrence.values():
-        for allocation in allocations:
-            allocation.servings = choice.portions[allocation.member_id]
-            total_servings += choice.portions[allocation.member_id]
     batch.recipe_version_id = candidate.recipe_version_id
-    batch.servings = total_servings
+    _rebalance_plan(
+        db,
+        plan,
+        ignore_nutrition_tolerances=payload.ignore_nutrition_tolerances,
+    )
     if payload.ignore_nutrition_tolerances:
         plan.diagnostics = [
             *(plan.diagnostics or []),
@@ -841,6 +978,179 @@ def replace_occurrence_recipe(
             },
         ]
         flag_modified(plan, "diagnostics")
+    plan.version += 1
+    db.commit()
+    db.refresh(plan)
+    return _plan_detail(db, plan)
+
+
+@router.post("/{plan_id}/batches/{batch_id}/sides")
+def add_or_replace_side(
+    plan_id: str,
+    batch_id: str,
+    payload: PlanSideCreateRequest,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    plan = db.scalar(
+        select(MealPlan).where(MealPlan.id == plan_id).with_for_update()
+    )
+    main_batch = db.get(MealBatch, batch_id)
+    if (
+        plan is None
+        or plan.household_id != context.user.household_id
+        or main_batch is None
+        or main_batch.meal_plan_id != plan.id
+        or main_batch.parent_batch_id is not None
+    ):
+        raise NotFoundError("Meal batch")
+    if plan.status != PlanStatus.READY.value:
+        raise DomainError("PLAN_NOT_EDITABLE", "Only a ready plan can have sides changed")
+    if plan.version != payload.expected_plan_version:
+        raise ConflictError("This plan changed while you were editing it. Reload before adding a side.")
+
+    main_occurrences = db.scalars(
+        select(MealOccurrence)
+        .where(MealOccurrence.batch_id == main_batch.id)
+        .order_by(MealOccurrence.meal_date)
+    ).all()
+    if not main_occurrences:
+        raise DomainError("INVALID_BATCH", "The selected batch has no meal occurrences")
+    meal_types = {occurrence.meal_type for occurrence in main_occurrences}
+    if len(meal_types) != 1:
+        raise DomainError("INVALID_BATCH", "The selected batch mixes meal types")
+    meal_type = main_occurrences[0].meal_type
+
+    recipe = db.get(Recipe, payload.recipe_id)
+    if (
+        recipe is None
+        or recipe.household_id != context.user.household_id
+        or recipe.archived_at is not None
+    ):
+        raise NotFoundError("Recipe")
+    candidate = _side_candidate(db, recipe, meal_type)
+    if candidate is None:
+        allowed = "snack" if meal_type == "snack" else "side or snack"
+        raise DomainError(
+            "RECIPE_MEAL_TYPE_MISMATCH",
+            f"Choose a planner-ready recipe tagged {allowed}",
+        )
+
+    existing_sides = db.scalars(
+        select(MealBatch)
+        .where(MealBatch.parent_batch_id == main_batch.id)
+        .order_by(MealBatch.component_slot)
+    ).all()
+    by_slot = {batch.component_slot: batch for batch in existing_sides}
+    component_slot = payload.component_slot
+    if component_slot is None:
+        component_slot = next((slot for slot in (1, 2) if slot not in by_slot), None)
+    if component_slot is None:
+        raise DomainError("SIDE_LIMIT_REACHED", "This batch already has two added items")
+
+    side_batch = by_slot.get(component_slot)
+    if side_batch is not None:
+        side_batch.recipe_version_id = candidate.recipe_version_id
+    else:
+        side_batch = MealBatch(
+            meal_plan_id=plan.id,
+            recipe_version_id=candidate.recipe_version_id,
+            servings=Decimal("0"),
+            planned_cook_date=main_batch.planned_cook_date,
+            parent_batch_id=main_batch.id,
+            component_slot=component_slot,
+        )
+        db.add(side_batch)
+        db.flush()
+        for main_occurrence in main_occurrences:
+            side_occurrence = MealOccurrence(
+                meal_plan_id=plan.id,
+                batch_id=side_batch.id,
+                meal_date=main_occurrence.meal_date,
+                meal_type=main_occurrence.meal_type,
+                component_slot=component_slot,
+            )
+            db.add(side_occurrence)
+            db.flush()
+            main_allocations = db.scalars(
+                select(PortionAllocation).where(
+                    PortionAllocation.meal_occurrence_id == main_occurrence.id
+                )
+            ).all()
+            for allocation in main_allocations:
+                db.add(
+                    PortionAllocation(
+                        meal_occurrence_id=side_occurrence.id,
+                        member_id=allocation.member_id,
+                        servings=Decimal("0.25"),
+                    )
+                )
+    db.flush()
+    _validate_mutable_plan_constraints(db, plan)
+    _rebalance_plan(
+        db,
+        plan,
+        ignore_nutrition_tolerances=payload.ignore_nutrition_tolerances,
+    )
+    if payload.ignore_nutrition_tolerances:
+        plan.diagnostics = [
+            *(plan.diagnostics or []),
+            {
+                "code": "SIDE_NUTRITION_TOLERANCE_RELAXED",
+                "batch_id": side_batch.id,
+                "parent_batch_id": main_batch.id,
+            },
+        ]
+        flag_modified(plan, "diagnostics")
+    plan.version += 1
+    db.commit()
+    db.refresh(plan)
+    return _plan_detail(db, plan)
+
+
+@router.delete("/{plan_id}/batches/{side_batch_id}/sides")
+def remove_side(
+    plan_id: str,
+    side_batch_id: str,
+    payload: PlanSideRemoveRequest,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    plan = db.scalar(
+        select(MealPlan).where(MealPlan.id == plan_id).with_for_update()
+    )
+    side_batch = db.get(MealBatch, side_batch_id)
+    if (
+        plan is None
+        or plan.household_id != context.user.household_id
+        or side_batch is None
+        or side_batch.meal_plan_id != plan.id
+        or side_batch.parent_batch_id is None
+    ):
+        raise NotFoundError("Side batch")
+    if plan.status != PlanStatus.READY.value:
+        raise DomainError("PLAN_NOT_EDITABLE", "Only a ready plan can have sides changed")
+    if plan.version != payload.expected_plan_version:
+        raise ConflictError("This plan changed while you were editing it. Reload before removing the side.")
+
+    occurrence_ids = db.scalars(
+        select(MealOccurrence.id).where(MealOccurrence.batch_id == side_batch.id)
+    ).all()
+    if occurrence_ids:
+        db.execute(
+            delete(PortionAllocation).where(
+                PortionAllocation.meal_occurrence_id.in_(occurrence_ids)
+            )
+        )
+        db.execute(delete(MealOccurrence).where(MealOccurrence.id.in_(occurrence_ids)))
+    db.delete(side_batch)
+    db.flush()
+    _validate_mutable_plan_constraints(db, plan)
+    _rebalance_plan(
+        db,
+        plan,
+        ignore_nutrition_tolerances=payload.ignore_nutrition_tolerances,
+    )
     plan.version += 1
     db.commit()
     db.refresh(plan)
@@ -926,21 +1236,32 @@ def mark_batch_cooked(
         or batch.meal_plan_id != plan.id
     ):
         raise NotFoundError("Meal batch")
-    if batch.cooked_at:
-        return
-    reservations = db.scalars(
-        select(PantryReservation).where(PantryReservation.meal_batch_id == batch.id)
-    ).all()
-    for reservation in reservations:
-        db.add(
-            PantryTransaction(
-                pantry_lot_id=reservation.pantry_lot_id,
-                quantity_delta=-Decimal(reservation.quantity),
-                reason="meal_batch_cooked",
-                reference_type="meal_batch",
-                reference_id=batch.id,
-            )
+    root_batch_id = batch.parent_batch_id or batch.id
+    cooking_batches = db.scalars(
+        select(MealBatch).where(
+            (MealBatch.id == root_batch_id)
+            | (MealBatch.parent_batch_id == root_batch_id)
         )
-        db.delete(reservation)
-    batch.cooked_at = datetime.now(timezone.utc)
+    ).all()
+    cooked_at = datetime.now(timezone.utc)
+    for cooking_batch in cooking_batches:
+        if cooking_batch.cooked_at:
+            continue
+        reservations = db.scalars(
+            select(PantryReservation).where(
+                PantryReservation.meal_batch_id == cooking_batch.id
+            )
+        ).all()
+        for reservation in reservations:
+            db.add(
+                PantryTransaction(
+                    pantry_lot_id=reservation.pantry_lot_id,
+                    quantity_delta=-Decimal(reservation.quantity),
+                    reason="meal_batch_cooked",
+                    reference_type="meal_batch",
+                    reference_id=cooking_batch.id,
+                )
+            )
+            db.delete(reservation)
+        cooking_batch.cooked_at = cooked_at
     db.commit()

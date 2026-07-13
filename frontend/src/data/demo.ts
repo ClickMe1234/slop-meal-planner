@@ -60,6 +60,26 @@ export const demoRecipes: Recipe[] = [
     yield: 2,
     state: 'no_nutrition',
     mealKinds: ['Breakfast', 'Lunch', 'Dinner']
+  },
+  {
+    id: 'lemon-greens',
+    title: 'Lemon garlic greens',
+    source: 'Saved recipe',
+    sourceUrl: '#',
+    yield: 4,
+    state: 'ready',
+    nutrition: { calories: 96, protein: 4, carbs: 9, fat: 6, basis: 'per_serving' },
+    mealKinds: ['Side']
+  },
+  {
+    id: 'apple-peanut-snack',
+    title: 'Apple and peanut butter',
+    source: 'Saved recipe',
+    sourceUrl: '#',
+    yield: 1,
+    state: 'ready',
+    nutrition: { calories: 248, protein: 8, carbs: 29, fat: 12, basis: 'per_serving' },
+    mealKinds: ['Snack']
   }
 ]
 

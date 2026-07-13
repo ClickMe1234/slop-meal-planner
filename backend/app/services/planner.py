@@ -39,7 +39,18 @@ class PlannerChoice:
     score: Decimal
 
 
+@dataclass(frozen=True)
+class PlanPortionVariable:
+    key: str
+    member_id: str
+    dates: tuple[str, ...]
+    nutrition: dict[str, Decimal]
+    current: Decimal
+    allowed: tuple[Decimal, ...]
+
+
 PORTIONS = tuple(Decimal("0.5") + Decimal("0.25") * i for i in range(7))
+SIDE_PORTIONS = tuple(Decimal("0.25") + Decimal("0.25") * i for i in range(8))
 MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
 
 
@@ -199,6 +210,129 @@ def aggregate_nutrition_violations(
     targets: list[ParticipantTarget], nutrition: dict[str, Decimal]
 ) -> list[str]:
     return [issue["message"] for issue in aggregate_nutrition_issues(targets, nutrition)]
+
+
+def _portion_plan_score(
+    variables: list[PlanPortionVariable],
+    portions: dict[str, Decimal],
+    daily_targets: dict[tuple[str, str], list[ParticipantTarget]],
+) -> tuple[Decimal, bool]:
+    nutrition: dict[tuple[str, str], dict[str, Decimal]] = {}
+    for variable in variables:
+        portion = portions[variable.key]
+        for meal_date in variable.dates:
+            key = (meal_date, variable.member_id)
+            totals = nutrition.setdefault(key, {})
+            for nutrient, amount in variable.nutrition.items():
+                totals[nutrient] = totals.get(nutrient, Decimal("0")) + amount * portion
+
+    score = Decimal("0")
+    feasible = True
+    for key, targets in daily_targets.items():
+        actual = nutrition.get(key, {})
+        expected: dict[str, Decimal] = {}
+        for target in targets:
+            for nutrient, value in _target_values(target).items():
+                expected[nutrient] = expected.get(nutrient, Decimal("0")) + value
+        for nutrient, target_value in expected.items():
+            value = actual.get(nutrient, Decimal("0"))
+            score += abs(value - target_value) / max(target_value, Decimal("1"))
+
+        issues = aggregate_nutrition_issues(targets, actual)
+        if issues:
+            feasible = False
+            # Hard-bound distance dominates the ordinary closeness objective.
+            for issue in issues:
+                value = Decimal(issue["actual"])
+                if "low" in issue and value < Decimal(issue["low"]):
+                    score += Decimal("1000") * (
+                        Decimal(issue["low"]) - value
+                    ) / max(Decimal(issue["low"]), Decimal("1"))
+                if "high" in issue and value > Decimal(issue["high"]):
+                    score += Decimal("1000") * (
+                        value - Decimal(issue["high"])
+                    ) / max(Decimal(issue["high"]), Decimal("1"))
+
+    score += sum(
+        (abs(portions[variable.key] - Decimal("1")) / Decimal("1000") for variable in variables),
+        Decimal("0"),
+    )
+    return score, feasible
+
+
+def rebalance_plan_portions(
+    variables: list[PlanPortionVariable],
+    daily_targets: dict[tuple[str, str], list[ParticipantTarget]],
+    *,
+    enforce_nutrition_bounds: bool = True,
+) -> dict[str, Decimal]:
+    """Re-quantify fixed recipes together while respecting shared batch portions.
+
+    A variable is one batch/member serving amount and therefore applies to every
+    date on which that member eats from the batch. Several deterministic starts
+    make the discrete coordinate search resilient without making plan edits
+    depend on an optional external solver.
+    """
+    if not variables:
+        return {}
+
+    starts: list[dict[str, Decimal]] = []
+    for mode in ("current", "one", "minimum", "maximum"):
+        start: dict[str, Decimal] = {}
+        for variable in variables:
+            if mode == "current" and variable.current in variable.allowed:
+                start[variable.key] = variable.current
+            elif mode == "minimum":
+                start[variable.key] = variable.allowed[0]
+            elif mode == "maximum":
+                start[variable.key] = variable.allowed[-1]
+            else:
+                start[variable.key] = min(
+                    variable.allowed, key=lambda value: abs(value - Decimal("1"))
+                )
+        starts.append(start)
+
+    best_portions: dict[str, Decimal] | None = None
+    best_score: Decimal | None = None
+    best_feasible = False
+    ordered = sorted(variables, key=lambda item: item.key)
+    for portions in starts:
+        for _ in range(12):
+            changed = False
+            for variable in ordered:
+                current_value = portions[variable.key]
+                candidate_value = min(
+                    variable.allowed,
+                    key=lambda value: (
+                        _portion_plan_score(
+                            variables,
+                            {**portions, variable.key: value},
+                            daily_targets,
+                        )[0],
+                        abs(value - current_value),
+                        value,
+                    ),
+                )
+                if candidate_value != current_value:
+                    portions[variable.key] = candidate_value
+                    changed = True
+            if not changed:
+                break
+        score, feasible = _portion_plan_score(variables, portions, daily_targets)
+        if (
+            best_portions is None
+            or (feasible and not best_feasible)
+            or (feasible == best_feasible and (best_score is None or score < best_score))
+        ):
+            best_portions = dict(portions)
+            best_score = score
+            best_feasible = feasible
+
+    if best_portions is None or (enforce_nutrition_bounds and not best_feasible):
+        raise PlannerInfeasibleError(
+            "No whole-plan quarter-portion combination meets every daily nutrition tolerance"
+        )
+    return best_portions
 
 
 def choose_shared_recipe(
