@@ -1,0 +1,574 @@
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+
+from app.models import MealPlan, PlanStatus, ShoppingItem, ShoppingList
+
+
+PUBLISHER_NUTRITION = {
+    "basis": "per serving",
+    "energy_kcal": 500,
+    "protein_g": 30,
+    "carbohydrate_g": 55,
+    "fat_g": 18,
+}
+
+
+def _headers(owner):
+    return {"X-CSRF-Token": owner["csrf_token"]}
+
+
+def _set_dinner_target(client, owner, member_id):
+    response = client.put(
+        f"/api/v1/household-members/{member_id}/target",
+        headers=_headers(owner),
+        json={
+            "mode": "calorie",
+            "calorie_target": 500,
+            "tolerance_percent": 5,
+            "allocations": [{"meal_type": "dinner", "percentage": 100}],
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
+def _create_recipe(client, owner, title, meal_types, ingredients=None):
+    response = client.post(
+        "/api/v1/recipes",
+        headers=_headers(owner),
+        json={
+            "title": title,
+            "yield_servings": 1,
+            "source_type": "url",
+            "source_url": f"https://example.com/{title.casefold().replace(' ', '-')}",
+            "publisher": "Example",
+            "publisher_nutrition": PUBLISHER_NUTRITION,
+            "meal_types": meal_types,
+            "ingredients": ingredients or [],
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _create_food(client, owner, name):
+    response = client.post(
+        "/api/v1/foods",
+        headers=_headers(owner),
+        json={
+            "provider": "test",
+            "provider_record_id": name.casefold().replace(" ", "-"),
+            "dataset_version": "fixture-1",
+            "name": name,
+            "basis_amount": 100,
+            "basis_unit": "g",
+            "nutrients": [
+                {"code": "energy_kcal", "amount": 100, "unit": "kcal"},
+                {"code": "protein_g", "amount": 10, "unit": "g"},
+                {"code": "carbohydrate_g", "amount": 10, "unit": "g"},
+                {"code": "fat_g", "amount": 2, "unit": "g"},
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _generate(
+    client,
+    owner,
+    recipe_ids,
+    slots,
+    *,
+    start_date=None,
+    end_date=None,
+    must_use_food_record_ids=None,
+    exclude_food_record_ids=None,
+):
+    payload = {"name": "Test plan", "recipe_ids": recipe_ids, "slots": slots}
+    if start_date is not None:
+        payload["start_date"] = start_date
+        payload["end_date"] = end_date
+    payload["must_use_food_record_ids"] = must_use_food_record_ids or []
+    payload["exclude_food_record_ids"] = exclude_food_record_ids or []
+    response = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json=payload,
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_recipe_meal_types_are_optional_filterable_and_required_by_planner(client, owner):
+    tagged = _create_recipe(client, owner, "Lunch bowl", ["lunch", "dinner"])
+    untagged = _create_recipe(client, owner, "Unsorted bowl", [])
+
+    assert tagged["meal_types"] == ["dinner", "lunch"]
+    assert tagged["planner_eligible"] is True
+    assert untagged["planner_eligible"] is False
+    assert any("meal type" in warning.lower() for warning in untagged["planner_warnings"])
+
+    lunches = client.get("/api/v1/recipes?meal_type=lunch").json()["items"]
+    breakfasts = client.get("/api/v1/recipes?meal_type=breakfast").json()["items"]
+    assert [recipe["id"] for recipe in lunches] == [tagged["id"]]
+    assert breakfasts == []
+
+    empty_attendance = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={
+            "name": "Invalid plan",
+            "recipe_ids": [tagged["id"]],
+            "slots": [
+                {
+                    "meal_date": "2026-07-20",
+                    "meal_type": "lunch",
+                    "participant_member_ids": [],
+                }
+            ],
+        },
+    )
+    assert empty_attendance.status_code == 422
+    assert empty_attendance.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_grouped_batch_supports_per_date_attendance_preferences_and_replacement(client, owner):
+    owner_member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, owner_member_id)
+    partner = client.post(
+        "/api/v1/household-members",
+        headers=_headers(owner),
+        json={"name": "Partner"},
+    ).json()
+    _set_dinner_target(client, owner, partner["id"])
+    preferred = client.post(
+        f"/api/v1/household-members/{owner_member_id}/restrictions",
+        headers=_headers(owner),
+        json={"kind": "prefer", "value": "spinach"},
+    )
+    assert preferred.status_code == 201, preferred.text
+
+    broccoli = _create_recipe(
+        client,
+        owner,
+        "Broccoli dinner",
+        ["dinner"],
+        [{"original_text": "100 g broccoli", "quantity_grams": 100, "unit": "g"}],
+    )
+    spinach = _create_recipe(
+        client,
+        owner,
+        "Spinach dinner",
+        ["dinner"],
+        [{"original_text": "100 g spinach", "quantity_grams": 100, "unit": "g"}],
+    )
+    plan = _generate(
+        client,
+        owner,
+        [broccoli["id"], spinach["id"]],
+        [
+            {
+                "meal_date": "2026-07-20",
+                "meal_type": "dinner",
+                "participant_member_ids": [owner_member_id, partner["id"]],
+                "batch_key": "dinner-monday",
+            },
+            {
+                "meal_date": "2026-07-21",
+                "meal_type": "dinner",
+                "participant_member_ids": [owner_member_id],
+                "batch_key": "dinner-monday",
+            },
+        ],
+        start_date="2026-07-19",
+        end_date="2026-07-22",
+    )
+
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    assert detail["plan"]["start_date"] == "2026-07-19"
+    assert detail["plan"]["end_date"] == "2026-07-22"
+    assert {item["recipe_id"] for item in detail["occurrences"]} == {spinach["id"]}
+    assert [len(item["portions"]) for item in detail["occurrences"]] == [2, 1]
+    assert float(detail["occurrences"][0]["batch_servings"]) == 3
+    assert detail["daily_nutrition"][0]["totals"]["energy_kcal"] == 1000
+    assert detail["daily_nutrition"][1]["totals"]["energy_kcal"] == 500
+
+    occurrence_id = detail["occurrences"][0]["id"]
+    replaced = client.put(
+        f"/api/v1/meal-plans/{plan['id']}/occurrences/{occurrence_id}/recipe",
+        headers=_headers(owner),
+        json={
+            "recipe_id": broccoli["id"],
+            "expected_plan_version": detail["plan"]["version"],
+        },
+    )
+    assert replaced.status_code == 200, replaced.text
+    replaced_detail = replaced.json()
+    assert {item["recipe_id"] for item in replaced_detail["occurrences"]} == {
+        broccoli["id"]
+    }
+    assert [len(item["portions"]) for item in replaced_detail["occurrences"]] == [2, 1]
+    assert float(replaced_detail["occurrences"][0]["batch_servings"]) == 3
+
+
+def test_replacement_preserves_plan_specific_ingredient_guidance(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    must_food = _create_food(client, owner, "Must use greens")
+    excluded_food = _create_food(client, owner, "Excluded nuts")
+    required = _create_recipe(
+        client,
+        owner,
+        "Required dinner",
+        ["dinner"],
+        [
+            {
+                "original_text": "100 g must use greens",
+                "quantity_grams": 100,
+                "unit": "g",
+                "food_record_id": must_food["id"],
+            }
+        ],
+    )
+    excluded = _create_recipe(
+        client,
+        owner,
+        "Excluded dinner",
+        ["dinner"],
+        [
+            {
+                "original_text": "100 g excluded nuts",
+                "quantity_grams": 100,
+                "unit": "g",
+                "food_record_id": excluded_food["id"],
+            }
+        ],
+    )
+    neutral = _create_recipe(client, owner, "Neutral dinner", ["dinner"])
+    plan = _generate(
+        client,
+        owner,
+        [required["id"], excluded["id"], neutral["id"]],
+        [
+            {
+                "meal_date": "2026-07-20",
+                "meal_type": "dinner",
+                "participant_member_ids": [member_id],
+            }
+        ],
+        must_use_food_record_ids=[must_food["id"]],
+        exclude_food_record_ids=[excluded_food["id"]],
+    )
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    occurrence_id = detail["occurrences"][0]["id"]
+
+    excluded_swap = client.put(
+        f"/api/v1/meal-plans/{plan['id']}/occurrences/{occurrence_id}/recipe",
+        headers=_headers(owner),
+        json={
+            "recipe_id": excluded["id"],
+            "expected_plan_version": detail["plan"]["version"],
+        },
+    )
+    assert excluded_swap.status_code == 422
+    assert excluded_swap.json()["code"] == "PLAN_EXCLUDED_INGREDIENT"
+    assert excluded_swap.json()["actions"][0]["kind"] == "replace_recipe"
+
+    missing_must_use = client.put(
+        f"/api/v1/meal-plans/{plan['id']}/occurrences/{occurrence_id}/recipe",
+        headers=_headers(owner),
+        json={
+            "recipe_id": neutral["id"],
+            "expected_plan_version": detail["plan"]["version"],
+        },
+    )
+    assert missing_must_use.status_code == 422
+    assert missing_must_use.json()["code"] == "MUST_USE_INGREDIENT_INFEASIBLE"
+    assert missing_must_use.json()["actions"][0]["kind"] == "replace_recipe"
+
+
+def test_accept_is_atomic_and_reviewed_shopping_exclusion_refreshes_ready_plan(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    recipe = _create_recipe(
+        client,
+        owner,
+        "Seasoned dinner",
+        ["dinner"],
+        [{"original_text": "salt and pepper to taste", "food_phrase": "salt and pepper"}],
+    )
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [
+            {
+                "meal_date": "2026-07-20",
+                "meal_type": "dinner",
+                "participant_member_ids": [member_id],
+            }
+        ],
+    )
+
+    premature_list = client.post(
+        "/api/v1/shopping-lists/build",
+        headers=_headers(owner),
+        json={"meal_plan_id": plan["id"], "name": "Too early"},
+    )
+    assert premature_list.status_code == 422
+    assert premature_list.json()["code"] == "PLAN_NOT_ACCEPTED"
+
+    blocked = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    )
+    assert blocked.status_code == 422, blocked.text
+    problem = blocked.json()
+    assert problem["code"] == "SHOPPING_REVIEW_REQUIRED"
+    assert problem["actions"][0]["recipe_id"] == recipe["id"]
+    assert "focusIngredient=" in problem["actions"][0]["href"]
+    assert "Do not add to shopping list" in problem["actions"][0]["suggestion"]
+    assert client.get(f"/api/v1/meal-plans/{plan['id']}").json()["plan"]["status"] == "ready"
+
+    current = client.get(f"/api/v1/recipes/{recipe['id']}").json()
+    ingredient = current["ingredients"][0]
+    reviewed = client.put(
+        f"/api/v1/recipes/{recipe['id']}/review",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "meal_types": current["meal_types"],
+            "ingredients": [
+                {
+                    "original_text": ingredient["original_text"],
+                    "quantity": ingredient["quantity"],
+                    "unit": ingredient["unit"],
+                    "quantity_grams": ingredient["quantity_grams"],
+                    "food_phrase": ingredient["food_phrase"],
+                    "preparation": ingredient["preparation"],
+                    "included": ingredient["included"],
+                    "optional": ingredient["optional"],
+                    "needs_review": ingredient["needs_review"],
+                    "shopping_excluded": True,
+                    "food_record_id": ingredient["food_record_id"],
+                }
+            ],
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["ingredients"][0]["shopping_excluded"] is True
+
+    accepted = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "accepted"
+    shopping = client.get("/api/v1/shopping-lists/active")
+    assert shopping.status_code == 200, shopping.text
+    assert shopping.json()["meal_plan_id"] == plan["id"]
+    assert shopping.json()["items"] == []
+
+    accepted_again = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    )
+    assert accepted_again.status_code == 200, accepted_again.text
+    assert client.get("/api/v1/shopping-lists/active").json()["id"] == shopping.json()["id"]
+
+
+def test_accept_revalidates_recipe_tags_and_new_household_restrictions(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    untagged_later = _create_recipe(
+        client,
+        owner,
+        "Retagged dinner",
+        ["dinner"],
+        [{"original_text": "1 tsp seasoning", "quantity": 1, "unit": "tsp"}],
+    )
+    tag_plan = _generate(
+        client,
+        owner,
+        [untagged_later["id"]],
+        [
+            {
+                "meal_date": "2026-07-20",
+                "meal_type": "dinner",
+                "participant_member_ids": [member_id],
+            }
+        ],
+    )
+    current = client.get(f"/api/v1/recipes/{untagged_later['id']}").json()
+    ingredient = current["ingredients"][0]
+    removed_tag = client.put(
+        f"/api/v1/recipes/{untagged_later['id']}/review",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "meal_types": [],
+            "ingredients": [
+                {
+                    "original_text": ingredient["original_text"],
+                    "quantity": ingredient["quantity"],
+                    "unit": ingredient["unit"],
+                    "quantity_grams": ingredient["quantity_grams"],
+                    "food_phrase": ingredient["food_phrase"],
+                    "preparation": ingredient["preparation"],
+                    "included": ingredient["included"],
+                    "optional": ingredient["optional"],
+                    "needs_review": ingredient["needs_review"],
+                    "shopping_excluded": ingredient["shopping_excluded"],
+                    "food_record_id": ingredient["food_record_id"],
+                }
+            ],
+        },
+    )
+    assert removed_tag.status_code == 200, removed_tag.text
+    tag_blocked = client.post(
+        f"/api/v1/meal-plans/{tag_plan['id']}/accept", headers=_headers(owner)
+    )
+    assert tag_blocked.status_code == 422
+    assert tag_blocked.json()["code"] == "RECIPE_MEAL_TYPE_REVIEW_REQUIRED"
+    assert tag_blocked.json()["actions"][0]["kind"] == "review_recipe"
+
+    restricted_later = _create_recipe(
+        client,
+        owner,
+        "Peanut dinner",
+        ["dinner"],
+        [{"original_text": "100 g peanuts", "quantity_grams": 100, "unit": "g"}],
+    )
+    restriction_plan = _generate(
+        client,
+        owner,
+        [restricted_later["id"]],
+        [
+            {
+                "meal_date": "2026-07-21",
+                "meal_type": "dinner",
+                "participant_member_ids": [member_id],
+            }
+        ],
+    )
+    added = client.post(
+        f"/api/v1/household-members/{member_id}/restrictions",
+        headers=_headers(owner),
+        json={"kind": "allergy", "value": "peanuts", "hard": True},
+    )
+    assert added.status_code == 201, added.text
+    restriction_blocked = client.post(
+        f"/api/v1/meal-plans/{restriction_plan['id']}/accept",
+        headers=_headers(owner),
+    )
+    assert restriction_blocked.status_code == 422
+    assert restriction_blocked.json()["code"] == "RECIPE_RESTRICTED"
+    assert restriction_blocked.json()["actions"][0]["kind"] == "replace_recipe"
+
+
+def test_accept_replaces_a_legacy_pre_accept_shopping_list(
+    client, owner, session_factory
+):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    recipe = _create_recipe(
+        client,
+        owner,
+        "Rice dinner",
+        ["dinner"],
+        [
+            {
+                "original_text": "100 g rice",
+                "food_phrase": "rice",
+                "quantity_grams": 100,
+                "unit": "g",
+            }
+        ],
+    )
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [
+            {
+                "meal_date": "2026-07-20",
+                "meal_type": "dinner",
+                "participant_member_ids": [member_id],
+            }
+        ],
+    )
+
+    with session_factory() as db:
+        stored_plan = db.get(MealPlan, plan["id"])
+        stale = ShoppingList(
+            household_id=stored_plan.household_id,
+            meal_plan_id=stored_plan.id,
+            name="Stale pre-accept list",
+            active=True,
+        )
+        db.add(stale)
+        db.flush()
+        db.add(
+            ShoppingItem(
+                shopping_list_id=stale.id,
+                display_name="rice",
+                exact_quantity=1,
+                purchase_quantity=1,
+                unit="g",
+                category="Other",
+                checked=False,
+                manual=False,
+            )
+        )
+        db.commit()
+        stale_id = stale.id
+
+    accepted = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    )
+    assert accepted.status_code == 200, accepted.text
+    active = client.get("/api/v1/shopping-lists/active").json()
+    assert active["id"] != stale_id
+    assert active["meal_plan_id"] == plan["id"]
+    assert len(active["items"]) == 1
+    assert active["items"][0]["display_name"] == "rice"
+    assert active["items"][0]["exact_quantity"] == "100.0000"
+
+    with session_factory() as db:
+        assert db.get(ShoppingList, stale_id).active is False
+
+
+def test_legacy_accepted_plan_without_list_can_be_recovered(client, owner, session_factory):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    recipe = _create_recipe(client, owner, "Legacy dinner", ["dinner"])
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [
+            {
+                "meal_date": "2026-07-20",
+                "meal_type": "dinner",
+                "participant_member_ids": [member_id],
+            }
+        ],
+    )
+    with session_factory() as db:
+        stored = db.get(MealPlan, plan["id"])
+        stored.status = PlanStatus.ACCEPTED.value
+        stored.accepted_at = datetime.now(timezone.utc)
+        stored.version += 1
+        db.commit()
+
+    recovered = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    )
+    assert recovered.status_code == 200, recovered.text
+    with session_factory() as db:
+        lists = db.scalars(
+            select(ShoppingList).where(ShoppingList.meal_plan_id == plan["id"])
+        ).all()
+        assert len(lists) == 1

@@ -32,4 +32,16 @@ describe('App', () => {
     expect(screen.getAllByText(/nutrition from good food/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/food-data match|match foods|fallback calculation/i)).not.toBeInTheDocument()
   })
+
+  it('warns until a custom recipe has a meal type', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes/new']}><App/></MemoryRouter></QueryClientProvider>)
+
+    expect(screen.getByText(/not used for meal planning yet/i)).toBeInTheDocument()
+    await user.click(screen.getByText('Select meal types'))
+    await user.click(screen.getByRole('checkbox', { name: 'Lunch' }))
+
+    expect(screen.queryByText(/not used for meal planning yet/i)).not.toBeInTheDocument()
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+  })
 })

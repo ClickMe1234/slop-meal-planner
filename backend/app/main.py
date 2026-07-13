@@ -79,6 +79,7 @@ def create_app() -> FastAPI:
                 "code": exc.code,
                 "detail": exc.detail,
                 "field_errors": [],
+                "actions": exc.actions,
                 "trace_id": trace_id,
             },
         )
@@ -99,6 +100,7 @@ def create_app() -> FastAPI:
                     {"location": list(error["loc"]), "message": error["msg"], "type": error["type"]}
                     for error in exc.errors()
                 ],
+                "actions": [],
                 "trace_id": trace_id,
             },
         )

@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .models import JobStatus, PlanStatus, RecipeEligibility, TargetMode, UserRole
+from .models import JobStatus, MealType, PlanStatus, RecipeEligibility, TargetMode, UserRole
 
 
 class APIModel(BaseModel):
@@ -163,6 +163,7 @@ class RecipeIngredientIn(APIModel):
     included: bool = True
     optional: bool = False
     needs_review: bool = False
+    shopping_excluded: bool = False
     food_record_id: str | None = None
 
     @model_validator(mode="after")
@@ -181,6 +182,7 @@ class RecipeCreate(APIModel):
     image_url: str | None = None
     custom_instructions: str | None = None
     publisher_nutrition: dict[str, Any] | None = None
+    meal_types: list[MealType] = Field(default_factory=list)
     ingredients: list[RecipeIngredientIn] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -189,13 +191,22 @@ class RecipeCreate(APIModel):
             raise ValueError("publisher cooking instructions are not stored")
         if self.source_type == "url" and not self.source_url:
             raise ValueError("source_url is required for URL recipes")
+        if len(set(self.meal_types)) != len(self.meal_types):
+            raise ValueError("recipe meal types must be unique")
         return self
 
 
 class RecipeReviewUpdate(VersionedUpdate):
     title: str = Field(min_length=1, max_length=300)
     yield_servings: Decimal = Field(gt=0)
+    meal_types: list[MealType] | None = None
     ingredients: list[RecipeIngredientIn] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_meal_types(self):
+        if self.meal_types is not None and len(set(self.meal_types)) != len(self.meal_types):
+            raise ValueError("recipe meal types must be unique")
+        return self
 
 
 class RecipeSummary(APIModel):
@@ -212,6 +223,9 @@ class RecipeSummary(APIModel):
     calculated_nutrition: dict[str, Any] | None = None
     nutrition_method: str | None = None
     review_count: int = 0
+    meal_types: list[MealType] = Field(default_factory=list)
+    planner_eligible: bool = False
+    planner_warnings: list[str] = Field(default_factory=list)
 
 
 class RecipeDetail(RecipeSummary):
@@ -281,8 +295,8 @@ class JobOut(APIModel):
 
 class PlanSlotIn(APIModel):
     meal_date: date
-    meal_type: str
-    participant_member_ids: list[str]
+    meal_type: MealType
+    participant_member_ids: list[str] = Field(min_length=1)
     # Slots sharing a key are cooked as one batch and allocated across dates.
     # Omit the key to cook that occurrence separately.
     batch_key: str | None = Field(default=None, max_length=80)
@@ -291,11 +305,27 @@ class PlanSlotIn(APIModel):
 
 class PlanGenerateRequest(APIModel):
     name: str = Field(min_length=1, max_length=160)
+    start_date: date | None = None
+    end_date: date | None = None
     slots: list[PlanSlotIn]
-    recipe_ids: list[str]
+    recipe_ids: list[str] = Field(default_factory=list)
     must_use_food_record_ids: list[str] = Field(default_factory=list)
     prefer_food_record_ids: list[str] = Field(default_factory=list)
     exclude_food_record_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_planning_period(self):
+        if (self.start_date is None) != (self.end_date is None):
+            raise ValueError("start_date and end_date must be supplied together")
+        if self.start_date is not None and self.end_date is not None:
+            if self.start_date > self.end_date:
+                raise ValueError("start_date cannot be after end_date")
+            if any(
+                slot.meal_date < self.start_date or slot.meal_date > self.end_date
+                for slot in self.slots
+            ):
+                raise ValueError("every meal slot must be inside the planning period")
+        return self
 
 
 class PlanOut(APIModel):
@@ -306,6 +336,11 @@ class PlanOut(APIModel):
     status: PlanStatus
     diagnostics: list[dict[str, Any]]
     version: int
+
+
+class PlanRecipeReplaceRequest(APIModel):
+    recipe_id: str
+    expected_plan_version: int = Field(ge=1)
 
 
 class PantryLotCreate(APIModel):
@@ -383,4 +418,5 @@ class ProblemDetail(APIModel):
     code: str
     detail: str
     field_errors: list[dict[str, Any]] = Field(default_factory=list)
+    actions: list[dict[str, Any]] = Field(default_factory=list)
     trace_id: str | None = None

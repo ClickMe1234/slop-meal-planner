@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { NutritionStrip } from '../components/Nutrition'
 import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader, Segmented } from '../components/ui'
+import { mealKindLabels } from '../components/MealTypePicker'
 import { demoRecipes } from '../data/demo'
 import type { Nutrition, Recipe } from '../types'
 import { api, ApiError, isDemoMode, type BackendRecipe, type DiscoveryResult, type RecipeSourceKey } from '../api/client'
@@ -13,6 +14,12 @@ const SOURCE_OPTIONS: Array<{ value: RecipeSourceKey; label: string }> = [
   { value: 'allrecipes', label: 'Allrecipes' },
 ]
 const ALL_SOURCES = SOURCE_OPTIONS.map(option => option.value)
+
+export function savedRecipePlanningBadge(recipe: Pick<Recipe, 'state' | 'mealKinds'>): { tone: 'green' | 'warning'; label: string } {
+  if (!recipe.mealKinds.length) return { tone: 'warning', label: 'Needs meal types' }
+  if (recipe.state !== 'ready') return { tone: 'warning', label: 'Needs recipe review' }
+  return { tone: 'green', label: 'Used for planning' }
+}
 
 export function RecipesPage() {
   const [query, setQuery] = useState('')
@@ -91,6 +98,8 @@ function RecipeThumbnail({ url }: { url?: string }) {
 
 function RecipeCard({ recipe, saving, importJob, onSave }: { recipe: Recipe; saving: boolean; importJob?: string; onSave: () => void }) {
   const saved = recipe.source === 'Saved recipe' || recipe.state === 'ready'
+  const missingMealTypes = saved && recipe.mealKinds.length === 0
+  const planningBadge = saved ? savedRecipePlanningBadge(recipe) : null
   const initialNutrition = recipe.nutrition ?? recipe.publisherNutrition
   const cardRef = useRef<HTMLDivElement>(null)
   const [previewEnabled, setPreviewEnabled] = useState(false)
@@ -128,8 +137,9 @@ function RecipeCard({ recipe, saving, importJob, onSave }: { recipe: Recipe; sav
     <div className="recipe-content">
       <div className="recipe-title"><h2>{recipe.title}</h2>{recipe.sourceUrl && <a href={recipe.sourceUrl} target="_blank" rel="noreferrer" aria-label={`Open ${recipe.title} source`}><ExternalLink size={17}/></a>}</div>
       <p className="recipe-meta">{yieldServings ? `Serves ${yieldServings}` : 'Yield not reported'}{recipe.mealKinds.length ? ` · ${recipe.mealKinds.join(' · ')}` : ''}</p>
-      {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>Nutrition from {nutritionSource} · per serving</span><Badge tone="green">{saved ? 'Used for planning' : 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
-      <div className="recipe-actions">{saved ? <Button variant="secondary" disabled>Saved</Button> : importJob ? <Link to={`/imports/${importJob}/review`} className="button button--secondary">Finish saving</Link> : <Button disabled={saving} onClick={onSave}>{saving ? 'Saving…' : 'Save recipe'}</Button>}</div>
+      {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>Nutrition from {nutritionSource} · per serving</span><Badge tone={planningBadge?.tone ?? 'green'}>{planningBadge?.label ?? 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
+      {missingMealTypes && <div className="recipe-planning-note recipe-planning-note--warning" role="status"><strong>Not used for meal planning</strong><span>Add breakfast, lunch, dinner or snack so the planner knows where this recipe belongs.</span></div>}
+      <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{missingMealTypes ? 'Add meal types' : 'Edit meal types'}</Link> : importJob ? <Link to={`/imports/${importJob}/review`} className="button button--secondary">Finish saving</Link> : <Button disabled={saving} onClick={onSave}>{saving ? 'Saving…' : 'Save recipe'}</Button>}</div>
     </div>
   </Card></div>
 }
@@ -179,8 +189,8 @@ function mapSavedRecipe(recipe: BackendRecipe): Recipe {
     nutritionSource: reported ? 'publisher' : undefined,
     nutritionSourceName: sourceName(recipe),
     state: reported && recipe.yield_servings ? 'ready' : 'no_nutrition',
-    reviewCount: 0,
-    mealKinds: [],
+    reviewCount: recipe.review_count ?? 0,
+    mealKinds: mealKindLabels(recipe.meal_types),
   }
 }
 

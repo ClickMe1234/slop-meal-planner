@@ -5,8 +5,24 @@ const csrfStorageKey = 'savour-csrf'
 
 let csrfToken = sessionStorage.getItem(csrfStorageKey)
 
+export interface ApiAction {
+  kind?: string
+  label?: string
+  href?: string
+  recipe_id?: string
+  recipe_version_id?: string
+  ingredient_id?: string
+  batch_id?: string
+  suggestion?: string
+}
+
 export class ApiError extends Error {
-  constructor(public status: number, message: string, public code?: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public code?: string,
+    public actions: ApiAction[] = [],
+  ) {
     super(message)
   }
 }
@@ -31,10 +47,31 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...options
   })
   if (!response.ok) {
-    const problem = await response.json().catch(() => null) as { detail?: string; code?: string } | null
-    throw new ApiError(response.status, problem?.detail ?? 'The request could not be completed.', problem?.code)
+    const problem = await response.json().catch(() => null) as { detail?: string; code?: string; action?: ApiAction; actions?: ApiAction[] } | null
+    throw new ApiError(
+      response.status,
+      problem?.detail ?? 'The request could not be completed.',
+      problem?.code,
+      problem?.actions ?? (problem?.action ? [problem.action] : []),
+    )
   }
   return response.status === 204 ? undefined as T : response.json() as Promise<T>
+}
+
+async function listAllRecipes(query = '', mealType?: BackendMealType): Promise<{ items: BackendRecipe[]; total: number }> {
+  const items: BackendRecipe[] = []
+  let page = 1
+  let total = 0
+  do {
+    const result = await request<{ items: BackendRecipe[]; total: number }>(
+      `/recipes?q=${encodeURIComponent(query)}&page=${page}&page_size=100${mealType ? `&meal_type=${encodeURIComponent(mealType)}` : ''}`,
+    )
+    total = result.total
+    if (!result.items.length) break
+    items.push(...result.items)
+    page += 1
+  } while (items.length < total)
+  return { items, total }
 }
 
 export const api = {
@@ -66,10 +103,10 @@ export const api = {
   listRestrictions: (memberId: string) => request<BackendRestriction[]>(`/household-members/${memberId}/restrictions`),
   addRestriction: (memberId: string, payload: { kind: BackendRestriction['kind']; value: string; hard?: boolean }) => request<BackendRestriction>(`/household-members/${memberId}/restrictions`, { method: 'POST', body: JSON.stringify(payload) }),
   deleteRestriction: (memberId: string, restrictionId: string) => request<void>(`/household-members/${memberId}/restrictions/${restrictionId}`, { method: 'DELETE' }),
-  listRecipes: (query = '') => request<{ items: BackendRecipe[]; total: number }>(`/recipes?q=${encodeURIComponent(query)}`),
+  listRecipes: listAllRecipes,
   createRecipe: (payload: Record<string, unknown>) => request<BackendRecipeDetail>('/recipes', { method: 'POST', body: JSON.stringify(payload) }),
   getRecipe: (id: string) => request<BackendRecipeDetail>(`/recipes/${id}`),
-  saveRecipeReview: (id: string, payload: { expected_version: number; title: string; yield_servings: number; ingredients: Array<Record<string, unknown>> }) => request<BackendRecipeDetail>(`/recipes/${id}/review`, { method: 'PUT', body: JSON.stringify(payload) }),
+  saveRecipeReview: (id: string, payload: { expected_version: number; title: string; yield_servings: number; meal_types?: BackendMealType[]; ingredients: Array<Record<string, unknown>> }) => request<BackendRecipeDetail>(`/recipes/${id}/review`, { method: 'PUT', body: JSON.stringify(payload) }),
   searchFoods: (query = '') => request<{ items: BackendFood[]; total: number; remote_error?: string }>(`/foods?q=${encodeURIComponent(query)}&page_size=100`),
   searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[]) => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}`),
   nutritionPreview: (url: string) => request<DiscoveryNutritionPreview>(`/recipe-discovery/nutrition-preview?url=${encodeURIComponent(url)}`),
@@ -85,6 +122,7 @@ export const api = {
   generatePlan: (payload: Record<string, unknown>) => request<BackendPlan>('/meal-plans/generate', { method: 'POST', body: JSON.stringify(payload) }),
   listPlans: () => request<BackendPlan[]>('/meal-plans'),
   getPlan: (id: string) => request<BackendPlanDetail>(`/meal-plans/${id}`),
+  replacePlanRecipe: (planId: string, occurrenceId: string, recipeId: string, expectedPlanVersion: number) => request<BackendPlanDetail>(`/meal-plans/${planId}/occurrences/${occurrenceId}/recipe`, { method: 'PUT', body: JSON.stringify({ recipe_id: recipeId, expected_plan_version: expectedPlanVersion }) }),
   acceptPlan: (id: string) => request<BackendPlan>(`/meal-plans/${id}/accept`, { method: 'POST' }),
   markBatchCooked: (planId: string, batchId: string) => request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, { method: 'POST' }),
   buildShoppingList: (planId: string) => request<BackendShoppingList>('/shopping-lists/build', { method: 'POST', body: JSON.stringify({ meal_plan_id: planId, name: 'Current shopping list' }) }),
@@ -93,6 +131,8 @@ export const api = {
 }
 
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE !== 'false'
+
+export type BackendMealType = 'breakfast' | 'lunch' | 'dinner' | 'snack'
 
 export interface BackendRecipe {
   id: string
@@ -114,6 +154,9 @@ export interface BackendRecipe {
   calculated_nutrition?: Record<string, number>
   nutrition_method?: 'publisher' | 'complete'
   review_count?: number
+  meal_types: BackendMealType[]
+  planner_eligible: boolean
+  planner_warnings: string[]
 }
 
 export interface BackendRecipeDetail extends BackendRecipe {
@@ -130,6 +173,7 @@ export interface BackendRecipeDetail extends BackendRecipe {
     included: boolean
     optional: boolean
     needs_review: boolean
+    shopping_excluded: boolean
     food_record_id?: string
   }>
 }
@@ -263,8 +307,14 @@ export interface BackendPlanDetail {
     recipe_title: string
     source_url?: string
     batch_servings: number
+    planned_cook_date?: string
     nutrition_per_serving?: Record<string, number>
     cooked_at?: string
     portions: Array<{ member_id: string; servings: number }>
+  }>
+  daily_nutrition?: Array<{
+    meal_date: string
+    totals: Record<string, number>
+    members: Array<{ member_id: string; totals: Record<string, number> }>
   }>
 }

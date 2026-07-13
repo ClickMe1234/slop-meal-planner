@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -39,6 +40,13 @@ class UserRole(str, enum.Enum):
 class TargetMode(str, enum.Enum):
     CALORIE = "calorie"
     MACROS = "macros"
+
+
+class MealType(str, enum.Enum):
+    BREAKFAST = "breakfast"
+    LUNCH = "lunch"
+    DINNER = "dinner"
+    SNACK = "snack"
 
 
 class RecipeEligibility(str, enum.Enum):
@@ -160,6 +168,26 @@ class Recipe(IdMixin, AuditMixin, Base):
     image_url: Mapped[str | None] = mapped_column(Text)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    meal_type_tags: Mapped[list[RecipeMealType]] = relationship(
+        back_populates="recipe", cascade="all, delete-orphan", order_by="RecipeMealType.meal_type"
+    )
+
+
+class RecipeMealType(IdMixin, Base):
+    __tablename__ = "recipe_meal_type"
+    __table_args__ = (
+        UniqueConstraint("recipe_id", "meal_type"),
+        CheckConstraint(
+            "meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')",
+            name="ck_recipe_meal_type_valid",
+        ),
+    )
+
+    recipe_id: Mapped[str] = mapped_column(ForeignKey("recipe.id", ondelete="CASCADE"), index=True)
+    meal_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+
+    recipe: Mapped[Recipe] = relationship(back_populates="meal_type_tags")
+
 
 class RecipeVersion(IdMixin, Base):
     __tablename__ = "recipe_version"
@@ -193,6 +221,7 @@ class RecipeIngredient(IdMixin, Base):
     included: Mapped[bool] = mapped_column(Boolean, default=True)
     optional: Mapped[bool] = mapped_column(Boolean, default=False)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    shopping_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
     food_record_id: Mapped[str | None] = mapped_column(ForeignKey("food_record.id", ondelete="SET NULL"), index=True)
 
     recipe_version: Mapped[RecipeVersion] = relationship(back_populates="ingredients")

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..auth import AuthContext, get_auth_context, require_csrf, require_owner
@@ -13,10 +13,17 @@ from ..models import (
     FoodRecord,
     Job,
     JobStatus,
+    MealBatch,
+    MealPlan,
+    MealType,
+    PantryReservation,
+    PlanStatus,
     Recipe,
     RecipeEligibility,
     RecipeIngredient,
+    RecipeMealType,
     RecipeVersion,
+    ShoppingList,
 )
 from ..schemas import (
     FoodRecordCreate,
@@ -32,6 +39,7 @@ from ..schemas import (
 from ..services.food_search import fetch_and_cache_usda_foods, normalise_food_query
 from ..services.ingredients import parse_ingredient
 from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
+from ..services.pantry import reserve_plan_batches
 
 router = APIRouter(tags=["recipes and food data"])
 
@@ -42,6 +50,23 @@ def _latest_version(db: Session, recipe_id: str) -> RecipeVersion | None:
         .where(RecipeVersion.recipe_id == recipe_id)
         .order_by(RecipeVersion.version_number.desc())
     )
+
+
+def _meal_types(db: Session, recipe: Recipe) -> list[MealType]:
+    return [
+        MealType(value)
+        for value in db.scalars(
+            select(RecipeMealType.meal_type)
+            .where(RecipeMealType.recipe_id == recipe.id)
+            .order_by(RecipeMealType.meal_type)
+        ).all()
+    ]
+
+
+def _replace_meal_types(db: Session, recipe: Recipe, meal_types: list[MealType]) -> None:
+    db.execute(delete(RecipeMealType).where(RecipeMealType.recipe_id == recipe.id))
+    for meal_type in meal_types:
+        db.add(RecipeMealType(recipe_id=recipe.id, meal_type=meal_type.value))
 
 
 def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
@@ -70,40 +95,63 @@ def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
                 included=row.included and not parsed.optional,
             )
         ingredients.append(item)
-    calculation = latest_calculation(db, version.id)
     reported_values = publisher_values(version)
+    calculation = latest_calculation(db, version.id)
     nutrition_values = (
-        calculation.per_serving_values
-        if calculation is not None and calculation.status == "publisher"
-        else ({key: float(value) for key, value in reported_values.items()} if reported_values else None)
+        {key: float(value) for key, value in reported_values.items()}
+        if reported_values
+        else (
+            calculation.per_serving_values
+            if calculation is not None and calculation.status == "complete"
+            else None
+        )
+    )
+    nutrition_method = (
+        "publisher"
+        if reported_values is not None
+        else ("complete" if calculation is not None and calculation.status == "complete" else None)
     )
     effective_eligibility = (
         RecipeEligibility.PLANNER_READY
         if reported_values is not None and version.yield_servings
         else recipe.eligibility
     )
-    recipe_fields = RecipeSummary.model_validate(recipe).model_dump(
-        exclude={
-            "eligibility",
-            "yield_servings",
-            "publisher_nutrition",
-            "calculated_nutrition",
-            "nutrition_method",
-            "review_count",
-        }
-    )
+    meal_types = _meal_types(db, recipe)
+    planner_warnings = []
+    if not meal_types:
+        planner_warnings.append(
+            "Choose at least one meal type before this recipe can be used for meal planning."
+        )
+    if reported_values is None or not version.yield_servings:
+        planner_warnings.append(
+            "Complete publisher-reported per-serving nutrition and a serving yield are required."
+        )
     summary = RecipeSummary(
-        **recipe_fields,
+        id=recipe.id,
+        title=recipe.title,
         eligibility=effective_eligibility,
+        source_type=recipe.source_type,
+        source_url=recipe.source_url,
+        publisher=recipe.publisher,
+        image_url=recipe.image_url,
+        version=recipe.version,
         yield_servings=version.yield_servings,
         publisher_nutrition=version.publisher_nutrition,
         calculated_nutrition=nutrition_values,
-        nutrition_method="publisher" if reported_values is not None else None,
+        nutrition_method=nutrition_method,
         review_count=(
             0
             if recipe.source_type == "url"
             else sum(1 for ingredient in version.ingredients if ingredient.included and ingredient.needs_review)
         ),
+        meal_types=meal_types,
+        planner_eligible=(
+            effective_eligibility == RecipeEligibility.PLANNER_READY
+            and reported_values is not None
+            and bool(version.yield_servings)
+            and bool(meal_types)
+        ),
+        planner_warnings=planner_warnings,
     )
     return RecipeDetail(
         **summary.model_dump(),
@@ -117,6 +165,7 @@ def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
 @router.get("/recipes", response_model=dict)
 def list_recipes(
     q: str = Query(default="", max_length=200),
+    meal_type: MealType | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=24, ge=1, le=100),
     context: AuthContext = Depends(get_auth_context),
@@ -125,6 +174,10 @@ def list_recipes(
     conditions = [Recipe.household_id == context.user.household_id, Recipe.archived_at.is_(None)]
     if q.strip():
         conditions.append(func.lower(Recipe.title).contains(q.strip().lower()))
+    if meal_type is not None:
+        conditions.append(
+            Recipe.meal_type_tags.any(RecipeMealType.meal_type == meal_type.value)
+        )
     total = db.scalar(select(func.count(Recipe.id)).where(*conditions)) or 0
     recipes = db.scalars(
         select(Recipe)
@@ -167,6 +220,8 @@ def create_recipe(
     )
     db.add(recipe)
     db.flush()
+    for meal_type in payload.meal_types:
+        db.add(RecipeMealType(recipe_id=recipe.id, meal_type=meal_type.value))
     version = RecipeVersion(
         recipe_id=recipe.id,
         version_number=1,
@@ -184,6 +239,74 @@ def create_recipe(
     db.commit()
     db.refresh(recipe)
     return _recipe_detail(db, recipe)
+
+
+def _resync_plan_batches_after_review(
+    db: Session,
+    household_id: str,
+    previous_version_id: str,
+    next_version_id: str,
+) -> None:
+    """Move editable plans to the reviewed version without touching completed shopping."""
+
+    batches = db.scalars(
+        select(MealBatch)
+        .join(MealPlan, MealPlan.id == MealBatch.meal_plan_id)
+        .where(
+            MealBatch.recipe_version_id == previous_version_id,
+            MealPlan.household_id == household_id,
+            MealPlan.status.in_([PlanStatus.READY.value, PlanStatus.ACCEPTED.value]),
+        )
+    ).all()
+    plan_ids = sorted({batch.meal_plan_id for batch in batches})
+    plans = {
+        plan.id: plan
+        for plan in db.scalars(
+            select(MealPlan)
+            .where(MealPlan.id.in_(plan_ids))
+            .order_by(MealPlan.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).all()
+    }
+    # A replacement may have completed while this review waited for a plan
+    # lock. Refresh the batches and only move those still using the reviewed
+    # version so the newer choice is never overwritten.
+    batch_ids = [batch.id for batch in batches]
+    batches = db.scalars(
+        select(MealBatch)
+        .where(
+            MealBatch.id.in_(batch_ids),
+            MealBatch.recipe_version_id == previous_version_id,
+        )
+        .execution_options(populate_existing=True)
+    ).all()
+    reserve_again: list[MealBatch] = []
+    changed_plans: set[str] = set()
+    for batch in batches:
+        plan = plans.get(batch.meal_plan_id)
+        if plan is None or plan.status not in {
+            PlanStatus.READY.value,
+            PlanStatus.ACCEPTED.value,
+        }:
+            continue
+        if plan.status == PlanStatus.ACCEPTED.value:
+            has_shopping_list = db.scalar(
+                select(ShoppingList.id).where(ShoppingList.meal_plan_id == plan.id).limit(1)
+            )
+            if has_shopping_list:
+                continue
+            db.execute(
+                delete(PantryReservation).where(PantryReservation.meal_batch_id == batch.id)
+            )
+            reserve_again.append(batch)
+        batch.recipe_version_id = next_version_id
+        changed_plans.add(plan.id)
+    for plan_id in changed_plans:
+        plans[plan_id].version += 1
+    if reserve_again:
+        db.flush()
+        reserve_plan_batches(db, household_id, reserve_again)
 
 
 @router.get("/recipes/{recipe_id}", response_model=RecipeDetail)
@@ -207,7 +330,9 @@ def save_recipe_review(
 ):
     """Save reviewed fields as a new immutable recipe version."""
 
-    recipe = db.get(Recipe, recipe_id)
+    recipe = db.scalar(
+        select(Recipe).where(Recipe.id == recipe_id).with_for_update()
+    )
     if recipe is None or recipe.household_id != context.user.household_id:
         raise NotFoundError("Recipe")
     if recipe.version != payload.expected_version:
@@ -238,6 +363,8 @@ def save_recipe_review(
                 **item.model_dump(),
             )
         )
+    if payload.meal_types is not None:
+        _replace_meal_types(db, recipe, payload.meal_types)
     recipe.title = payload.title
     recipe.eligibility = (
         RecipeEligibility.PLANNER_READY.value
@@ -245,6 +372,12 @@ def save_recipe_review(
         else RecipeEligibility.DRAFT.value
     )
     recipe.version += 1
+    _resync_plan_batches_after_review(
+        db,
+        context.user.household_id,
+        previous.id,
+        next_version.id,
+    )
     db.commit()
     db.refresh(recipe)
     return _recipe_detail(db, recipe)

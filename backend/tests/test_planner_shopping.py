@@ -59,6 +59,28 @@ def test_planner_never_silently_relaxes_hard_tolerance():
         choose_shared_recipe([candidate], [participant])
 
 
+def test_stored_preference_terms_softly_rank_feasible_recipes():
+    participant = ParticipantTarget(
+        "member", "calorie", Decimal("25"), Decimal("2000"), None, None, None
+    )
+    spinach = RecipeCandidate(
+        "spinach", "v1", {"energy_kcal": Decimal("500")}, ingredient_text="spinach pasta"
+    )
+    broccoli = RecipeCandidate(
+        "broccoli", "v2", {"energy_kcal": Decimal("500")}, ingredient_text="broccoli pasta"
+    )
+
+    preferred = choose_shared_recipe(
+        [broccoli, spinach], [participant], preferred_terms=frozenset({"spinach"})
+    )
+    disliked = choose_shared_recipe(
+        [spinach, broccoli], [participant], disliked_terms=frozenset({"spinach"})
+    )
+
+    assert preferred.candidate.recipe_id == "spinach"
+    assert disliked.candidate.recipe_id == "broccoli"
+
+
 def test_accepted_plan_reservations_reduce_the_shopping_remainder(db):
     household = Household(name="Home")
     db.add(household)
