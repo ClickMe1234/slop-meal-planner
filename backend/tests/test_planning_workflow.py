@@ -250,6 +250,25 @@ def test_infeasible_plan_can_be_retried_in_best_effort_mode(
     assert infeasible.status_code == 422
     assert infeasible.json()["code"] == "NUTRITION_TARGET_INFEASIBLE"
     assert infeasible.json()["actions"][0]["kind"] == "retry_best_effort"
+    assert infeasible.json()["detail"] == (
+        "The available recipes could not meet every daily nutrition target."
+    )
+    assert infeasible.json()["issues"] == [
+        {
+            "date": "2026-07-20",
+            "member": "owner",
+            "violations": [
+                {
+                    "nutrient": "calories",
+                    "actual": "200",
+                    "low": "475",
+                    "high": "525",
+                    "kind": "range",
+                    "message": "Calories: 200 kcal (allowed 475–525 kcal)",
+                }
+            ],
+        }
+    ]
 
     retried = client.post(
         "/api/v1/meal-plans/generate",

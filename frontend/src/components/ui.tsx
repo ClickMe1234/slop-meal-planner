@@ -36,7 +36,7 @@ export function EmptyState({ icon, title, description, action }: { icon?: ReactN
 
 export function Notice({ tone = 'info', title, children }: { tone?: 'info' | 'success' | 'warning'; title: string; children: ReactNode }) {
   const Icon = tone === 'success' ? CheckCircle2 : tone === 'warning' ? CircleAlert : Sparkles
-  return <div className={`notice notice--${tone}`}><Icon size={19} aria-hidden /><div><strong>{title}</strong><p>{children}</p></div></div>
+  return <div className={`notice notice--${tone}`}><Icon size={19} aria-hidden /><div><strong>{title}</strong><div className="notice-copy">{children}</div></div></div>
 }
 
 export function Loading({ label = 'Loading' }: { label?: string }) {

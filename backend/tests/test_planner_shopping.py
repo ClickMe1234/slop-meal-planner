@@ -91,6 +91,27 @@ def test_daily_bounds_allow_meal_allocation_deviations_to_offset():
     )
 
 
+def test_macro_minimum_has_ten_gram_daily_tolerance_and_readable_messages():
+    target = ParticipantTarget(
+        "member", "calorie", Decimal("100"), Decimal("1800"), None, None, None,
+        tolerance_percent=Decimal("5"), protein_min_g=Decimal("130"),
+    )
+
+    assert aggregate_nutrition_violations(
+        [target], {"energy_kcal": Decimal("1800"), "protein_g": Decimal("120")}
+    ) == []
+
+    violations = aggregate_nutrition_violations(
+        [target], {"energy_kcal": Decimal("1705.25"), "protein_g": Decimal("119")}
+    )
+
+    assert violations == [
+        "Calories: 1705.25 kcal (allowed 1710–1890 kcal)",
+        "Protein: 119 g (minimum 120 g after tolerance)",
+    ]
+    assert all("E+" not in message for message in violations)
+
+
 def test_calorie_mode_minimum_steers_recipe_ranking_without_penalising_excess():
     participant = ParticipantTarget(
         "member", "calorie", Decimal("25"), Decimal("2000"), None, None, None,

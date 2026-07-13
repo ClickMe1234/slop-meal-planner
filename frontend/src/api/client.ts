@@ -16,12 +16,28 @@ export interface ApiAction {
   suggestion?: string
 }
 
+export interface ApiNutritionViolation {
+  nutrient: string
+  actual: string
+  low?: string
+  high?: string
+  kind: 'range' | 'minimum' | 'maximum'
+  message: string
+}
+
+export interface ApiNutritionIssue {
+  date: string
+  member: string
+  violations: ApiNutritionViolation[]
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
     public code?: string,
     public actions: ApiAction[] = [],
+    public issues: ApiNutritionIssue[] = [],
   ) {
     super(message)
   }
@@ -47,12 +63,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...options
   })
   if (!response.ok) {
-    const problem = await response.json().catch(() => null) as { detail?: string; code?: string; action?: ApiAction; actions?: ApiAction[] } | null
+    const problem = await response.json().catch(() => null) as { detail?: string; code?: string; action?: ApiAction; actions?: ApiAction[]; issues?: ApiNutritionIssue[] } | null
     throw new ApiError(
       response.status,
       problem?.detail ?? 'The request could not be completed.',
       problem?.code,
       problem?.actions ?? (problem?.action ? [problem.action] : []),
+      problem?.issues ?? [],
     )
   }
   return response.status === 204 ? undefined as T : response.json() as Promise<T>

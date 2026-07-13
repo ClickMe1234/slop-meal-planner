@@ -272,7 +272,8 @@ export function TargetSettings() {
         )}
         <Notice title="How calories and macros work">
           In calorie mode, calories stay the main target and positive macro
-          minimums steer recipe selection and act as hard daily floors. A 0 g
+          minimums steer recipe selection and act as daily floors with a 10 g
+          allowance. For example, a 130 g minimum accepts 120 g or more. A 0 g
           minimum is ignored.
         </Notice>
       </Card>

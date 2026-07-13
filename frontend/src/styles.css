@@ -112,7 +112,8 @@ h2 { margin-bottom: 6px; }
 .segmented button.active { background: var(--surface); box-shadow: 0 2px 6px rgba(0,0,0,.08); color: var(--text); font-weight: 700; }
 .notice { align-items: flex-start; background: var(--blue-soft); border: 1px solid color-mix(in srgb, var(--blue) 25%, transparent); border-radius: 12px; color: var(--blue); display: flex; gap: 10px; padding: 13px 15px; }
 .notice strong { color: var(--text); display: block; font-size: .86rem; }
-.notice p { color: var(--muted); font-size: .79rem; line-height: 1.5; margin: 3px 0 0; }
+.notice-copy { color: var(--muted); font-size: .79rem; line-height: 1.5; margin: 3px 0 0; }
+.notice-copy>p { margin:0; }
 .notice--success { background: var(--primary-soft); border-color: color-mix(in srgb, var(--primary) 25%, transparent); color: var(--primary); }
 .notice--warning { background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 25%, transparent); color: var(--warning); }
 .progress-bar { background: var(--surface-3); border-radius: 99px; height: 7px; overflow: hidden; }
@@ -468,6 +469,13 @@ button.tag { cursor: pointer; font: inherit; }
 .planner-remote-card>a { color:var(--muted); }
 .planner-generation-error { align-items:center;display:flex;gap:14px;margin-bottom:18px;padding:12px; }
 .planner-generation-error .notice { flex:1;margin:0; }
+.nutrition-plan-issues { display:grid;gap:8px;margin-top:10px;max-height:320px;overflow:auto; }
+.nutrition-plan-issue-day { background:color-mix(in srgb,var(--surface) 70%,transparent);border-radius:8px;padding:9px 11px; }
+.nutrition-plan-issue-day>strong { display:block;font-size:.78rem;margin-bottom:4px; }
+.nutrition-plan-issue-day ul { display:grid;gap:4px;list-style:none;margin:0;padding:0; }
+.nutrition-plan-issue-day li { display:grid;gap:1px;font-size:.75rem; }
+.nutrition-plan-issue-day li b { color:var(--text); }
+.nutrition-plan-issue-day li span { color:var(--muted); }
 .modal-backdrop { align-items:center;background:rgba(18,25,22,.58);display:flex;inset:0;justify-content:center;padding:20px;position:fixed;z-index:50; }
 .recipe-save-modal { display:grid;gap:18px;max-height:calc(100vh - 40px);max-width:520px;overflow:auto;padding:28px;position:relative;width:100%; }
 .recipe-save-modal h2,.recipe-save-modal p { margin:0; }
