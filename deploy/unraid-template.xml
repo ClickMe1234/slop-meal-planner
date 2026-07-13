@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Meal Planner Web</Name>
+  <Repository>meal-planner:0.1.0</Repository>
+  <Registry></Registry>
+  <Network>meal-planner_internal</Network>
+  <MyIP></MyIP>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support></Support>
+  <Project></Project>
+  <Overview>Private household meal planner web service. This template represents the web container only and requires the PostgreSQL, Redis, worker, and scheduler services from deploy/compose.yaml. Docker Compose Manager is the supported Unraid installation method.</Overview>
+  <Category>Productivity: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8000]</WebUI>
+  <Icon></Icon>
+  <ExtraParams>--init --user 99:100</ExtraParams>
+  <PostArgs>web</PostArgs>
+  <CPUset></CPUset>
+  <DateInstalled></DateInstalled>
+  <DonateText></DonateText>
+  <DonateLink></DonateLink>
+  <Requires>PostgreSQL 17, Redis 7.4, and the worker/scheduler containers declared in deploy/compose.yaml.</Requires>
+  <Config Name="Web UI" Target="8000" Default="8080" Mode="tcp" Description="LAN-only web port" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Application data" Target="/data" Default="/mnt/user/appdata/meal-planner/data" Mode="rw" Description="Custom images and exports" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/meal-planner/data</Config>
+  <Config Name="Database URL" Target="MEAL_PLANNER_DATABASE_URL" Default="" Mode="" Description="Internal PostgreSQL SQLAlchemy URL" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Celery broker" Target="CELERY_BROKER_URL" Default="redis://redis:6379/0" Mode="" Description="Internal Redis broker URL" Type="Variable" Display="advanced" Required="true" Mask="false">redis://redis:6379/0</Config>
+  <Config Name="Celery results" Target="CELERY_RESULT_BACKEND" Default="redis://redis:6379/1" Mode="" Description="Internal Redis result URL" Type="Variable" Display="advanced" Required="true" Mask="false">redis://redis:6379/1</Config>
+  <Config Name="Secret key" Target="MEAL_PLANNER_SECRET_KEY" Default="" Mode="" Description="Long random application secret" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Setup token" Target="MEAL_PLANNER_SETUP_TOKEN" Default="" Mode="" Description="One-time first-owner setup token" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Allowed hosts" Target="MEAL_PLANNER_ALLOWED_HOSTS" Default="localhost,meal-planner" Mode="" Description="Comma-separated LAN hostnames and addresses" Type="Variable" Display="always" Required="true" Mask="false">localhost,meal-planner</Config>
+  <Config Name="Secure cookies" Target="MEAL_PLANNER_COOKIE_SECURE" Default="false" Mode="" Description="Set true only when serving through HTTPS" Type="Variable" Display="advanced" Required="true" Mask="false">false</Config>
+  <Config Name="Timezone" Target="MEAL_PLANNER_TIMEZONE" Default="Europe/London" Mode="" Description="IANA timezone" Type="Variable" Display="advanced" Required="true" Mask="false">Europe/London</Config>
+</Container>

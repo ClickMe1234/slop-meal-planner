@@ -1,0 +1,314 @@
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session
+
+from ..auth import AuthContext, get_auth_context, require_csrf, require_owner
+from ..db import get_db
+from ..errors import DomainError, NotFoundError
+from ..discovery import canonicalize_url
+from ..discovery.errors import DiscoveryError
+from ..models import (
+    FoodNutrient,
+    FoodRecord,
+    Job,
+    JobStatus,
+    Recipe,
+    RecipeEligibility,
+    RecipeIngredient,
+    RecipeVersion,
+)
+from ..schemas import (
+    FoodRecordCreate,
+    FoodRecordOut,
+    ImportRequest,
+    JobOut,
+    NutritionCalculationOut,
+    RecipeCreate,
+    RecipeDetail,
+    RecipeReviewUpdate,
+    RecipeSummary,
+)
+from ..services.nutrition import calculate_recipe, latest_calculation
+
+router = APIRouter(tags=["recipes and food data"])
+
+
+def _latest_version(db: Session, recipe_id: str) -> RecipeVersion | None:
+    return db.scalar(
+        select(RecipeVersion)
+        .where(RecipeVersion.recipe_id == recipe_id)
+        .order_by(RecipeVersion.version_number.desc())
+    )
+
+
+def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
+    version = _latest_version(db, recipe.id)
+    if version is None:
+        raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+    calculation = latest_calculation(db, version.id)
+    ingredients = [
+        {column.name: getattr(row, column.name) for column in row.__table__.columns}
+        for row in version.ingredients
+    ]
+    return RecipeDetail(
+        **RecipeSummary.model_validate(recipe).model_dump(),
+        recipe_version_id=version.id,
+        version_number=version.version_number,
+        yield_servings=version.yield_servings,
+        custom_instructions=version.custom_instructions,
+        publisher_nutrition=version.publisher_nutrition,
+        ingredients=ingredients,
+        calculated_nutrition=calculation.per_serving_values if calculation else None,
+    )
+
+
+@router.get("/recipes", response_model=dict)
+def list_recipes(
+    q: str = Query(default="", max_length=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=24, ge=1, le=100),
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    conditions = [Recipe.household_id == context.user.household_id, Recipe.archived_at.is_(None)]
+    if q.strip():
+        conditions.append(func.lower(Recipe.title).contains(q.strip().lower()))
+    total = db.scalar(select(func.count(Recipe.id)).where(*conditions)) or 0
+    recipes = db.scalars(
+        select(Recipe)
+        .where(*conditions)
+        .order_by(Recipe.title)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "items": [RecipeSummary.model_validate(recipe).model_dump(mode="json") for recipe in recipes],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+    }
+
+
+@router.post("/recipes", response_model=RecipeDetail, status_code=201)
+def create_recipe(
+    payload: RecipeCreate,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    eligibility = RecipeEligibility.NEEDS_REVIEW.value
+    if payload.yield_servings and payload.ingredients and not any(i.needs_review for i in payload.ingredients):
+        eligibility = RecipeEligibility.DRAFT.value
+    recipe = Recipe(
+        household_id=context.user.household_id,
+        title=payload.title,
+        source_type=payload.source_type,
+        source_url=payload.source_url,
+        publisher=payload.publisher,
+        image_url=payload.image_url,
+        eligibility=eligibility,
+    )
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id,
+        version_number=1,
+        title=payload.title,
+        yield_servings=payload.yield_servings,
+        custom_instructions=payload.custom_instructions,
+        publisher_nutrition=payload.publisher_nutrition,
+    )
+    db.add(version)
+    db.flush()
+    for position, item in enumerate(payload.ingredients):
+        db.add(RecipeIngredient(recipe_version_id=version.id, position=position, **item.model_dump()))
+    db.commit()
+    db.refresh(recipe)
+    return _recipe_detail(db, recipe)
+
+
+@router.get("/recipes/{recipe_id}", response_model=RecipeDetail)
+def get_recipe(
+    recipe_id: str,
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    recipe = db.get(Recipe, recipe_id)
+    if recipe is None or recipe.household_id != context.user.household_id:
+        raise NotFoundError("Recipe")
+    return _recipe_detail(db, recipe)
+
+
+@router.put("/recipes/{recipe_id}/review", response_model=RecipeDetail)
+def save_recipe_review(
+    recipe_id: str,
+    payload: RecipeReviewUpdate,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    """Save reviewed fields as a new immutable recipe version."""
+
+    recipe = db.get(Recipe, recipe_id)
+    if recipe is None or recipe.household_id != context.user.household_id:
+        raise NotFoundError("Recipe")
+    if recipe.version != payload.expected_version:
+        raise DomainError(
+            "VERSION_CONFLICT",
+            "This recipe changed while you were reviewing it. Reload before saving.",
+            409,
+        )
+    previous = _latest_version(db, recipe.id)
+    if previous is None:
+        raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+    next_version = RecipeVersion(
+        recipe_id=recipe.id,
+        version_number=previous.version_number + 1,
+        title=payload.title,
+        yield_servings=payload.yield_servings,
+        custom_instructions=previous.custom_instructions,
+        source_checksum=previous.source_checksum,
+        publisher_nutrition=previous.publisher_nutrition,
+    )
+    db.add(next_version)
+    db.flush()
+    for position, item in enumerate(payload.ingredients):
+        db.add(
+            RecipeIngredient(
+                recipe_version_id=next_version.id,
+                position=position,
+                **item.model_dump(),
+            )
+        )
+    recipe.title = payload.title
+    recipe.eligibility = (
+        RecipeEligibility.NEEDS_REVIEW.value
+        if any(item.needs_review for item in payload.ingredients)
+        else RecipeEligibility.DRAFT.value
+    )
+    recipe.version += 1
+    db.commit()
+    db.refresh(recipe)
+    return _recipe_detail(db, recipe)
+
+
+@router.post("/recipes/{recipe_id}/calculate", response_model=NutritionCalculationOut)
+def calculate(
+    recipe_id: str,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    recipe = db.get(Recipe, recipe_id)
+    if recipe is None or recipe.household_id != context.user.household_id:
+        raise NotFoundError("Recipe")
+    version = _latest_version(db, recipe.id)
+    calculation = calculate_recipe(db, version.id)
+    db.commit()
+    db.refresh(calculation)
+    return calculation
+
+
+@router.post("/recipe-imports", response_model=JobOut, status_code=202)
+def create_import(
+    payload: ImportRequest,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    try:
+        canonical_url = canonicalize_url(payload.url)
+    except DiscoveryError as exc:
+        raise DomainError("INVALID_URL", str(exc), 422) from exc
+    job = Job(
+        household_id=context.user.household_id,
+        user_id=context.user.id,
+        kind="recipe_import",
+        status=JobStatus.QUEUED.value,
+        stage="queued",
+        payload={"url": canonical_url},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    try:
+        from ..worker import process_recipe_import
+
+        process_recipe_import.delay(job.id)
+    except Exception as exc:
+        # The persisted job remains queued and can be retried when a worker is available.
+        if exc.__class__.__module__.split(".")[0] not in {"celery", "kombu", "redis"} and not isinstance(
+            exc, (ImportError, ConnectionError, OSError)
+        ):
+            raise
+    return job
+
+
+@router.get("/jobs/{job_id}", response_model=JobOut)
+def get_job(
+    job_id: str,
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    job = db.get(Job, job_id)
+    if job is None or job.household_id != context.user.household_id:
+        raise NotFoundError("Job")
+    return job
+
+
+@router.get("/foods", response_model=dict)
+def search_foods(
+    q: str = Query(default="", max_length=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    _: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    conditions = []
+    if q.strip():
+        conditions.append(func.lower(FoodRecord.name).contains(q.strip().lower()))
+    total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
+    rows = db.scalars(
+        select(FoodRecord)
+        .where(*conditions)
+        .order_by(FoodRecord.name)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    items = []
+    for food in rows:
+        items.append(
+            FoodRecordOut(
+                **{column.name: getattr(food, column.name) for column in food.__table__.columns},
+                nutrients=[
+                    {column.name: getattr(n, column.name) for column in n.__table__.columns}
+                    for n in food.nutrients
+                ],
+            ).model_dump(mode="json")
+        )
+    return {"items": items, "page": page, "page_size": page_size, "total": total}
+
+
+@router.post("/foods", response_model=FoodRecordOut, status_code=201)
+def create_food(
+    payload: FoodRecordCreate,
+    _: AuthContext = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    if db.scalar(
+        select(FoodRecord).where(
+            FoodRecord.provider == payload.provider,
+            FoodRecord.provider_record_id == payload.provider_record_id,
+        )
+    ):
+        raise DomainError("FOOD_ALREADY_EXISTS", "That provider food record already exists", 409)
+    food = FoodRecord(**payload.model_dump(exclude={"nutrients"}))
+    db.add(food)
+    db.flush()
+    for nutrient in payload.nutrients:
+        db.add(FoodNutrient(food_record_id=food.id, **nutrient.model_dump()))
+    db.commit()
+    db.refresh(food)
+    return FoodRecordOut(
+        **{column.name: getattr(food, column.name) for column in food.__table__.columns},
+        nutrients=[
+            {column.name: getattr(n, column.name) for column in n.__table__.columns}
+            for n in food.nutrients
+        ],
+    )

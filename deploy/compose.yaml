@@ -1,0 +1,193 @@
+name: meal-planner
+
+x-application: &application
+  image: ${MEAL_PLANNER_IMAGE:-meal-planner}:${APP_VERSION:-dev}
+  build:
+    context: ..
+    dockerfile: Dockerfile
+    args:
+      APP_VERSION: ${APP_VERSION:-dev}
+      APP_REVISION: ${APP_REVISION:-local}
+      VITE_API_URL: ""
+      VITE_DEMO_MODE: "false"
+  restart: unless-stopped
+  init: true
+  user: "${PUID:-99}:${PGID:-100}"
+  environment:
+    MEAL_PLANNER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/1
+    FRONTEND_DIST_DIR: /app/frontend/dist
+    TZ: ${TIMEZONE:-Europe/London}
+    MEAL_PLANNER_TIMEZONE: ${TIMEZONE:-Europe/London}
+    MEAL_PLANNER_SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in deploy/.env}
+    MEAL_PLANNER_SETUP_TOKEN: ${SETUP_TOKEN:?Set SETUP_TOKEN in deploy/.env}
+    MEAL_PLANNER_ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,meal-planner}
+    MEAL_PLANNER_COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  volumes:
+    - type: bind
+      source: ${APPDATA_ROOT:-./.runtime}/data
+      target: /data
+  networks:
+    - internal
+
+services:
+  web:
+    <<: *application
+    command: ["web"]
+    environment:
+      MEAL_PLANNER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      FRONTEND_DIST_DIR: /app/frontend/dist
+      TZ: ${TIMEZONE:-Europe/London}
+      MEAL_PLANNER_TIMEZONE: ${TIMEZONE:-Europe/London}
+      MEAL_PLANNER_SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in deploy/.env}
+      MEAL_PLANNER_SETUP_TOKEN: ${SETUP_TOKEN:?Set SETUP_TOKEN in deploy/.env}
+      MEAL_PLANNER_ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,meal-planner}
+      MEAL_PLANNER_COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RUN_MIGRATIONS: "true"
+    ports:
+      - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-8080}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+  worker:
+    <<: *application
+    command: ["worker"]
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  scheduler:
+    <<: *application
+    command: ["scheduler"]
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  postgres:
+    image: postgres:17.5-bookworm
+    restart: unless-stopped
+    shm_size: 256mb
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TIMEZONE:-Europe/London}
+    volumes:
+      - type: bind
+        source: ${APPDATA_ROOT:-./.runtime}/postgres
+        target: /var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7.4.5-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "60", "1000"]
+    volumes:
+      - type: bind
+        source: ${APPDATA_ROOT:-./.runtime}/redis
+        target: /data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  backup:
+    image: postgres:17.5-bookworm
+    profiles: ["maintenance"]
+    user: "0:0"
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      BACKUP_ROOT: /backups
+      DATA_DIR: /source-data
+      APP_VERSION: ${APP_VERSION:-dev}
+      RETAIN_DAILY: ${RETAIN_DAILY:-14}
+      RETAIN_WEEKLY: ${RETAIN_WEEKLY:-8}
+      RETAIN_MONTHLY: ${RETAIN_MONTHLY:-12}
+    volumes:
+      - type: bind
+        source: ${APPDATA_ROOT:-./.runtime}/data
+        target: /source-data
+        read_only: true
+      - type: bind
+        source: ${BACKUP_ROOT:-./backups}
+        target: /backups
+      - type: bind
+        source: ./scripts/backup.sh
+        target: /opt/meal-planner/backup.sh
+        read_only: true
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["sh", "/opt/meal-planner/backup.sh"]
+
+  restore:
+    image: postgres:17.5-bookworm
+    profiles: ["maintenance"]
+    user: "0:0"
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      DATA_DIR: /source-data
+    volumes:
+      - type: bind
+        source: ${APPDATA_ROOT:-./.runtime}/data
+        target: /source-data
+      - type: bind
+        source: ${BACKUP_ROOT:-./backups}
+        target: /backups
+        read_only: true
+      - type: bind
+        source: ./scripts/restore.sh
+        target: /opt/meal-planner/restore.sh
+        read_only: true
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["sh", "/opt/meal-planner/restore.sh"]
+
+networks:
+  internal:
+    driver: bridge

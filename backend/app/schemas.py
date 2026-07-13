@@ -1,0 +1,383 @@
+from __future__ import annotations
+
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .models import JobStatus, PlanStatus, RecipeEligibility, TargetMode, UserRole
+
+
+class APIModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VersionedUpdate(APIModel):
+    expected_version: int = Field(ge=1)
+
+
+class SetupRequest(APIModel):
+    setup_token: str
+    household_name: str = Field(min_length=1, max_length=160)
+    username: str = Field(min_length=3, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=200)
+
+
+class LoginRequest(APIModel):
+    username: str
+    password: str
+
+
+class UserOut(APIModel):
+    id: str
+    username: str
+    role: UserRole
+    active: bool
+    must_change_password: bool
+    member_id: str | None
+
+
+class AuthOut(APIModel):
+    user: UserOut
+    csrf_token: str
+
+
+class CollaboratorCreate(APIModel):
+    username: str = Field(min_length=3, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
+    temporary_password: str = Field(min_length=12, max_length=200)
+    member_id: str | None = None
+
+
+class PasswordChange(APIModel):
+    current_password: str
+    new_password: str = Field(min_length=12, max_length=200)
+
+
+class MemberCreate(APIModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class MemberUpdate(VersionedUpdate):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    active: bool | None = None
+
+
+class MemberOut(APIModel):
+    id: str
+    name: str
+    active: bool
+    version: int
+
+
+class MealAllocationIn(APIModel):
+    meal_type: str = Field(min_length=1, max_length=40)
+    percentage: Decimal = Field(gt=0, le=100)
+
+
+class TargetProfileIn(APIModel):
+    mode: TargetMode
+    tolerance_percent: Decimal = Field(default=Decimal("5"), gt=0, le=25)
+    calorie_target: Decimal | None = Field(default=None, gt=0)
+    protein_target_g: Decimal | None = Field(default=None, ge=0)
+    carbohydrate_target_g: Decimal | None = Field(default=None, ge=0)
+    fat_target_g: Decimal | None = Field(default=None, ge=0)
+    protein_min_g: Decimal | None = Field(default=None, ge=0)
+    protein_max_g: Decimal | None = Field(default=None, ge=0)
+    carbohydrate_min_g: Decimal | None = Field(default=None, ge=0)
+    carbohydrate_max_g: Decimal | None = Field(default=None, ge=0)
+    fat_min_g: Decimal | None = Field(default=None, ge=0)
+    fat_max_g: Decimal | None = Field(default=None, ge=0)
+    allocations: list[MealAllocationIn] = Field(
+        default_factory=lambda: [
+            MealAllocationIn(meal_type="breakfast", percentage=25),
+            MealAllocationIn(meal_type="lunch", percentage=30),
+            MealAllocationIn(meal_type="dinner", percentage=35),
+            MealAllocationIn(meal_type="snack", percentage=10),
+        ]
+    )
+
+    @model_validator(mode="after")
+    def validate_mode_and_ranges(self):
+        macro_targets = (self.protein_target_g, self.carbohydrate_target_g, self.fat_target_g)
+        if self.mode == TargetMode.CALORIE:
+            if self.calorie_target is None:
+                raise ValueError("calorie_target is required in calorie mode")
+            if any(value is not None for value in macro_targets):
+                raise ValueError("macro targets cannot be set in calorie mode; use macro minimums/maximums")
+        else:
+            if self.calorie_target is not None:
+                raise ValueError("calorie_target cannot be set in macro mode")
+            if any(value is None for value in macro_targets):
+                raise ValueError("protein, carbohydrate and fat targets are required in macro mode")
+
+        for low, high, name in (
+            (self.protein_min_g, self.protein_max_g, "protein"),
+            (self.carbohydrate_min_g, self.carbohydrate_max_g, "carbohydrate"),
+            (self.fat_min_g, self.fat_max_g, "fat"),
+        ):
+            if low is not None and high is not None and low > high:
+                raise ValueError(f"{name} minimum cannot exceed maximum")
+
+        if not self.allocations or sum(item.percentage for item in self.allocations) != 100:
+            raise ValueError("enabled meal allocations must total 100 percent")
+        if len({item.meal_type.lower() for item in self.allocations}) != len(self.allocations):
+            raise ValueError("meal allocation names must be unique")
+
+        if self.mode == TargetMode.CALORIE and self.calorie_target is not None:
+            calorie_low = self.calorie_target * (Decimal("1") - self.tolerance_percent / 100)
+            calorie_high = self.calorie_target * (Decimal("1") + self.tolerance_percent / 100)
+            implied_min = (
+                (self.protein_min_g or 0) * 4
+                + (self.carbohydrate_min_g or 0) * 4
+                + (self.fat_min_g or 0) * 9
+            )
+            if implied_min > calorie_high:
+                raise ValueError("macro minimums imply more energy than the calorie tolerance permits")
+            if all(v is not None for v in (self.protein_max_g, self.carbohydrate_max_g, self.fat_max_g)):
+                implied_max = self.protein_max_g * 4 + self.carbohydrate_max_g * 4 + self.fat_max_g * 9
+                if implied_max < calorie_low:
+                    raise ValueError("macro maximums imply less energy than the calorie tolerance requires")
+        return self
+
+
+class TargetProfileOut(TargetProfileIn):
+    id: str
+    member_id: str
+    version: int
+
+
+class RestrictionIn(APIModel):
+    kind: Literal["allergy", "exclude", "dislike", "prefer"]
+    value: str = Field(min_length=1, max_length=160)
+    hard: bool = False
+
+
+class RecipeIngredientIn(APIModel):
+    original_text: str = Field(min_length=1)
+    quantity: Decimal | None = Field(default=None, ge=0)
+    unit: str | None = None
+    quantity_grams: Decimal | None = Field(default=None, ge=0)
+    food_phrase: str | None = None
+    preparation: str | None = None
+    included: bool = True
+    optional: bool = False
+    needs_review: bool = False
+    food_record_id: str | None = None
+
+    @model_validator(mode="after")
+    def optional_defaults_to_excluded(self):
+        if self.optional and "included" not in self.model_fields_set:
+            self.included = False
+        return self
+
+
+class RecipeCreate(APIModel):
+    title: str = Field(min_length=1, max_length=300)
+    yield_servings: Decimal | None = Field(default=None, gt=0)
+    source_type: Literal["custom", "url"] = "custom"
+    source_url: str | None = None
+    publisher: str | None = None
+    image_url: str | None = None
+    custom_instructions: str | None = None
+    publisher_nutrition: dict[str, Any] | None = None
+    ingredients: list[RecipeIngredientIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def custom_instruction_policy(self):
+        if self.source_type != "custom" and self.custom_instructions:
+            raise ValueError("publisher cooking instructions are not stored")
+        if self.source_type == "url" and not self.source_url:
+            raise ValueError("source_url is required for URL recipes")
+        return self
+
+
+class RecipeReviewUpdate(VersionedUpdate):
+    title: str = Field(min_length=1, max_length=300)
+    yield_servings: Decimal = Field(gt=0)
+    ingredients: list[RecipeIngredientIn] = Field(min_length=1)
+
+
+class RecipeSummary(APIModel):
+    id: str
+    title: str
+    eligibility: RecipeEligibility
+    source_type: str
+    source_url: str | None
+    publisher: str | None
+    image_url: str | None
+    version: int
+
+
+class RecipeDetail(RecipeSummary):
+    recipe_version_id: str
+    version_number: int
+    yield_servings: Decimal | None
+    custom_instructions: str | None
+    publisher_nutrition: dict[str, Any] | None
+    ingredients: list[dict[str, Any]]
+    calculated_nutrition: dict[str, Any] | None = None
+
+
+class FoodNutrientIn(APIModel):
+    code: Literal["energy_kcal", "protein_g", "carbohydrate_g", "fat_g"]
+    amount: Decimal = Field(ge=0)
+    unit: str
+    qualifier: str | None = None
+
+
+class FoodRecordCreate(APIModel):
+    provider: str = Field(min_length=1, max_length=40)
+    provider_record_id: str = Field(min_length=1, max_length=120)
+    dataset_version: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=300)
+    basis_amount: Decimal = Field(default=100, gt=0)
+    basis_unit: Literal["g", "ml"] = "g"
+    density_g_per_ml: Decimal | None = Field(default=None, gt=0)
+    nutrients: list[FoodNutrientIn]
+
+
+class FoodRecordOut(APIModel):
+    id: str
+    provider: str
+    provider_record_id: str
+    dataset_version: str
+    name: str
+    basis_amount: Decimal
+    basis_unit: str
+    density_g_per_ml: Decimal | None
+    nutrients: list[dict[str, Any]]
+
+
+class NutritionCalculationOut(APIModel):
+    id: str
+    recipe_version_id: str
+    status: str
+    total_values: dict[str, Any]
+    per_serving_values: dict[str, Any]
+    contributions: list[dict[str, Any]]
+    assumptions: list[str]
+
+
+class ImportRequest(APIModel):
+    url: str
+
+
+class JobOut(APIModel):
+    id: str
+    kind: str
+    status: JobStatus
+    stage: str | None
+    progress: int
+    result: dict[str, Any] | None
+    error_code: str | None
+    error_detail: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlanSlotIn(APIModel):
+    meal_date: date
+    meal_type: str
+    participant_member_ids: list[str]
+    # Slots sharing a key are cooked as one batch and allocated across dates.
+    # Omit the key to cook that occurrence separately.
+    batch_key: str | None = Field(default=None, max_length=80)
+    food_safety_acknowledged: bool = False
+
+
+class PlanGenerateRequest(APIModel):
+    name: str = Field(min_length=1, max_length=160)
+    slots: list[PlanSlotIn]
+    recipe_ids: list[str]
+    must_use_food_record_ids: list[str] = Field(default_factory=list)
+    prefer_food_record_ids: list[str] = Field(default_factory=list)
+    exclude_food_record_ids: list[str] = Field(default_factory=list)
+
+
+class PlanOut(APIModel):
+    id: str
+    name: str
+    start_date: date
+    end_date: date
+    status: PlanStatus
+    diagnostics: list[dict[str, Any]]
+    version: int
+
+
+class PantryLotCreate(APIModel):
+    display_name: str = Field(min_length=1, max_length=240)
+    quantity: Decimal = Field(gt=0)
+    unit: str = Field(min_length=1, max_length=30)
+    food_record_id: str | None = None
+    expires_on: date | None = None
+    always_have: bool = False
+
+
+class PantryAdjustment(APIModel):
+    quantity_delta: Decimal
+    reason: str = Field(min_length=1, max_length=60)
+
+
+class PantryLotOut(APIModel):
+    id: str
+    display_name: str
+    food_record_id: str | None
+    initial_quantity: Decimal
+    unit: str
+    expires_on: date | None
+    always_have: bool
+    on_hand_quantity: Decimal
+    reserved_quantity: Decimal
+    usable_quantity: Decimal
+    version: int
+
+
+class ShoppingBuildRequest(APIModel):
+    meal_plan_id: str
+    name: str = "Current shopping list"
+
+
+class ShoppingItemCreate(APIModel):
+    display_name: str
+    exact_quantity: Decimal = Field(gt=0)
+    purchase_quantity: Decimal = Field(gt=0)
+    unit: str
+    category: str = "Other"
+
+
+class ShoppingItemPatch(VersionedUpdate):
+    checked: bool | None = None
+    purchase_quantity: Decimal | None = Field(default=None, gt=0)
+    category: str | None = None
+
+
+class ShoppingItemOut(APIModel):
+    id: str
+    display_name: str
+    exact_quantity: Decimal
+    purchase_quantity: Decimal
+    unit: str
+    category: str
+    checked: bool
+    manual: bool
+    version: int
+
+
+class ShoppingListOut(APIModel):
+    id: str
+    name: str
+    meal_plan_id: str | None
+    active: bool
+    version: int
+    items: list[ShoppingItemOut]
+
+
+class ProblemDetail(APIModel):
+    type: str = "about:blank"
+    title: str
+    status: int
+    code: str
+    detail: str
+    field_errors: list[dict[str, Any]] = Field(default_factory=list)
+    trace_id: str | None = None

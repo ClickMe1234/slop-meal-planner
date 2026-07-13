@@ -1,0 +1,2 @@
+"""Meal planner backend package."""
+

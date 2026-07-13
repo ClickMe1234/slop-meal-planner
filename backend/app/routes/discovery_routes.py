@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from dataclasses import asdict
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..auth import AuthContext, get_auth_context
+from ..db import get_db
+from ..discovery import LiveSearchService
+from ..discovery.http import PoliteHttpFetcher
+from ..discovery.urls import canonicalize_url
+from ..models import Recipe
+
+router = APIRouter(prefix="/recipe-discovery", tags=["recipe discovery"])
+
+_fetcher: PoliteHttpFetcher | None = None
+_service: LiveSearchService | None = None
+
+
+def _live_service() -> LiveSearchService:
+    global _fetcher, _service
+    if _service is None:
+        _fetcher = PoliteHttpFetcher()
+        _service = LiveSearchService(_fetcher)
+    return _service
+
+
+def _json_safe(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+@router.get("")
+async def discover_recipes(
+    q: str = Query(default="", max_length=200),
+    request_key: str | None = Query(default=None, max_length=100),
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    """Fan out to supported public searches without calculating nutrition."""
+
+    scoped_request_key = (
+        f"{context.user.household_id}:{context.user.id}:{request_key}" if request_key else None
+    )
+    response = await _live_service().search(q, request_key=scoped_request_key)
+    saved_rows = db.scalars(
+        select(Recipe.source_url).where(
+            Recipe.household_id == context.user.household_id,
+            Recipe.source_url.is_not(None),
+        )
+    ).all()
+    saved: set[str] = set()
+    for url in saved_rows:
+        try:
+            saved.add(canonicalize_url(url))
+        except Exception:
+            continue
+
+    sources = []
+    for source in response.sources:
+        source_data = asdict(source)
+        for result in source_data["results"]:
+            result["already_saved"] = result["url"] in saved
+        sources.append(_json_safe(source_data))
+    return {
+        "query": response.query,
+        "sources": sources,
+        "results": [result for source in sources for result in source["results"]],
+        "debounce_ms": response.debounce_ms,
+        "cache_hit": response.cache_hit,
+        "superseded": response.superseded,
+    }
+
+
+async def close_discovery_client() -> None:
+    global _fetcher, _service
+    if _fetcher is not None:
+        await _fetcher.aclose()
+    _fetcher = None
+    _service = None
