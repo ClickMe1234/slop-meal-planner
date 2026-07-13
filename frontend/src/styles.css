@@ -427,6 +427,10 @@ button.tag { cursor: pointer; font: inherit; }
 .generated-day-head--rich .nutrition-strip { width:100%; }
 .generated-day-head--rich .nutrition-strip>div { display:block; }
 .generated-day-date { align-content:center; }
+.generated-grid { align-items:start; }
+.day-member-nutrition { display:grid;gap:9px; }
+.day-member-nutrition-row { display:grid;gap:4px; }
+.day-member-nutrition-row>span { color:var(--text);font-size:.68rem;font-weight:700; }
 .day-collapse-button { align-items:center;align-self:center;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--muted);display:flex;height:34px;justify-content:center;width:34px; }
 .day-collapse-button svg { width:18px; }
 .generated-day.is-collapsed .generated-day-head { border-radius:inherit; }
@@ -466,12 +470,14 @@ button.tag { cursor: pointer; font: inherit; }
 .recipe-save-modal { display:grid;gap:18px;max-height:calc(100vh - 40px);max-width:520px;overflow:auto;padding:28px;position:relative;width:100%; }
 .recipe-save-modal h2,.recipe-save-modal p { margin:0; }
 .recipe-save-modal .button-row { justify-content:flex-end;margin-top:3px; }
+.recipe-save-modal .meal-type-picker fieldset { box-shadow:none;position:static; }
 .modal-close { align-items:center;background:transparent;border:0;color:var(--muted);display:flex;padding:6px;position:absolute;right:14px;top:14px; }
 .modal-close svg { height:19px;width:19px; }
 
 @media (max-width: 900px) {
   .planner-recipe-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .generated-day-head--rich { grid-template-columns:1fr auto; }
+  .day-member-nutrition { grid-column:1/-1;grid-row:2; }
   .generated-day-head--rich .nutrition-strip { grid-column:1/-1;grid-row:2; }
 }
 

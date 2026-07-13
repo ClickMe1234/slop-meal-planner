@@ -342,6 +342,7 @@ class PlanOut(APIModel):
 class PlanRecipeReplaceRequest(APIModel):
     recipe_id: str
     expected_plan_version: int = Field(ge=1)
+    ignore_nutrition_tolerances: bool = False
 
 
 class PantryLotCreate(APIModel):

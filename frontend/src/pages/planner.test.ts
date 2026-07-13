@@ -5,6 +5,7 @@ import {
   buildPlanSlots,
   cookStartKey,
   hasLongBatch,
+  memberNutritionTotals,
   plannerDates,
   totalNutrition,
 } from './planner'
@@ -65,5 +66,24 @@ describe('planner helpers', () => {
       fat: 22.5,
       basis: 'recipe_total',
     })
+  })
+
+  it('keeps each household member nutrition total separate', () => {
+    const occurrences = [{
+      id: 'occurrence',
+      meal_date: '2026-07-13',
+      meal_type: 'lunch',
+      batch_id: 'batch',
+      recipe_id: 'recipe',
+      recipe_title: 'Lunch',
+      batch_servings: 1.5,
+      nutrition_per_serving: { energy_kcal: 500, protein_g: 30, carbohydrate_g: 40, fat_g: 15 },
+      portions: [{ member_id: 'alex', servings: 1 }, { member_id: 'sam', servings: 0.5 }],
+    }] satisfies BackendPlanDetail['occurrences']
+
+    expect(memberNutritionTotals(occurrences)).toEqual([
+      { memberId: 'alex', nutrition: { calories: 500, protein: 30, carbs: 40, fat: 15, basis: 'recipe_total' } },
+      { memberId: 'sam', nutrition: { calories: 250, protein: 15, carbs: 20, fat: 7.5, basis: 'recipe_total' } },
+    ])
   })
 })

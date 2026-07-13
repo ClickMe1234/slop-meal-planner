@@ -123,7 +123,7 @@ export const api = {
   generatePlan: (payload: Record<string, unknown>) => request<BackendPlan>('/meal-plans/generate', { method: 'POST', body: JSON.stringify(payload) }),
   listPlans: () => request<BackendPlan[]>('/meal-plans'),
   getPlan: (id: string) => request<BackendPlanDetail>(`/meal-plans/${id}`),
-  replacePlanRecipe: (planId: string, occurrenceId: string, recipeId: string, expectedPlanVersion: number) => request<BackendPlanDetail>(`/meal-plans/${planId}/occurrences/${occurrenceId}/recipe`, { method: 'PUT', body: JSON.stringify({ recipe_id: recipeId, expected_plan_version: expectedPlanVersion }) }),
+  replacePlanRecipe: (planId: string, occurrenceId: string, recipeId: string, expectedPlanVersion: number, ignoreNutritionTolerances = false) => request<BackendPlanDetail>(`/meal-plans/${planId}/occurrences/${occurrenceId}/recipe`, { method: 'PUT', body: JSON.stringify({ recipe_id: recipeId, expected_plan_version: expectedPlanVersion, ignore_nutrition_tolerances: ignoreNutritionTolerances }) }),
   acceptPlan: (id: string) => request<BackendPlan>(`/meal-plans/${id}/accept`, { method: 'POST' }),
   markBatchCooked: (planId: string, batchId: string) => request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, { method: 'POST' }),
   buildShoppingList: (planId: string) => request<BackendShoppingList>('/shopping-lists/build', { method: 'POST', body: JSON.stringify({ meal_plan_id: planId, name: 'Current shopping list' }) }),

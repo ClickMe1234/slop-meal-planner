@@ -60,19 +60,18 @@ describe('PlanPage wizard', () => {
         batch_id: 'breakfast-batch',
         recipe_id: 'oats',
         recipe_title: 'Oats',
-        batch_servings: 1.5,
+        batch_servings: 2,
         nutrition_per_serving: { energy_kcal: 400, protein_g: 20, carbohydrate_g: 50, fat_g: 10 },
-        portions: [{ member_id: 'demo-you', servings: 1.5 }],
+        portions: [{ member_id: 'demo-you', servings: 1.5 }, { member_id: 'another-member', servings: 0.5 }],
       }],
     }
     storeDemoPlan(plan)
     const user = userEvent.setup()
     render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan?plan=demo']}><PlanPage/></MemoryRouter></QueryClientProvider>)
 
-    expect(screen.getByText('Calories').parentElement).toHaveTextContent('600kcal')
-    expect(screen.getByText('Protein').parentElement).toHaveTextContent('30g')
-    expect(screen.getByText('Carbs').parentElement).toHaveTextContent('75g')
-    expect(screen.getByText('Fat').parentElement).toHaveTextContent('15g')
+    expect(screen.getAllByText('Calories')).toHaveLength(2)
+    expect(screen.getByText('You').closest('.day-member-nutrition-row')).toHaveTextContent('600kcal')
+    expect(screen.getByText('Household member').closest('.day-member-nutrition-row')).toHaveTextContent('200kcal')
 
     const collapse = screen.getByRole('button', { name: 'Collapse 2026-07-13' })
     await user.click(collapse)

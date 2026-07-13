@@ -266,6 +266,30 @@ def test_infeasible_plan_can_be_retried_in_best_effort_mode(
         {"member_id": member_id, "servings": 2.0}
     ]
 
+    replacement_payload = {
+        "recipe_id": recipe["id"],
+        "expected_plan_version": detail["plan"]["version"],
+    }
+    strict_replacement = client.put(
+        f"/api/v1/meal-plans/{retried.json()['id']}/occurrences/{detail['occurrences'][0]['id']}/recipe",
+        headers=_headers(owner),
+        json=replacement_payload,
+    )
+    assert strict_replacement.status_code == 422
+    assert strict_replacement.json()["code"] == "NUTRITION_TARGET_INFEASIBLE"
+    assert strict_replacement.json()["actions"][0]["kind"] == "retry_best_effort"
+
+    relaxed_replacement = client.put(
+        f"/api/v1/meal-plans/{retried.json()['id']}/occurrences/{detail['occurrences'][0]['id']}/recipe",
+        headers=_headers(owner),
+        json={**replacement_payload, "ignore_nutrition_tolerances": True},
+    )
+    assert relaxed_replacement.status_code == 200, relaxed_replacement.text
+    assert any(
+        item["code"] == "REPLACEMENT_NUTRITION_TOLERANCE_RELAXED"
+        for item in relaxed_replacement.json()["plan"]["diagnostics"]
+    )
+
 
 def test_replacement_preserves_plan_specific_ingredient_guidance(client, owner):
     member_id = client.get("/api/v1/auth/me").json()["member_id"]

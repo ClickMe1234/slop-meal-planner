@@ -181,6 +181,25 @@ export function totalNutrition(occurrences: BackendPlanDetail['occurrences']): N
   }, { calories: 0, protein: 0, carbs: 0, fat: 0, basis: 'recipe_total' })
 }
 
+export function memberNutritionTotals(occurrences: BackendPlanDetail['occurrences']): Array<{ memberId: string; nutrition: Nutrition }> {
+  const totals = new Map<string, Nutrition>()
+  for (const occurrence of occurrences) {
+    const values = occurrence.nutrition_per_serving
+    for (const portion of occurrence.portions) {
+      const servings = Number(portion.servings || 0)
+      const current = totals.get(portion.member_id) ?? { calories: 0, protein: 0, carbs: 0, fat: 0, basis: 'recipe_total' as const }
+      totals.set(portion.member_id, {
+        calories: current.calories + nutritionValue(values, 'energy_kcal', 'calories') * servings,
+        protein: current.protein + nutritionValue(values, 'protein_g', 'protein') * servings,
+        carbs: current.carbs + nutritionValue(values, 'carbohydrate_g', 'carbs_g', 'carbs') * servings,
+        fat: current.fat + nutritionValue(values, 'fat_g', 'fat') * servings,
+        basis: 'recipe_total',
+      })
+    }
+  }
+  return Array.from(totals, ([memberId, nutrition]) => ({ memberId, nutrition }))
+}
+
 const demoPlanStorageKey = 'savour-demo-plan'
 
 export function storeDemoPlan(plan: BackendPlanDetail): void {

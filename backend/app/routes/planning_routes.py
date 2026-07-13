@@ -766,9 +766,21 @@ def replace_occurrence_recipe(
             participants,
             preferred_terms=preferred_terms,
             disliked_terms=disliked_terms,
+            enforce_nutrition_bounds=not payload.ignore_nutrition_tolerances,
         )
     except PlannerInfeasibleError as exc:
-        raise DomainError("NUTRITION_TARGET_INFEASIBLE", str(exc), 422) from exc
+        raise DomainError(
+            "NUTRITION_TARGET_INFEASIBLE",
+            str(exc),
+            422,
+            actions=[
+                {
+                    "kind": "retry_best_effort",
+                    "label": "Continue anyway",
+                    "suggestion": "Use the closest available portions without enforcing nutrition tolerances.",
+                }
+            ],
+        ) from exc
     total_servings = Decimal("0")
     for allocations in allocations_by_occurrence.values():
         for allocation in allocations:
@@ -776,6 +788,16 @@ def replace_occurrence_recipe(
             total_servings += choice.portions[allocation.member_id]
     batch.recipe_version_id = candidate.recipe_version_id
     batch.servings = total_servings
+    if payload.ignore_nutrition_tolerances:
+        plan.diagnostics = [
+            *(plan.diagnostics or []),
+            {
+                "code": "REPLACEMENT_NUTRITION_TOLERANCE_RELAXED",
+                "batch_id": batch.id,
+                "recipe_id": recipe.id,
+            },
+        ]
+        flag_modified(plan, "diagnostics")
     plan.version += 1
     db.commit()
     db.refresh(plan)
