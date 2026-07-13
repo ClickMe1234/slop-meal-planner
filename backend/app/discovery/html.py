@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
@@ -10,6 +11,8 @@ class Anchor:
     text: str = ""
     image_url: str | None = None
     image_alt: str | None = None
+    rating_value: str | None = None
+    rating_count: str | None = None
 
 
 class RecipeHtmlParser(HTMLParser):
@@ -18,11 +21,13 @@ class RecipeHtmlParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.json_ld: list[str] = []
+        self.json_data: list[str] = []
         self.anchors: list[Anchor] = []
         self.meta: dict[str, str] = {}
         self.h1_parts: list[str] = []
         self.ingredient_parts: list[list[str]] = []
         self._script_parts: list[str] | None = None
+        self._script_kind: str | None = None
         self._anchor: Anchor | None = None
         self._in_h1 = False
         self._ingredient_depth = 0
@@ -30,8 +35,10 @@ class RecipeHtmlParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key.lower(): value or "" for key, value in attrs}
         tag = tag.lower()
-        if tag == "script" and values.get("type", "").lower().split(";")[0].strip() == "application/ld+json":
+        script_type = values.get("type", "").lower().split(";")[0].strip()
+        if tag == "script" and script_type in {"application/ld+json", "application/json"}:
             self._script_parts = []
+            self._script_kind = script_type
         elif tag == "a" and values.get("href"):
             self._anchor = Anchor(values["href"])
         elif tag == "img" and self._anchor is not None:
@@ -55,6 +62,33 @@ class RecipeHtmlParser(HTMLParser):
         elif tag == "h1":
             self._in_h1 = True
 
+        if self._anchor is not None:
+            itemprop = {part.strip().lower() for part in values.get("itemprop", "").split()}
+            if "ratingvalue" in itemprop:
+                self._anchor.rating_value = values.get("content") or values.get("value") or self._anchor.rating_value
+            if itemprop & {"ratingcount", "reviewcount"}:
+                self._anchor.rating_count = values.get("content") or values.get("value") or self._anchor.rating_count
+            self._anchor.rating_value = (
+                values.get("data-rating-value")
+                or values.get("data-star-rating")
+                or self._anchor.rating_value
+            )
+            label = values.get("aria-label") or values.get("title") or ""
+            label_rating = re.search(
+                r"(?:rated?|rating(?:\s+of)?)\s*([0-5](?:\.\d+)?)\s*(?:out of 5)?",
+                label,
+                flags=re.IGNORECASE,
+            )
+            if label_rating:
+                self._anchor.rating_value = self._anchor.rating_value or label_rating.group(1)
+            label_count = re.search(
+                r"(\d[\d,]*)\s+(?:ratings?|reviews?)",
+                label,
+                flags=re.IGNORECASE,
+            )
+            if label_count:
+                self._anchor.rating_count = self._anchor.rating_count or label_count.group(1)
+
         itemprop = {part.strip().lower() for part in values.get("itemprop", "").split()}
         if "recipeingredient" in itemprop or "ingredients" in itemprop:
             self._ingredient_depth += 1
@@ -65,8 +99,10 @@ class RecipeHtmlParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
         if tag == "script" and self._script_parts is not None:
-            self.json_ld.append("".join(self._script_parts))
+            target = self.json_ld if self._script_kind == "application/ld+json" else self.json_data
+            target.append("".join(self._script_parts))
             self._script_parts = None
+            self._script_kind = None
         elif tag == "a" and self._anchor is not None:
             self._anchor.text = " ".join(self._anchor.text.split())
             self.anchors.append(self._anchor)

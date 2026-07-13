@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 from abc import ABC, abstractmethod
+from dataclasses import replace
+from decimal import Decimal, InvalidOperation
 from html import unescape
 from urllib.parse import quote_plus, urlsplit
 
@@ -44,7 +46,7 @@ class SourceAdapter(ABC):
 
         # Some publishers expose ItemList/Recipe JSON-LD on result pages. Prefer
         # it because it is explicitly machine-readable and may include nutrition.
-        for raw in parser.json_ld:
+        for raw in (*parser.json_ld, *parser.json_data):
             try:
                 document = json.loads(raw)
             except json.JSONDecodeError:
@@ -54,10 +56,21 @@ class SourceAdapter(ABC):
                 types = item.get("@type", "")
                 type_values = {str(types).lower()} if isinstance(types, str) else {str(x).lower() for x in types}
                 url = item.get("url") or (item.get("@id") if "recipe" in type_values else None)
-                title = item.get("name")
+                title = item.get("name") or item.get("title")
                 if not isinstance(url, str) or not isinstance(title, str):
                     continue
-                candidate = self._result(title, url, search_url, image=item.get("image"), nutrition=item.get("nutrition"))
+                aggregate_rating = item.get("aggregateRating") or item.get("rating")
+                if not isinstance(aggregate_rating, dict):
+                    aggregate_rating = {}
+                candidate = self._result(
+                    title,
+                    url,
+                    search_url,
+                    image=item.get("image"),
+                    nutrition=item.get("nutrition"),
+                    rating=aggregate_rating.get("ratingValue"),
+                    rating_count=aggregate_rating.get("ratingCount") or aggregate_rating.get("reviewCount"),
+                )
                 if candidate:
                     candidates.append(candidate)
 
@@ -65,15 +78,34 @@ class SourceAdapter(ABC):
         # avoids treating navigation/category links as recipe cards.
         for anchor in parser.anchors:
             title = anchor.text or anchor.image_alt or ""
-            candidate = self._result(title, anchor.href, search_url, image=anchor.image_url)
+            candidate = self._result(
+                title,
+                anchor.href,
+                search_url,
+                image=anchor.image_url,
+                rating=anchor.rating_value,
+                rating_count=anchor.rating_count,
+            )
             if candidate:
                 candidates.append(candidate)
 
         deduplicated: dict[str, SearchResult] = {}
         for candidate in candidates:
             existing = deduplicated.get(candidate.url)
-            if existing is None or (not existing.image_url and candidate.image_url):
+            if existing is None:
                 deduplicated[candidate.url] = candidate
+            else:
+                deduplicated[candidate.url] = replace(
+                    existing,
+                    image_url=existing.image_url or candidate.image_url,
+                    publisher_nutrition=existing.publisher_nutrition or candidate.publisher_nutrition,
+                    star_rating=existing.star_rating or candidate.star_rating,
+                    rating_count=(
+                        existing.rating_count
+                        if existing.rating_count is not None
+                        else candidate.rating_count
+                    ),
+                )
         return tuple(deduplicated.values())
 
     def _result(
@@ -84,6 +116,8 @@ class SourceAdapter(ABC):
         *,
         image: object = None,
         nutrition: object = None,
+        rating: object = None,
+        rating_count: object = None,
     ) -> SearchResult | None:
         cleaned_title = unescape(" ".join(str(title).split()))
         if not cleaned_title:
@@ -107,7 +141,29 @@ class SourceAdapter(ABC):
             url=canonical,
             image_url=image_url,
             publisher_nutrition=parse_publisher_nutrition(nutrition),
+            star_rating=self._rating(rating),
+            rating_count=self._rating_count(rating_count),
         )
+
+    @staticmethod
+    def _rating(value: object) -> Decimal | None:
+        try:
+            rating = Decimal(str(value).strip())
+        except (InvalidOperation, ValueError):
+            return None
+        return rating if Decimal("0") <= rating <= Decimal("5") else None
+
+    @staticmethod
+    def _rating_count(value: object) -> int | None:
+        if value is None:
+            return None
+        match = re.search(r"\d[\d,\s]*", str(value))
+        if not match:
+            return None
+        try:
+            return int(re.sub(r"[^\d]", "", match.group()))
+        except ValueError:
+            return None
 
     @staticmethod
     def _image(value: object) -> str | None:
@@ -129,9 +185,9 @@ class SourceAdapter(ABC):
                 yield from cls._walk(item)
         elif isinstance(value, dict):
             yield value
-            for key in ("@graph", "itemListElement"):
-                if key in value:
-                    yield from cls._walk(value[key])
+            for child in value.values():
+                if isinstance(child, (dict, list)):
+                    yield from cls._walk(child)
 
     @abstractmethod
     def limitation(self) -> str:

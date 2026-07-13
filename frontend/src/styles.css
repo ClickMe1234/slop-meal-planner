@@ -278,6 +278,8 @@ button.tag { cursor: pointer; font: inherit; }
 .recipe-title { align-items:start; display:flex; gap:10px; justify-content:space-between; }
 .recipe-title h2 { font-family:'DM Sans'; font-size:1.05rem; line-height:1.35; margin:0; }
 .recipe-title a { color:var(--muted); }
+.recipe-rating { align-items:center; color:var(--warm); display:flex; font-size:.7rem; gap:4px; margin-top:7px; }
+.recipe-rating span { color:var(--muted); font-weight:500; }
 .recipe-meta { color:var(--muted); font-size:.7rem; margin:6px 0 14px; }
 .nutrition-panel { border-radius:10px; padding:10px; }
 .nutrition-panel--calculated { background:var(--primary-soft); }.nutrition-panel--source { background:var(--warm-soft); }

@@ -25,6 +25,8 @@ export interface Recipe {
   state: RecipeState
   mealKinds: MealKind[]
   reviewCount?: number
+  starRating?: number
+  ratingCount?: number
   ingredients?: string[]
 }
 

@@ -124,6 +124,8 @@ class LiveSearchService:
                             image_url=result.image_url,
                             publisher_nutrition=result.publisher_nutrition,
                             already_saved=result.url in saved,
+                            star_rating=result.star_rating,
+                            rating_count=result.rating_count,
                         )
                         for result in source.results
                     ),
@@ -188,7 +190,13 @@ class LiveSearchService:
                     (self._relevance_score(result, query), result)
                     for result in parsed
                 ),
-                key=lambda item: (-item[0], item[1].title.casefold()),
+                key=lambda item: (
+                    item[1].rating_rank is None,
+                    -(item[1].rating_rank or 0),
+                    -(item[1].rating_count or 0),
+                    -item[0],
+                    item[1].title.casefold(),
+                ),
             )
             results = tuple(
                 result
