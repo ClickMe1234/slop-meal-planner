@@ -90,6 +90,20 @@ def _target_out(db: Session, target: TargetProfile) -> TargetProfileOut:
     )
 
 
+@router.get("/household-members/targets", response_model=list[TargetProfileOut])
+def list_targets(
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    targets = db.scalars(
+        select(TargetProfile)
+        .join(HouseholdMember, HouseholdMember.id == TargetProfile.member_id)
+        .where(HouseholdMember.household_id == context.user.household_id)
+        .order_by(HouseholdMember.name)
+    ).all()
+    return [_target_out(db, target) for target in targets]
+
+
 @router.get("/household-members/{member_id}/target", response_model=TargetProfileOut)
 def get_target(
     member_id: str,

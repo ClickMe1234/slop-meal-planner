@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from ..auth import AuthContext, get_auth_context, require_csrf
 from ..db import get_db
 from ..errors import ConflictError, DomainError, NotFoundError
-from ..models import MealBatch, PantryLot, ShoppingItem, ShoppingList
+from ..models import Household, MealBatch, MealPlan, PantryLot, PlanStatus, ShoppingItem, ShoppingList
 from ..schemas import (
     PantryAdjustment,
     PantryLotCreate,
@@ -101,6 +101,21 @@ def build_list(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
+    plan = db.scalar(
+        select(MealPlan)
+        .where(MealPlan.id == payload.meal_plan_id)
+        .with_for_update()
+    )
+    if plan is None or plan.household_id != context.user.household_id:
+        raise NotFoundError("Meal plan")
+    db.scalar(
+        select(Household).where(Household.id == plan.household_id).with_for_update()
+    )
+    if plan.status != PlanStatus.ACCEPTED.value:
+        raise DomainError(
+            "PLAN_NOT_ACCEPTED",
+            "Accept the plan before building or rebuilding its shopping list",
+        )
     shopping_list = build_shopping_list(
         db, context.user.household_id, payload.meal_plan_id, payload.name
     )

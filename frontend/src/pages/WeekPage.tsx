@@ -29,7 +29,7 @@ function LiveWeekPage(){
   const queryClient=useQueryClient()
   const [selected,setSelected]=useState(0)
   const session=useQuery({queryKey:['session'],queryFn:api.me,retry:false})
-  const plans=useQuery({queryKey:['plans'],queryFn:api.listPlans})
+  const plans=useQuery({queryKey:['plans'],queryFn:api.listPlans,refetchOnMount:'always'})
   const current=plans.data?.find(plan=>plan.status==='accepted')??plans.data?.find(plan=>plan.status==='ready')
   const detail=useQuery({queryKey:['plan',current?.id],queryFn:()=>api.getPlan(current!.id),enabled:Boolean(current)})
   const target=useQuery({queryKey:['target',session.data?.member_id],queryFn:()=>api.getTarget(session.data!.member_id!),enabled:Boolean(session.data?.member_id)})

@@ -32,4 +32,34 @@ describe('App', () => {
     expect(screen.getAllByText(/nutrition from good food/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/food-data match|match foods|fallback calculation/i)).not.toBeInTheDocument()
   })
+
+  it('asks for meal types before finishing a searched recipe save', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes']}><App/></MemoryRouter></QueryClientProvider>)
+
+    await user.click(screen.getAllByRole('button', { name: /save recipe/i })[0])
+    const dialog = screen.getByRole('dialog', { name: /where should/i })
+    const finish = screen.getByRole('button', { name: /finish saving/i })
+    expect(dialog).toBeInTheDocument()
+    expect(finish).toBeDisabled()
+
+    await user.click(screen.getByText('Select meal types'))
+    await user.click(screen.getByRole('checkbox', { name: 'Lunch' }))
+    await user.click(finish)
+
+    expect(await screen.findByText(/was saved for lunch/i)).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /search recipes/i })).toBeInTheDocument()
+  })
+
+  it('warns until a custom recipe has a meal type', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes/new']}><App/></MemoryRouter></QueryClientProvider>)
+
+    expect(screen.getByText(/not used for meal planning yet/i)).toBeInTheDocument()
+    await user.click(screen.getByText('Select meal types'))
+    await user.click(screen.getByRole('checkbox', { name: 'Lunch' }))
+
+    expect(screen.queryByText(/not used for meal planning yet/i)).not.toBeInTheDocument()
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+  })
 })

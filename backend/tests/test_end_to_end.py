@@ -114,6 +114,7 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
             "source_type": "url",
             "source_url": "https://www.bbcgoodfood.com/recipes/rice-bowl",
             "publisher": "Good Food",
+            "meal_types": ["dinner"],
             "publisher_nutrition": {
                 "basis": "per serving",
                 "energy_kcal": 500,

@@ -34,41 +34,64 @@ def build_shopping_list(
     plan = db.get(MealPlan, meal_plan_id)
     if plan is None or plan.household_id != household_id:
         raise NotFoundError("Meal plan")
-    previous = db.scalar(
+    previous_lists = db.scalars(
         select(ShoppingList)
         .where(ShoppingList.household_id == household_id, ShoppingList.active.is_(True))
         .order_by(ShoppingList.updated_at.desc())
-    )
+    ).all()
+    previous = previous_lists[0] if previous_lists else None
     previous_items = []
     if previous is not None:
         previous_items = db.scalars(
             select(ShoppingItem).where(ShoppingItem.shopping_list_id == previous.id)
         ).all()
-        previous.active = False
-        previous.version += 1
+    for previous_list in previous_lists:
+        previous_list.active = False
+        previous_list.version += 1
     batches = db.scalars(
         select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
     ).all()
     requirements: dict[tuple[str | None, str, str], Decimal] = defaultdict(Decimal)
+    review_actions: dict[str, dict] = {}
     for batch in batches:
         version = db.get(RecipeVersion, batch.recipe_version_id)
         if version is None or not version.yield_servings:
             raise DomainError("INVALID_BATCH", "A meal batch references an invalid recipe yield")
         scale = Decimal(batch.servings) / Decimal(version.yield_servings)
         for ingredient in version.ingredients:
-            if not ingredient.included:
+            if not ingredient.included or ingredient.shopping_excluded:
                 continue
             if ingredient.quantity_grams is not None:
                 amount, unit = Decimal(ingredient.quantity_grams), "g"
             elif ingredient.quantity is not None and ingredient.unit:
                 amount, unit = Decimal(ingredient.quantity), ingredient.unit
             else:
-                raise DomainError(
-                    "SHOPPING_REVIEW_REQUIRED",
-                    f"Confirm a shopping quantity for {ingredient.original_text}",
+                review_actions.setdefault(
+                    ingredient.id,
+                    {
+                        "kind": "review_recipe",
+                        "label": f"Fix {ingredient.original_text}",
+                        "href": f"/recipes/{version.recipe_id}/review?focusIngredient={ingredient.id}",
+                        "suggestion": (
+                            "Enter a quantity and unit, or mark Do not add to shopping list."
+                        ),
+                        "recipe_id": version.recipe_id,
+                        "recipe_version_id": version.id,
+                        "ingredient_id": ingredient.id,
+                        "batch_id": batch.id,
+                    },
                 )
+                continue
             display = ingredient.food_phrase or ingredient.original_text
             requirements[(ingredient.food_record_id, display, unit)] += amount * scale
+
+    if review_actions:
+        count = len(review_actions)
+        raise DomainError(
+            "SHOPPING_REVIEW_REQUIRED",
+            f"Confirm a shopping quantity for {count} recipe ingredient{'s' if count != 1 else ''}.",
+            actions=list(review_actions.values()),
+        )
 
     # Stock reserved for this accepted plan is already spoken for by these
     # batches. Count it as pantry usage instead of treating it as unavailable

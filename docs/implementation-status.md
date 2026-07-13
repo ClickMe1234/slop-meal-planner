@@ -10,11 +10,13 @@ This file connects the product specification to the first runnable release.
 4. Review serving yield and detected ingredient amounts/units.
 5. Use complete per-serving nutrition reported by the recipe website and mark
    the recipe planner-ready.
-7. Generate a multi-day plan from planner-ready recipes.
-8. Review and accept it, reserving pantry stock.
-9. Use the generated shopping list online or from its local offline copy.
-10. Explicitly add checked purchases to the pantry.
-11. Mark a cooked batch to consume its reservations.
+7. Select who attends each meal and when each meal gets a new cooked batch.
+8. Generate a multi-day plan from meal-tagged, planner-ready recipes.
+9. Review daily calories/macros, collapse days, swap a whole cooked batch, and
+   accept it atomically while reserving pantry stock and building shopping.
+10. Use the generated shopping list online or from its local offline copy.
+11. Explicitly add checked purchases to the pantry.
+12. Mark a cooked batch to consume its reservations.
 
 ## Implemented as hard rules
 
@@ -25,6 +27,11 @@ This file connects the product specification to the first runnable release.
 - Calorie-mode macro minima/maxima remain hard bounds.
 - Shared meals can assign each member portions from 0.5 to 2.0 in 0.25 steps.
 - A grouped batch is cooked once and sums all occurrence portions.
+- Attendance is stored per member, date and meal; servings and shopping scale
+  follow the people who are actually attending.
+- Recipes carry optional breakfast/lunch/dinner/snack tags in the backend. An
+  untagged recipe remains saved but is visibly excluded from planning until
+  tagged.
 - Allocations beyond 48 hours require an acknowledgement; freezing is not
   modelled.
 - Optional ingredients default to excluded until explicitly included.
@@ -32,16 +39,18 @@ This file connects the product specification to the first runnable release.
   pretend food has already been consumed.
 - Complete publisher-reported per-serving nutrition is attributed to its website
   and is the only nutrition source admitted to automatic planning.
+- Shopping quantities marked “to taste/already stocked” can be excluded from
+  shopping; unresolved quantities return an actionable recipe-review link.
 - Ingredient-to-food matching and calculated nutrition are parked.
 - Great British Chefs discovery is disabled; Good Food and Allrecipes are active.
 
 ## Validation completed
 
-- 39 backend tests and 4 frontend tests pass.
+- 51 backend tests and 22 frontend tests pass.
 - The production frontend build and PWA manifest build pass.
-- Docker Desktop smoke test passed for the full Compose stack (PostgreSQL,
-  Redis, web, worker and scheduler), including migrations, readiness, PWA
-  serving, owner setup, authenticated target creation and CSRF rotation.
+- Docker Desktop smoke test passed for the rebuilt Compose stack (PostgreSQL,
+  Redis, web, worker and scheduler), including migrations, readiness, live
+  PWA serving, owner setup, and a database-backed household member query.
 
 ## External work required by the operator
 

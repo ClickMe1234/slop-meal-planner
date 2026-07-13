@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+import re
 
 
 @dataclass(frozen=True)
@@ -10,6 +11,7 @@ class RecipeCandidate:
     recipe_version_id: str
     nutrition: dict[str, Decimal]
     food_record_ids: frozenset[str] = frozenset()
+    ingredient_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,9 @@ def choose_shared_recipe(
     participants: list[ParticipantTarget],
     preferred_food_record_ids: frozenset[str] = frozenset(),
     prior_recipe_uses: dict[str, int] | None = None,
+    preferred_terms: frozenset[str] = frozenset(),
+    disliked_terms: frozenset[str] = frozenset(),
+    enforce_nutrition_bounds: bool = True,
 ) -> PlannerChoice:
     if not candidates:
         raise ValueError("No planner-ready recipe candidates")
@@ -102,7 +107,9 @@ def choose_shared_recipe(
             best_portion: Decimal | None = None
             best_error: Decimal | None = None
             for portion in PORTIONS:
-                if not _within_hard_bounds(participant, candidate.nutrition, portion):
+                if enforce_nutrition_bounds and not _within_hard_bounds(
+                    participant, candidate.nutrition, portion
+                ):
                     continue
                 error = Decimal("0")
                 for key, target_value in targets.items():
@@ -122,6 +129,16 @@ def choose_shared_recipe(
             continue
         # Preferences influence ranking only; they never override hard targets.
         score -= Decimal("0.0001") * len(candidate.food_record_ids & preferred_food_record_ids)
+        preferred_matches = sum(
+            bool(re.search(rf"\b{re.escape(term)}\b", candidate.ingredient_text))
+            for term in preferred_terms
+        )
+        disliked_matches = sum(
+            bool(re.search(rf"\b{re.escape(term)}\b", candidate.ingredient_text))
+            for term in disliked_terms
+        )
+        score -= Decimal("0.0001") * preferred_matches
+        score += Decimal("0.0001") * disliked_matches
         # Variety is a soft objective. A repeated recipe remains available when
         # it is the only way to satisfy hard nutrition/restriction constraints.
         score += Decimal("0.01") * (prior_recipe_uses or {}).get(candidate.recipe_id, 0)

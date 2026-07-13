@@ -1,9 +1,10 @@
 import { ArrowLeft, ArrowRight, Check, ExternalLink, FileSearch, Link2, Plus, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
-import { FormEvent, useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { FormEvent, useEffect, useRef, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NutritionStrip } from '../components/Nutrition'
 import { Badge, Button, Card, Notice, PageHeader, ProgressBar } from '../components/ui'
+import { MealTypePicker, normaliseRecipeMealTypes, type RecipeMealType } from '../components/MealTypePicker'
 import { api, ApiError, isDemoMode, type BackendRecipeDetail } from '../api/client'
 
 const INGREDIENT_UNITS = ['g', 'kg', 'mg', 'ml', 'l', 'tsp', 'tbsp', 'cup', 'clove', 'small', 'medium', 'large', 'item', 'slice', 'bunch', 'handful', 'can', 'tin', 'jar', 'packet', 'pack', 'bottle', 'sprig', 'stalk', 'head', 'fillet', 'piece', 'pinch', 'dash', 'splash']
@@ -30,6 +31,17 @@ function completePublisherNutrition(recipe?: BackendRecipeDetail): boolean {
 
 function IngredientUnitOptions() {
   return <datalist id="ingredient-unit-options">{INGREDIENT_UNITS.map(unit => <option value={unit} key={unit}/>)}</datalist>
+}
+
+function MealTypePlanningWarning() {
+  return <div className="recipe-planning-note recipe-planning-note--warning" role="status">
+    <strong>Not used for meal planning yet</strong>
+    <span>You can save this recipe without a meal type, but the planner will ignore it until you add at least one.</span>
+  </div>
+}
+
+function recipeMealTypes(recipe: BackendRecipeDetail | undefined): RecipeMealType[] {
+  return normaliseRecipeMealTypes(recipe?.meal_types)
 }
 
 export function RecipeImportPage() {
@@ -90,16 +102,19 @@ interface EditableIngredientRow {
   amount: string
   unit: string
   quantity_grams: string
+  shopping_excluded: boolean
 }
 
-const emptyIngredient = (): EditableIngredientRow => ({ original_text: '', amount: '', unit: 'g', quantity_grams: '' })
+const emptyIngredient = (): EditableIngredientRow => ({ original_text: '', amount: '', unit: 'g', quantity_grams: '', shopping_excluded: false })
 
 export function CustomRecipePage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [title, setTitle] = useState('')
   const [yieldServings, setYieldServings] = useState('4')
   const [instructions, setInstructions] = useState('')
   const [rows, setRows] = useState<EditableIngredientRow[]>([emptyIngredient()])
+  const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const update = (index: number, change: Partial<EditableIngredientRow>) => setRows(all => all.map((row, rowIndex) => rowIndex === index ? { ...row, ...change } : row))
@@ -108,31 +123,39 @@ export function CustomRecipePage() {
     event.preventDefault()
     setError('')
     const validRows = rows.filter(row => row.original_text.trim())
-    if (validRows.some(row => !row.amount || !row.unit)) {
-      setError('Add an amount and unit for each ingredient.')
+    if (validRows.some(row => !row.shopping_excluded && (!row.amount || !row.unit))) {
+      setError('Add an amount and unit for each ingredient, or leave it off the shopping list.')
       return
     }
     setSaving(true)
     try {
+      if (isDemoMode) {
+        await new Promise(resolve => window.setTimeout(resolve, 300))
+        navigate('/recipes')
+        return
+      }
       await api.createRecipe({
         title,
         yield_servings: Number(yieldServings),
         source_type: 'custom',
         custom_instructions: instructions || null,
+        meal_types: mealTypes,
         ingredients: validRows.map(row => {
           const quantityGrams = row.quantity_grams || gramsFor(row.amount, row.unit)
           return {
             original_text: row.original_text,
-            quantity: Number(row.amount),
-            unit: row.unit,
+            quantity: row.amount ? Number(row.amount) : null,
+            unit: row.amount ? row.unit : null,
             quantity_grams: quantityGrams ? Number(quantityGrams) : null,
             food_phrase: row.original_text,
             included: true,
             optional: false,
             needs_review: false,
+            shopping_excluded: row.shopping_excluded,
           }
         }),
       })
+      await queryClient.invalidateQueries({ queryKey: ['recipes'] })
       navigate('/recipes')
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'The custom recipe could not be saved.')
@@ -141,7 +164,38 @@ export function CustomRecipePage() {
     }
   }
 
-  return <div className="page page--wide"><IngredientUnitOptions/><PageHeader eyebrow="Custom recipe" title="Add your own recipe" description="Keep each amount and unit as written—tablespoons, cloves, sizes and other count units are supported."/><form onSubmit={submit} className="review-layout"><section><Card className="form-stack"><label>Recipe title<input required value={title} onChange={event => setTitle(event.target.value)}/></label><label>Servings<input required type="number" min="0.25" step="0.25" value={yieldServings} onChange={event => setYieldServings(event.target.value)}/></label><label>Your instructions<textarea value={instructions} onChange={event => setInstructions(event.target.value)} rows={8}/></label></Card><div className="ingredient-review-list">{rows.map((row, index) => <Card className="ingredient-row" key={index}><div className="ingredient-copy"><div className="form-grid"><label>Ingredient as written<input required value={row.original_text} onChange={event => update(index, { original_text: event.target.value })}/></label><label>Amount<input type="number" min="0" step="any" value={row.amount} onChange={event => update(index, { amount: event.target.value, quantity_grams: gramsFor(event.target.value, row.unit) || row.quantity_grams })}/></label><label>Unit<input required list="ingredient-unit-options" value={row.unit} onChange={event => update(index, { unit: event.target.value, quantity_grams: gramsFor(row.amount, event.target.value) })}/></label></div></div><Button type="button" variant="ghost" onClick={() => setRows(all => all.filter((_, rowIndex) => rowIndex !== index))}><Trash2/>Remove</Button></Card>)}</div><Button type="button" variant="secondary" onClick={() => setRows(all => [...all, emptyIngredient()])}><Plus/>Add ingredient</Button></section><aside><Card className="review-summary"><h2>Custom recipe</h2><p>Ingredient matching is paused. Custom recipes are saved without estimated nutrition and are not used for automatic nutrition planning.</p>{error && <Notice tone="warning" title="Could not save">{error}</Notice>}<Button disabled={saving}>{saving ? 'Saving…' : 'Save recipe'}</Button></Card></aside></form></div>
+  return <div className="page page--wide">
+    <IngredientUnitOptions/>
+    <PageHeader eyebrow="Custom recipe" title="Add your own recipe" description="Keep each amount and unit as written—tablespoons, cloves, sizes and other count units are supported."/>
+    <form onSubmit={submit} className="review-layout">
+      <section>
+        <Card className="form-stack">
+          <label>Recipe title<input required value={title} onChange={event => setTitle(event.target.value)}/></label>
+          <label>Servings<input required type="number" min="0.25" step="0.25" value={yieldServings} onChange={event => setYieldServings(event.target.value)}/></label>
+          <MealTypePicker value={mealTypes} onChange={setMealTypes}/>
+          {!mealTypes.length && <MealTypePlanningWarning/>}
+          <label>Your instructions<textarea value={instructions} onChange={event => setInstructions(event.target.value)} rows={8}/></label>
+        </Card>
+        <div className="ingredient-review-list">{rows.map((row, index) => {
+          const shoppingQuantityMissing = !row.shopping_excluded && (!row.amount || !row.unit)
+          return <Card className={`ingredient-row ${shoppingQuantityMissing && row.original_text ? 'ingredient-row--amount' : ''}`} key={index}>
+            <div className="ingredient-copy">
+              <div className="form-grid">
+                <label>Ingredient as written<input required value={row.original_text} onChange={event => update(index, { original_text: event.target.value })}/></label>
+                <label>Amount<input type="number" min="0" step="any" value={row.amount} onChange={event => update(index, { amount: event.target.value, quantity_grams: gramsFor(event.target.value, row.unit) || row.quantity_grams })}/></label>
+                <label>Unit<input required={!row.shopping_excluded} list="ingredient-unit-options" value={row.unit} onChange={event => update(index, { unit: event.target.value, quantity_grams: gramsFor(row.amount, event.target.value) })}/></label>
+              </div>
+              <label className="check-label shopping-exclusion-control"><input type="checkbox" checked={row.shopping_excluded} onChange={event => update(index, { shopping_excluded: event.target.checked })}/>Do not add this to the shopping list <small>(to taste / already stocked)</small></label>
+              {shoppingQuantityMissing && row.original_text && <span className="ingredient-inline-warning">Enter an amount and unit, or leave this ingredient off the shopping list.</span>}
+            </div>
+            <Button type="button" variant="ghost" onClick={() => setRows(all => all.filter((_, rowIndex) => rowIndex !== index))}><Trash2/>Remove</Button>
+          </Card>
+        })}</div>
+        <Button type="button" variant="secondary" onClick={() => setRows(all => [...all, emptyIngredient()])}><Plus/>Add ingredient</Button>
+      </section>
+      <aside><Card className="review-summary"><h2>Custom recipe</h2><p>Ingredient matching is paused. Custom recipes are saved without estimated nutrition and are not used for automatic nutrition planning.</p>{error && <Notice tone="warning" title="Could not save">{error}</Notice>}<Button disabled={saving}>{saving ? 'Saving…' : 'Save recipe'}</Button></Card></aside>
+    </form>
+  </div>
 }
 
 export function ImportReviewPage() {
@@ -150,27 +204,44 @@ export function ImportReviewPage() {
 
 function DemoImportReviewPage() {
   const navigate = useNavigate()
+  const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const demoIngredients = ['600g boneless skinless chicken thighs', '2 x 400g cans chickpeas, drained', '2 tbsp rose harissa', 'a splash of olive oil', '1 lemon, zest and juice']
-  return <div className="page page--wide"><div className="review-top"><Link to="/recipes" className="icon-link"><ArrowLeft/>Back to recipes</Link><Badge tone="green">Nutrition from Good Food</Badge></div><PageHeader eyebrow="Import review" title="Harissa chicken with chickpeas" description="Nutrition is reported by Good Food and will be used for planning." actions={<Button variant="secondary"><ExternalLink size={17}/>Original recipe</Button>}/><div className="review-layout"><section><Card className="yield-card"><label>Confirmed servings<input type="number" min="0.25" step="0.25" defaultValue="4"/></label></Card><div className="ingredient-review-list">{demoIngredients.map(item => <Card key={item} className="ingredient-row"><div className="ingredient-copy"><small>Ingredient from recipe</small><strong>{item}</strong></div></Card>)}</div></section><aside><Card className="review-summary"><Sparkles/><h2>Nutrition from Good Food</h2><NutritionStrip nutrition={{ calories: 524, protein: 48, carbs: 39, fat: 18, basis: 'per_serving' }}/><p>Per serving · reported by Good Food · used for planning</p><Button onClick={() => navigate('/recipes')}>Save recipe</Button></Card></aside></div></div>
+  return <div className="page page--wide"><div className="review-top"><Link to="/recipes" className="icon-link"><ArrowLeft/>Back to recipes</Link><Badge tone="green">Nutrition from Good Food</Badge></div><PageHeader eyebrow="Import review" title="Harissa chicken with chickpeas" description="Nutrition is reported by Good Food and will be used for planning." actions={<Button variant="secondary"><ExternalLink size={17}/>Original recipe</Button>}/><div className="review-layout"><section><Card className="yield-card recipe-basics-card"><label>Confirmed servings<input type="number" min="0.25" step="0.25" defaultValue="4"/></label><div className="recipe-meal-type-review"><MealTypePicker value={mealTypes} onChange={setMealTypes}/>{!mealTypes.length && <MealTypePlanningWarning/>}</div></Card><div className="ingredient-review-list">{demoIngredients.map(item => <Card key={item} className="ingredient-row"><div className="ingredient-copy"><small>Ingredient from recipe</small><strong>{item}</strong></div></Card>)}</div></section><aside><Card className="review-summary"><Sparkles/><h2>Nutrition from Good Food</h2><NutritionStrip nutrition={{ calories: 524, protein: 48, carbs: 39, fat: 18, basis: 'per_serving' }}/><p>Per serving · reported by Good Food · used for planning</p><Button onClick={() => navigate('/recipes')}>Save recipe</Button></Card></aside></div></div>
 }
 
 interface ImportedIngredientRow {
+  id: string
   original_text: string
   amount: string
   unit: string
   quantity_grams: string
   food_phrase: string
+  preparation?: string
+  food_record_id?: string
   included: boolean
   optional: boolean
+  shopping_excluded: boolean
 }
 
 function LiveImportReviewPage() {
   const { jobId = '', recipeId: directRecipeId = '' } = useParams()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
   const [rows, setRows] = useState<ImportedIngredientRow[]>([])
   const [yieldServings, setYieldServings] = useState('')
+  const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const focusedIngredient = useRef('')
+  const requestedReturnTo = searchParams.get('returnTo')
+  const returnTo = requestedReturnTo?.startsWith('/') && !requestedReturnTo.startsWith('//') ? requestedReturnTo : '/recipes'
+  const focusIngredient = searchParams.get('focusIngredient') ?? ''
+  const suggestedMealTypes = normaliseRecipeMealTypes(
+    (searchParams.get('suggestedMealTypes') ?? searchParams.get('suggestedMealType') ?? '')
+      .split(',')
+      .filter(Boolean),
+  )
   const job = useQuery({
     queryKey: ['job', jobId],
     queryFn: () => api.job(jobId),
@@ -184,16 +255,33 @@ function LiveImportReviewPage() {
   useEffect(() => {
     if (!recipe.data) return
     setYieldServings(String(recipe.data.yield_servings ?? ''))
+    const savedMealTypes = recipeMealTypes(recipe.data)
+    setMealTypes(savedMealTypes.length ? savedMealTypes : suggestedMealTypes)
     setRows(recipe.data.ingredients.map(item => ({
+      id: item.id,
       original_text: item.original_text,
       amount: String(item.quantity ?? ''),
       unit: item.unit ?? (item.quantity_grams != null ? 'g' : ''),
       quantity_grams: String(item.quantity_grams ?? ''),
       food_phrase: item.food_phrase ?? item.original_text,
+      preparation: (item as typeof item & { preparation?: string }).preparation,
+      food_record_id: item.food_record_id,
       included: item.included,
       optional: item.optional,
+      shopping_excluded: item.shopping_excluded ?? false,
     })))
-  }, [recipe.data])
+  }, [recipe.data, suggestedMealTypes.join(',')])
+
+  useEffect(() => {
+    if (!focusIngredient || focusedIngredient.current === focusIngredient || !rows.some(row => row.id === focusIngredient)) return
+    const timeout = window.setTimeout(() => {
+      const ingredientRow = document.getElementById(`ingredient-${focusIngredient}`)
+      ingredientRow?.scrollIntoView?.({ block: 'center' })
+      ingredientRow?.querySelector<HTMLInputElement>('[data-shopping-quantity-input]')?.focus()
+      focusedIngredient.current = focusIngredient
+    }, 0)
+    return () => window.clearTimeout(timeout)
+  }, [focusIngredient, rows])
 
   const update = (index: number, change: Partial<ImportedIngredientRow>) => setRows(all => all.map((row, rowIndex) => rowIndex === index ? { ...row, ...change } : row))
   const save = async () => {
@@ -202,28 +290,42 @@ function LiveImportReviewPage() {
       setError('Confirm how many servings the recipe makes.')
       return
     }
+    if (rows.some(row => row.included && !row.shopping_excluded && (!row.amount || !row.unit))) {
+      setError('Add an amount and unit for every included ingredient, or leave it off the shopping list.')
+      return
+    }
     setSaving(true)
     setError('')
     try {
-      await api.saveRecipeReview(recipe.data.id, {
+      const payload: Parameters<typeof api.saveRecipeReview>[1] & { meal_types: RecipeMealType[] } = {
         expected_version: recipe.data.version,
         title: recipe.data.title,
         yield_servings: Number(yieldServings),
+        meal_types: mealTypes,
         ingredients: rows.map(row => {
           const quantityGrams = row.quantity_grams || gramsFor(row.amount, row.unit)
           return {
             original_text: row.original_text,
-            quantity: row.amount ? Number(row.amount) : undefined,
-            unit: row.unit || undefined,
-            quantity_grams: quantityGrams ? Number(quantityGrams) : undefined,
+            quantity: row.amount ? Number(row.amount) : null,
+            unit: row.amount ? row.unit || null : null,
+            quantity_grams: quantityGrams ? Number(quantityGrams) : null,
             food_phrase: row.food_phrase,
+            preparation: row.preparation,
             included: row.included,
             optional: row.optional,
             needs_review: false,
+            food_record_id: row.food_record_id,
+            shopping_excluded: row.shopping_excluded,
           }
         }),
-      })
-      navigate('/recipes')
+      }
+      await api.saveRecipeReview(recipe.data.id, payload)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['recipes'] }),
+        queryClient.invalidateQueries({ queryKey: ['recipe', recipe.data.id] }),
+        queryClient.invalidateQueries({ queryKey: ['plan'] }),
+      ])
+      navigate(returnTo)
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'The reviewed recipe could not be saved.')
     } finally {
@@ -244,5 +346,41 @@ function LiveImportReviewPage() {
     basis: 'per_serving' as const,
   } : null
 
-  return <div className="page page--wide"><IngredientUnitOptions/><div className="review-top"><Link to="/recipes" className="icon-link"><ArrowLeft/>Back to recipes</Link><Badge tone={publisherPreview ? 'green' : undefined}>Nutrition from {publisherName}</Badge></div><PageHeader eyebrow="Import review" title={recipe.data.title} description={publisherPreview ? `Nutrition is reported by ${publisherName} and will be used for planning.` : `Nutrition from ${publisherName} is unavailable for this recipe.`} actions={recipe.data.source_url ? <Button variant="secondary" onClick={() => window.open(recipe.data.source_url)}><ExternalLink/>Original recipe</Button> : undefined}/><div className="review-layout"><section><Card className="yield-card"><label>Confirmed servings<input type="number" min="0.25" step="0.25" value={yieldServings} onChange={event => setYieldServings(event.target.value)}/></label></Card><div className="ingredient-review-list">{rows.map((row, index) => <Card key={`${row.original_text}-${index}`} className="ingredient-row"><div className="ingredient-copy"><small>Ingredient from recipe</small><strong>{row.original_text}</strong><div className="form-grid form-grid--ingredient"><label>Amount<input type="number" min="0" step="any" value={row.amount} onChange={event => update(index, { amount: event.target.value, quantity_grams: gramsFor(event.target.value, row.unit) || row.quantity_grams })}/></label><label>Unit<input list="ingredient-unit-options" value={row.unit} onChange={event => update(index, { unit: event.target.value, quantity_grams: gramsFor(row.amount, event.target.value) })} placeholder="e.g. tbsp, clove, large"/></label></div><div className="form-inline"><label className="check-label"><input type="checkbox" checked={row.included} onChange={event => update(index, { included: event.target.checked })}/>Include in recipe</label><label className="check-label"><input type="checkbox" checked={row.optional} onChange={event => update(index, { optional: event.target.checked, included: event.target.checked ? false : row.included })}/>Optional</label></div></div></Card>)}</div></section><aside><Card className="review-summary"><Sparkles/><h2>Nutrition from {publisherName}</h2>{publisherPreview ? <><NutritionStrip nutrition={publisherPreview}/><p>Per serving · reported by {publisherName} · used for planning</p></> : <div className="nutrition-missing"><div><strong>Nutrition unavailable</strong><span>{publisherName} did not report a complete per-serving nutrition set.</span></div></div>}{error && <Notice tone="warning" title="Could not save">{error}</Notice>}<Button disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save recipe'}</Button></Card></aside></div></div>
+  return <div className="page page--wide">
+    <IngredientUnitOptions/>
+    <div className="review-top"><Link to={returnTo} className="icon-link"><ArrowLeft/>Back</Link><Badge tone={publisherPreview ? 'green' : undefined}>Nutrition from {publisherName}</Badge></div>
+    <PageHeader eyebrow="Import review" title={recipe.data.title} description={publisherPreview ? `Nutrition is reported by ${publisherName} and will be used for planning when meal types are selected.` : `Nutrition from ${publisherName} is unavailable for this recipe.`} actions={recipe.data.source_url ? <Button variant="secondary" onClick={() => window.open(recipe.data.source_url)}><ExternalLink/>Original recipe</Button> : undefined}/>
+    <div className="review-layout">
+      <section>
+        <Card className="yield-card recipe-basics-card">
+          <label>Confirmed servings<input type="number" min="0.25" step="0.25" value={yieldServings} onChange={event => setYieldServings(event.target.value)}/></label>
+          <div className="recipe-meal-type-review">
+            <MealTypePicker value={mealTypes} onChange={setMealTypes}/>
+            {!mealTypes.length && <MealTypePlanningWarning/>}
+          </div>
+        </Card>
+        <div className="ingredient-review-list">{rows.map((row, index) => {
+          const shoppingQuantityMissing = row.included && !row.shopping_excluded && (!row.amount || !row.unit)
+          const warningId = `shopping-warning-${row.id}`
+          return <Card id={`ingredient-${row.id}`} key={row.id} className={`ingredient-row ${shoppingQuantityMissing ? 'ingredient-row--amount' : ''}`}>
+            <div className="ingredient-copy">
+              <small>Ingredient from recipe</small>
+              <strong>{row.original_text}</strong>
+              <div className="form-grid form-grid--ingredient">
+                <label>Amount<input data-shopping-quantity-input type="number" min="0" step="any" value={row.amount} aria-describedby={shoppingQuantityMissing ? warningId : undefined} onChange={event => update(index, { amount: event.target.value, quantity_grams: gramsFor(event.target.value, row.unit) || row.quantity_grams })}/></label>
+                <label>Unit<input list="ingredient-unit-options" value={row.unit} aria-describedby={shoppingQuantityMissing ? warningId : undefined} onChange={event => update(index, { unit: event.target.value, quantity_grams: gramsFor(row.amount, event.target.value) })} placeholder="e.g. tbsp, clove, large"/></label>
+              </div>
+              <div className="form-inline">
+                <label className="check-label"><input type="checkbox" checked={row.included} onChange={event => update(index, { included: event.target.checked })}/>Include in recipe</label>
+                <label className="check-label"><input type="checkbox" checked={row.optional} onChange={event => update(index, { optional: event.target.checked, included: event.target.checked ? false : row.included })}/>Optional</label>
+              </div>
+              <label className="check-label shopping-exclusion-control"><input type="checkbox" checked={row.shopping_excluded} onChange={event => update(index, { shopping_excluded: event.target.checked })}/>Do not add this to the shopping list <small>(to taste / already stocked)</small></label>
+              {shoppingQuantityMissing && <span className="ingredient-inline-warning" id={warningId}>Enter an amount and unit, or leave this ingredient off the shopping list.</span>}
+            </div>
+          </Card>
+        })}</div>
+      </section>
+      <aside><Card className="review-summary"><Sparkles/><h2>Nutrition from {publisherName}</h2>{publisherPreview ? <><NutritionStrip nutrition={publisherPreview}/><p>Per serving · reported by {publisherName} · used for planning</p></> : <div className="nutrition-missing"><div><strong>Nutrition unavailable</strong><span>{publisherName} did not report a complete per-serving nutrition set.</span></div></div>}{error && <Notice tone="warning" title="Could not save">{error}</Notice>}<Button disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save recipe'}</Button></Card></aside>
+    </div>
+  </div>
 }

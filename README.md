@@ -125,12 +125,13 @@ npm.cmd test
 npm.cmd run build
 ```
 
-The current repository passes 39 backend tests, 4 frontend tests, TypeScript
-compilation, the production PWA build, the initial Alembic upgrade, Compose YAML
-parsing and Unraid XML parsing. A Docker Desktop smoke test also passed: the
+The current repository passes 51 backend tests, 22 frontend tests, TypeScript
+compilation, the production PWA build, the initial and incremental Alembic
+upgrades, and Compose YAML parsing. A Docker Desktop smoke test also passed: the
 PostgreSQL, Redis, web, worker and scheduler services started; migrations ran;
 the health endpoints returned 200; the PWA served its HTML and manifest; and a
-live owner setup plus calorie-target request completed successfully.
+live owner setup plus a database-backed household member query completed
+successfully.
 
 ## Repository map
 
