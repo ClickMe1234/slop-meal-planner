@@ -2,6 +2,9 @@
 
 ARG NODE_IMAGE=node:22.18.0-bookworm-slim
 ARG PYTHON_IMAGE=python:3.12.11-slim-bookworm
+ARG POSTGRES_IMAGE=postgres:17.5-bookworm
+
+FROM ${POSTGRES_IMAGE} AS postgres-tools
 
 FROM ${NODE_IMAGE} AS frontend-build
 WORKDIR /build/frontend
@@ -46,16 +49,26 @@ ENV APP_VERSION=${APP_VERSION} \
     FRONTEND_DIST_DIR=/app/frontend/dist \
     HOME=/tmp
 
-RUN groupadd --gid 10001 mealplanner && \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends postgresql-client && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 10001 mealplanner && \
     useradd --uid 10001 --gid mealplanner --no-create-home --shell /usr/sbin/nologin mealplanner && \
     mkdir -p /app/backend /app/frontend/dist /data && \
     chown -R mealplanner:mealplanner /app /data
+
+# Debian Bookworm's default client is PostgreSQL 15.  Use the PostgreSQL 17
+# utility that matches the database image so in-app backups cannot fail with a
+# server/client version mismatch.
+COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_dump /usr/local/bin/pg_dump
+COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_restore /usr/local/bin/pg_restore
 
 COPY --from=python-build /opt/venv /opt/venv
 COPY --chown=mealplanner:mealplanner backend/ /app/backend/
 COPY --from=frontend-build --chown=mealplanner:mealplanner /build/frontend/dist/ /app/frontend/dist/
 COPY --chown=mealplanner:mealplanner deploy/docker/entrypoint.sh /usr/local/bin/meal-planner-entrypoint
-RUN chmod 0555 /usr/local/bin/meal-planner-entrypoint
+COPY --chown=mealplanner:mealplanner deploy/scripts/backup.sh /opt/meal-planner/backup.sh
+RUN chmod 0555 /usr/local/bin/meal-planner-entrypoint /opt/meal-planner/backup.sh
 
 WORKDIR /app/backend
 USER mealplanner

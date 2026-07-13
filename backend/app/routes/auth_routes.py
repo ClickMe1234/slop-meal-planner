@@ -63,7 +63,7 @@ def setup(payload: SetupRequest, response: Response, db: Session = Depends(get_d
     db.flush()
     user = User(
         household_id=household.id,
-        username=payload.username,
+        username=payload.username.strip(),
         password_hash=hash_password(payload.password),
         role=UserRole.OWNER.value,
         member_id=member.id,
@@ -78,7 +78,8 @@ def setup(payload: SetupRequest, response: Response, db: Session = Depends(get_d
 
 @router.post("/login", response_model=AuthOut)
 def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.username == payload.username))
+    username = payload.username.strip().lower()
+    user = db.scalar(select(User).where(func.lower(User.username) == username))
     if user is None or not user.active or not verify_password(payload.password, user.password_hash):
         raise DomainError("INVALID_CREDENTIALS", "Username or password is incorrect", 401)
     raw_token, csrf = create_session(db, user)
@@ -144,7 +145,8 @@ def create_collaborator(
     context: AuthContext = Depends(require_owner),
     db: Session = Depends(get_db),
 ):
-    if db.scalar(select(User).where(User.username == payload.username)):
+    username = payload.username.strip()
+    if db.scalar(select(User).where(func.lower(User.username) == username.lower())):
         raise DomainError("USERNAME_TAKEN", "That username is already in use", 409)
     if payload.member_id:
         member = db.get(HouseholdMember, payload.member_id)
@@ -152,7 +154,7 @@ def create_collaborator(
             raise DomainError("INVALID_MEMBER", "The selected household member is invalid")
     user = User(
         household_id=context.user.household_id,
-        username=payload.username,
+        username=username,
         password_hash=hash_password(payload.temporary_password),
         role=UserRole.COLLABORATOR.value,
         member_id=payload.member_id,

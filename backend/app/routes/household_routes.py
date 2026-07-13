@@ -176,3 +176,22 @@ def add_restriction(
     db.commit()
     db.refresh(restriction)
     return restriction
+
+
+@router.delete("/household-members/{member_id}/restrictions/{restriction_id}", status_code=204)
+def delete_restriction(
+    member_id: str,
+    restriction_id: str,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    member = db.get(HouseholdMember, member_id)
+    if member is None or member.household_id != context.user.household_id:
+        raise NotFoundError("Household member")
+    if context.user.role != UserRole.OWNER.value and context.user.member_id != member.id:
+        raise DomainError("MEMBER_EDIT_FORBIDDEN", "You may edit only your linked profile", 403)
+    restriction = db.get(Restriction, restriction_id)
+    if restriction is None or restriction.member_id != member.id:
+        raise NotFoundError("Restriction")
+    db.delete(restriction)
+    db.commit()

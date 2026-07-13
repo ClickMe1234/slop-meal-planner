@@ -138,6 +138,8 @@ input[type='range'] { accent-color: var(--primary); border: 0; box-shadow: none;
 .text-button { background: none; border: 0; color: var(--primary); font-size: .8rem; font-weight: 700; }
 .tag-row { display: flex; flex-wrap: wrap; gap: 7px; }
 .tag { background: var(--primary-soft); border-radius: 99px; color: var(--primary); display: inline-flex; font-size: .76rem; font-weight: 700; padding: 7px 10px; }
+.grow { flex: 1; min-width: 0; }
+button.tag { cursor: pointer; font: inherit; }
 .tag--danger { background: var(--danger-soft); color: var(--danger); }
 .tag--warm { background: var(--warm-soft); color: var(--warm); }
 .switch-row { align-items: center; display: flex; gap: 20px; justify-content: space-between; }

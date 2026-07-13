@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     session_days: int = 30
     timezone: str = "Europe/London"
+    usda_api_key: str = "DEMO_KEY"
+    remote_food_search_enabled: bool = True
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod

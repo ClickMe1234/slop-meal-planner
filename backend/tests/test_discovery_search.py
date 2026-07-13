@@ -10,13 +10,14 @@ class FakeFetcher:
 
     async def fetch_text(self, url, *, allowed_hosts):
         self.calls.append(url)
+        title = "Stew" if "stew" in url else "Soup"
         if "bbcgoodfood" in url:
-            recipe_url = "https://www.bbcgoodfood.com/recipes/soup"
+            recipe_url = f"https://www.bbcgoodfood.com/recipes/{title.lower()}"
         elif "greatbritishchefs" in url:
-            recipe_url = "https://www.greatbritishchefs.com/recipes/soup-recipe"
+            recipe_url = f"https://www.greatbritishchefs.com/recipes/{title.lower()}-recipe"
         else:
-            recipe_url = "https://www.allrecipes.com/recipe/123/soup/"
-        return f'<a href="{recipe_url}">Soup</a>'
+            recipe_url = f"https://www.allrecipes.com/recipe/123/{title.lower()}/"
+        return f'<a href="{recipe_url}">{title}</a>'
 
 
 def test_remote_search_is_cached_and_marks_saved_results():
@@ -54,3 +55,13 @@ def test_newer_request_supersedes_older_request_key():
         assert len(fetcher.calls) == 3
 
     asyncio.run(run())
+
+
+def test_irrelevant_category_cards_are_removed_and_exact_matches_rank_first():
+    score = LiveSearchService._relevance_score
+    exact = SearchResult("good_food", "Thai green chicken curry", "https://example/chicken-curry")
+    partial = SearchResult("good_food", "Chicken traybake", "https://example/chicken-traybake")
+    category = SearchResult("good_food", "Sourdough & Focaccia recipes", "https://example/sourdough")
+
+    assert score(exact, "chicken curry") > score(partial, "chicken curry") > 0
+    assert score(category, "chicken curry") == 0

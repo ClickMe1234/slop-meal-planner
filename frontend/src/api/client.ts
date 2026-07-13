@@ -59,19 +59,24 @@ export const api = {
   me: () => request<{ id: string; username: string; role: 'owner' | 'collaborator'; member_id?: string; must_change_password: boolean }>('/auth/me'),
   changePassword: (currentPassword: string, newPassword: string) => request<void>('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
   setTarget: (memberId: string, payload: Record<string, unknown>) => request(`/household-members/${memberId}/target`, { method: 'PUT', body: JSON.stringify(payload) }),
-  listMembers: () => request<Array<{ id: string; name: string; active: boolean }>>('/household-members'),
-  getTarget: (memberId: string) => request<{ mode: 'calorie' | 'macros'; calorie_target?: number; protein_target_g?: number; carbohydrate_target_g?: number; fat_target_g?: number; tolerance_percent: number }>(`/household-members/${memberId}/target`),
+  listMembers: () => request<BackendMember[]>('/household-members'),
+  createMember: (name: string) => request<BackendMember>('/household-members', { method: 'POST', body: JSON.stringify({ name }) }),
+  updateMember: (memberId: string, payload: { expected_version: number; name?: string; active?: boolean }) => request<BackendMember>(`/household-members/${memberId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  getTarget: (memberId: string) => request<BackendTarget>(`/household-members/${memberId}/target`),
+  listRestrictions: (memberId: string) => request<BackendRestriction[]>(`/household-members/${memberId}/restrictions`),
+  addRestriction: (memberId: string, payload: { kind: BackendRestriction['kind']; value: string; hard?: boolean }) => request<BackendRestriction>(`/household-members/${memberId}/restrictions`, { method: 'POST', body: JSON.stringify(payload) }),
+  deleteRestriction: (memberId: string, restrictionId: string) => request<void>(`/household-members/${memberId}/restrictions/${restrictionId}`, { method: 'DELETE' }),
   listRecipes: (query = '') => request<{ items: BackendRecipe[]; total: number }>(`/recipes?q=${encodeURIComponent(query)}`),
   createRecipe: (payload: Record<string, unknown>) => request<BackendRecipeDetail>('/recipes', { method: 'POST', body: JSON.stringify(payload) }),
   getRecipe: (id: string) => request<BackendRecipeDetail>(`/recipes/${id}`),
   saveRecipeReview: (id: string, payload: { expected_version: number; title: string; yield_servings: number; ingredients: Array<Record<string, unknown>> }) => request<BackendRecipeDetail>(`/recipes/${id}/review`, { method: 'PUT', body: JSON.stringify(payload) }),
-  searchFoods: (query = '') => request<{ items: BackendFood[]; total: number }>(`/foods?q=${encodeURIComponent(query)}&page_size=100`),
+  searchFoods: (query = '') => request<{ items: BackendFood[]; total: number; remote_error?: string }>(`/foods?q=${encodeURIComponent(query)}&page_size=100`),
   searchRemote: (query: string, requestKey: string) => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}`),
   startImport: (url: string) => request<JobStatus>('/recipe-imports', { method: 'POST', body: JSON.stringify({ url }) }),
   calculateRecipe: (id: string) => request<{ per_serving_values: Record<string, number> }>(`/recipes/${id}/calculate`, { method: 'POST' }),
   job: (id: string) => request<JobStatus>(`/jobs/${id}`),
   listPantry: () => request<BackendPantryItem[]>('/pantry-items'),
-  addPantry: (payload: { display_name: string; quantity: number; unit: string }) => request<BackendPantryItem>('/pantry-items', { method: 'POST', body: JSON.stringify(payload) }),
+  addPantry: (payload: { display_name: string; quantity: number; unit: string; always_have?: boolean }) => request<BackendPantryItem>('/pantry-items', { method: 'POST', body: JSON.stringify(payload) }),
   activeShoppingList: () => request<BackendShoppingList>('/shopping-lists/active'),
   patchShoppingItem: (listId: string, itemId: string, payload: { expected_version: number; checked?: boolean }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   addShoppingItem: (listId: string, payload: { display_name: string; exact_quantity: number; purchase_quantity: number; unit: string; category: string }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items`, { method: 'POST', body: JSON.stringify(payload) }),
@@ -81,7 +86,9 @@ export const api = {
   getPlan: (id: string) => request<BackendPlanDetail>(`/meal-plans/${id}`),
   acceptPlan: (id: string) => request<BackendPlan>(`/meal-plans/${id}/accept`, { method: 'POST' }),
   markBatchCooked: (planId: string, batchId: string) => request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, { method: 'POST' }),
-  buildShoppingList: (planId: string) => request<BackendShoppingList>('/shopping-lists/build', { method: 'POST', body: JSON.stringify({ meal_plan_id: planId, name: 'Current shopping list' }) })
+  buildShoppingList: (planId: string) => request<BackendShoppingList>('/shopping-lists/build', { method: 'POST', body: JSON.stringify({ meal_plan_id: planId, name: 'Current shopping list' }) }),
+  backupStatus: () => request<BackendBackupStatus>('/system/backups'),
+  createBackup: () => request<BackendBackupStatus>('/system/backups', { method: 'POST' })
 }
 
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE !== 'false'
@@ -122,6 +129,42 @@ export interface BackendFood {
   provider: string
   dataset_version: string
   basis_unit: string
+}
+
+export interface BackendMember {
+  id: string
+  name: string
+  active: boolean
+  version: number
+}
+
+export interface BackendTarget {
+  id: string
+  member_id: string
+  mode: 'calorie' | 'macros'
+  calorie_target?: number
+  protein_target_g?: number
+  carbohydrate_target_g?: number
+  fat_target_g?: number
+  tolerance_percent: number
+  allocations: Array<{ meal_type: string; percentage: number }>
+  version: number
+}
+
+export interface BackendRestriction {
+  id: string
+  member_id: string
+  kind: 'allergy' | 'exclude' | 'dislike' | 'prefer'
+  value: string
+  hard: boolean
+}
+
+export interface BackendBackupStatus {
+  available: boolean
+  last_backup?: string | null
+  tier?: string | null
+  application_version?: string | null
+  schema_revision?: string | null
 }
 
 export interface DiscoveryResult {

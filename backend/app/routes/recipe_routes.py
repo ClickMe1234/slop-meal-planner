@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import AuthContext, get_auth_context, require_csrf, require_owner
 from ..db import get_db
+from ..config import get_settings
 from ..errors import DomainError, NotFoundError
 from ..discovery import canonicalize_url
 from ..discovery.errors import DiscoveryError
@@ -28,6 +29,7 @@ from ..schemas import (
     RecipeReviewUpdate,
     RecipeSummary,
 )
+from ..services.food_search import fetch_and_cache_usda_foods
 from ..services.nutrition import calculate_recipe, latest_calculation
 
 router = APIRouter(tags=["recipes and food data"])
@@ -260,10 +262,19 @@ def search_foods(
     _: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
+    cleaned_query = q.strip()
     conditions = []
-    if q.strip():
-        conditions.append(func.lower(FoodRecord.name).contains(q.strip().lower()))
+    if cleaned_query:
+        conditions.append(func.lower(FoodRecord.name).contains(cleaned_query.lower()))
     total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
+    remote_error = None
+    settings = get_settings()
+    if cleaned_query and total < 3 and settings.remote_food_search_enabled:
+        try:
+            fetch_and_cache_usda_foods(db, cleaned_query, api_key=settings.usda_api_key)
+            total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
+        except Exception:
+            remote_error = "FoodData Central could not be reached. Existing local matches are still shown."
     rows = db.scalars(
         select(FoodRecord)
         .where(*conditions)
@@ -282,7 +293,13 @@ def search_foods(
                 ],
             ).model_dump(mode="json")
         )
-    return {"items": items, "page": page, "page_size": page_size, "total": total}
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "remote_error": remote_error,
+    }
 
 
 @router.post("/foods", response_model=FoodRecordOut, status_code=201)

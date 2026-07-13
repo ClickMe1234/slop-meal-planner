@@ -21,6 +21,7 @@ from .routes.household_routes import router as household_router
 from .routes.pantry_shopping_routes import router as pantry_shopping_router
 from .routes.planning_routes import router as planning_router
 from .routes.recipe_routes import router as recipe_router
+from .routes.system_routes import router as system_router
 
 
 @asynccontextmanager
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
         discovery_router,
         planning_router,
         pantry_shopping_router,
+        system_router,
     ):
         app.include_router(router, prefix=prefix)
 

@@ -95,21 +95,26 @@ interface ReviewRow {
 }
 
 function LiveImportReviewPage() {
-  const { jobId = '' } = useParams()
+  const { jobId = '', recipeId: directRecipeId = '' } = useParams()
   const navigate = useNavigate()
   const [rows, setRows] = useState<ReviewRow[]>([])
   const [yieldServings, setYieldServings] = useState('')
   const [foodQuery, setFoodQuery] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
-  const job = useQuery({ queryKey:['job',jobId],queryFn:()=>api.job(jobId),enabled:Boolean(jobId),refetchInterval:1000 })
-  const recipeId = job.data?.result?.recipe_id
+  const job = useQuery({
+    queryKey:['job',jobId],
+    queryFn:()=>api.job(jobId),
+    enabled:Boolean(jobId),
+    refetchInterval: query => ['queued','running'].includes(query.state.data?.status ?? '') ? 1000 : false,
+  })
+  const recipeId = directRecipeId || job.data?.result?.recipe_id
   const recipe = useQuery({ queryKey:['recipe',recipeId],queryFn:()=>api.getRecipe(recipeId!),enabled:Boolean(recipeId) })
   const foods = useQuery({ queryKey:['foods',foodQuery],queryFn:()=>api.searchFoods(foodQuery),enabled:foodQuery.trim().length>=2 })
   useEffect(()=>{
     if(!recipe.data)return
     setYieldServings(String(recipe.data.yield_servings ?? ''))
-    setRows(recipe.data.ingredients.map(item=>({
+    const ingredientRows: ReviewRow[] = recipe.data.ingredients.map(item=>({
       original_text:item.original_text,
       amount:String(item.quantity_grams ?? item.quantity ?? ''),
       basis_unit:item.quantity_grams != null || item.unit !== 'ml' ? 'g' : 'ml',
@@ -117,7 +122,10 @@ function LiveImportReviewPage() {
       food_phrase:item.food_phrase ?? item.original_text,
       included:item.included,
       optional:item.optional,
-    })))
+    }))
+    setRows(ingredientRows)
+    const firstUnmatched = ingredientRows.find(item=>item.included&&!item.food_record_id)
+    setFoodQuery(current=>current || firstUnmatched?.food_phrase || '')
   },[recipe.data])
   const update=(index:number,change:Partial<ReviewRow>)=>setRows(all=>all.map((row,rowIndex)=>rowIndex===index?{...row,...change}:row))
   const save=async()=>{

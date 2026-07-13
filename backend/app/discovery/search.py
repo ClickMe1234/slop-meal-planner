@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -119,7 +120,19 @@ class LiveSearchService:
         try:
             url = adapter.search_url(query)
             html = await self.fetcher.fetch_text(url, allowed_hosts=set(adapter.hosts))
-            results = adapter.parse_search_results(html, search_url=url)[: self.policy.maximum_results_per_source]
+            parsed = adapter.parse_search_results(html, search_url=url)
+            ranked = sorted(
+                (
+                    (self._relevance_score(result, query), result)
+                    for result in parsed
+                ),
+                key=lambda item: (-item[0], item[1].title.casefold()),
+            )
+            results = tuple(
+                result
+                for score, result in ranked
+                if score > 0
+            )[: self.policy.maximum_results_per_source]
             return SourceSearchResponse(adapter.key, results)
         except DiscoveryError as exc:
             return SourceSearchResponse(adapter.key, error_code=exc.code, error_message=str(exc))
@@ -130,3 +143,22 @@ class LiveSearchService:
                 error_code="SOURCE_PARSE_FAILED",
                 error_message=f"{adapter.display_name} results could not be read. {adapter.limitation()}",
             )
+
+    @staticmethod
+    def _relevance_score(result: SearchResult, query: str) -> int:
+        """Reject navigation/category cards and put the closest titles first."""
+
+        phrase = " ".join(query.casefold().split())
+        terms = tuple(dict.fromkeys(re.findall(r"[a-z0-9]+", phrase)))
+        haystack = f"{result.title} {result.url.replace('-', ' ')}".casefold()
+        matches = sum(1 for term in terms if term in haystack)
+        if not matches:
+            return 0
+        score = matches * 20
+        if matches == len(terms):
+            score += 40
+        if phrase and phrase in haystack:
+            score += 100
+        if result.title.casefold().startswith(phrase):
+            score += 20
+        return score

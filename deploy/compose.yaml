@@ -24,11 +24,26 @@ x-application: &application
     MEAL_PLANNER_SETUP_TOKEN: ${SETUP_TOKEN:?Set SETUP_TOKEN in deploy/.env}
     MEAL_PLANNER_ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,meal-planner}
     MEAL_PLANNER_COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    MEAL_PLANNER_USDA_API_KEY: ${USDA_API_KEY:-DEMO_KEY}
+    MEAL_PLANNER_REMOTE_FOOD_SEARCH_ENABLED: ${REMOTE_FOOD_SEARCH_ENABLED:-true}
+    PGHOST: postgres
+    PGPORT: 5432
+    PGUSER: ${POSTGRES_USER}
+    PGPASSWORD: ${POSTGRES_PASSWORD}
+    PGDATABASE: ${POSTGRES_DB}
+    BACKUP_ROOT: /backups
+    DATA_DIR: /data
+    RETAIN_DAILY: ${RETAIN_DAILY:-14}
+    RETAIN_WEEKLY: ${RETAIN_WEEKLY:-8}
+    RETAIN_MONTHLY: ${RETAIN_MONTHLY:-12}
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
   volumes:
     - type: bind
       source: ${APPDATA_ROOT:-./.runtime}/data
       target: /data
+    - type: bind
+      source: ${BACKUP_ROOT:-./backups}
+      target: /backups
   networks:
     - internal
 
@@ -47,8 +62,27 @@ services:
       MEAL_PLANNER_SETUP_TOKEN: ${SETUP_TOKEN:?Set SETUP_TOKEN in deploy/.env}
       MEAL_PLANNER_ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,meal-planner}
       MEAL_PLANNER_COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      MEAL_PLANNER_USDA_API_KEY: ${USDA_API_KEY:-DEMO_KEY}
+      MEAL_PLANNER_REMOTE_FOOD_SEARCH_ENABLED: ${REMOTE_FOOD_SEARCH_ENABLED:-true}
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      BACKUP_ROOT: /backups
+      DATA_DIR: /data
+      RETAIN_DAILY: ${RETAIN_DAILY:-14}
+      RETAIN_WEEKLY: ${RETAIN_WEEKLY:-8}
+      RETAIN_MONTHLY: ${RETAIN_MONTHLY:-12}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       RUN_MIGRATIONS: "true"
+    volumes:
+      - type: bind
+        source: ${APPDATA_ROOT:-./.runtime}/data
+        target: /data
+      - type: bind
+        source: ${BACKUP_ROOT:-./backups}
+        target: /backups
     ports:
       - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-8080}:8000"
     depends_on:
