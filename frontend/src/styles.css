@@ -28,6 +28,12 @@
   --radius: 16px;
 }
 
+.ingredient-language-card { background:linear-gradient(135deg,var(--surface) 60%,var(--primary-soft)); }
+.ingredient-language-card .segmented { width:max-content; }
+.ingredient-language-example { align-items:center;border-top:1px solid var(--border);display:flex;gap:10px;padding-top:15px; }
+.ingredient-language-example span { color:var(--muted);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase; }
+.ingredient-language-example strong { color:var(--primary);font-size:.78rem; }
+
 :root[data-theme='dark'] {
   color: #f4f6f2;
   background: #101713;

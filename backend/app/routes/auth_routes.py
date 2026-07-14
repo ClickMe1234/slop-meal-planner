@@ -26,6 +26,7 @@ from ..schemas import (
     PasswordChange,
     SetupRequest,
     UserOut,
+    UserPreferencesUpdate,
 )
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -101,6 +102,19 @@ def logout(
 
 @router.get("/me", response_model=UserOut)
 def me(context: AuthContext = Depends(get_auth_context)):
+    return context.user
+
+
+@router.patch("/me", response_model=UserOut)
+def update_me(
+    payload: UserPreferencesUpdate,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    context.user.ingredient_locale = payload.ingredient_locale.value
+    context.user.version += 1
+    db.commit()
+    db.refresh(context.user)
     return context.user
 
 

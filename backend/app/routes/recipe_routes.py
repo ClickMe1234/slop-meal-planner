@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..auth import AuthContext, get_auth_context, require_csrf, require_owner
@@ -38,6 +38,7 @@ from ..schemas import (
 )
 from ..services.food_search import fetch_and_cache_usda_foods, normalise_food_query
 from ..services.ingredients import parse_ingredient
+from ..services.regional_ingredients import convert_ingredient_text, equivalent_terms, query_for_locale
 from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
 from ..services.pantry import reserve_plan_batches
 
@@ -69,7 +70,7 @@ def _replace_meal_types(db: Session, recipe: Recipe, meal_types: list[RecipeTag]
         db.add(RecipeMealType(recipe_id=recipe.id, meal_type=meal_type.value))
 
 
-def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
+def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -> RecipeDetail:
     version = _latest_version(db, recipe.id)
     if version is None:
         raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
@@ -94,6 +95,8 @@ def _recipe_detail(db: Session, recipe: Recipe) -> RecipeDetail:
                 optional=row.optional or parsed.optional,
                 included=row.included and not parsed.optional,
             )
+        item["original_text"] = convert_ingredient_text(db, item["original_text"], ingredient_locale)
+        item["food_phrase"] = convert_ingredient_text(db, item.get("food_phrase"), ingredient_locale)
         ingredients.append(item)
     reported_values = publisher_values(version)
     calculation = latest_calculation(db, version.id)
@@ -173,7 +176,29 @@ def list_recipes(
 ):
     conditions = [Recipe.household_id == context.user.household_id, Recipe.archived_at.is_(None)]
     if q.strip():
-        conditions.append(func.lower(Recipe.title).contains(q.strip().lower()))
+        search_terms = equivalent_terms(db, q.strip())
+        ingredient_match = exists(
+            select(RecipeIngredient.id)
+            .join(RecipeVersion, RecipeVersion.id == RecipeIngredient.recipe_version_id)
+            .where(
+                RecipeVersion.recipe_id == Recipe.id,
+                or_(
+                    *(
+                        or_(
+                            func.lower(RecipeIngredient.original_text).contains(term),
+                            func.lower(RecipeIngredient.food_phrase).contains(term),
+                        )
+                        for term in search_terms
+                    )
+                ),
+            )
+        )
+        conditions.append(
+            or_(
+                *(func.lower(Recipe.title).contains(term) for term in search_terms),
+                ingredient_match,
+            )
+        )
     if meal_type:
         conditions.append(
             Recipe.meal_type_tags.any(
@@ -190,7 +215,7 @@ def list_recipes(
     ).all()
     return {
         "items": [
-            _recipe_detail(db, recipe).model_dump(
+            _recipe_detail(db, recipe, context.user.ingredient_locale).model_dump(
                 mode="json",
                 include=set(RecipeSummary.model_fields),
             )
@@ -240,7 +265,7 @@ def create_recipe(
         recipe.eligibility = RecipeEligibility.PLANNER_READY.value
     db.commit()
     db.refresh(recipe)
-    return _recipe_detail(db, recipe)
+    return _recipe_detail(db, recipe, context.user.ingredient_locale)
 
 
 def _resync_plan_batches_after_review(
@@ -320,7 +345,7 @@ def get_recipe(
     recipe = db.get(Recipe, recipe_id)
     if recipe is None or recipe.household_id != context.user.household_id:
         raise NotFoundError("Recipe")
-    return _recipe_detail(db, recipe)
+    return _recipe_detail(db, recipe, context.user.ingredient_locale)
 
 
 @router.put("/recipes/{recipe_id}/review", response_model=RecipeDetail)
@@ -382,7 +407,7 @@ def save_recipe_review(
     )
     db.commit()
     db.refresh(recipe)
-    return _recipe_detail(db, recipe)
+    return _recipe_detail(db, recipe, context.user.ingredient_locale)
 
 
 @router.post("/recipes/{recipe_id}/calculate", response_model=NutritionCalculationOut)
@@ -452,20 +477,24 @@ def search_foods(
     q: str = Query(default="", max_length=200),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    _: AuthContext = Depends(get_auth_context),
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
     cleaned_query = normalise_food_query(q.strip()) if q.strip() else ""
     conditions = []
     if cleaned_query:
-        terms = tuple(dict.fromkeys(cleaned_query.lower().split()))
+        terms = equivalent_terms(db, cleaned_query)
         conditions.append(or_(*(func.lower(FoodRecord.name).contains(term) for term in terms)))
     total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
     remote_error = None
     settings = get_settings()
     if cleaned_query and total < 3 and settings.remote_food_search_enabled:
         try:
-            fetch_and_cache_usda_foods(db, cleaned_query, api_key=settings.usda_api_key)
+            fetch_and_cache_usda_foods(
+                db,
+                query_for_locale(db, cleaned_query, "us"),
+                api_key=settings.usda_api_key,
+            )
             total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
         except Exception:
             remote_error = "FoodData Central could not be reached. Existing local matches are still shown."
@@ -478,15 +507,15 @@ def search_foods(
     ).all()
     items = []
     for food in rows:
-        items.append(
-            FoodRecordOut(
+        item = FoodRecordOut(
                 **{column.name: getattr(food, column.name) for column in food.__table__.columns},
                 nutrients=[
                     {column.name: getattr(n, column.name) for column in n.__table__.columns}
                     for n in food.nutrients
                 ],
             ).model_dump(mode="json")
-        )
+        item["name"] = convert_ingredient_text(db, item["name"], context.user.ingredient_locale)
+        items.append(item)
     return {
         "items": items,
         "page": page,

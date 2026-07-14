@@ -17,6 +17,7 @@ from ..models import (
     ShoppingList,
 )
 from .pantry import balances
+from .regional_ingredients import canonical_ingredient_key, convert_ingredient_text
 
 
 COUNT_UNITS = {"count", "each", "item", "egg", "eggs"}
@@ -51,7 +52,7 @@ def build_shopping_list(
     batches = db.scalars(
         select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
     ).all()
-    requirements: dict[tuple[str | None, str, str], Decimal] = defaultdict(Decimal)
+    requirements: dict[tuple[str, str], dict[str, object]] = {}
     review_actions: dict[str, dict] = {}
     for batch in batches:
         version = db.get(RecipeVersion, batch.recipe_version_id)
@@ -83,7 +84,22 @@ def build_shopping_list(
                 )
                 continue
             display = ingredient.food_phrase or ingredient.original_text
-            requirements[(ingredient.food_record_id, display, unit)] += amount * scale
+            key = (canonical_ingredient_key(db, display), unit.casefold())
+            requirement = requirements.setdefault(
+                key,
+                {
+                    "food_id": ingredient.food_record_id,
+                    "food_ids": {ingredient.food_record_id} if ingredient.food_record_id else set(),
+                    "display": display,
+                    "unit": unit,
+                    "exact": Decimal("0"),
+                },
+            )
+            if requirement["food_id"] is None and ingredient.food_record_id:
+                requirement["food_id"] = ingredient.food_record_id
+            if ingredient.food_record_id:
+                requirement["food_ids"].add(ingredient.food_record_id)
+            requirement["exact"] = Decimal(requirement["exact"]) + amount * scale
 
     if review_actions:
         count = len(review_actions)
@@ -113,14 +129,23 @@ def build_shopping_list(
     db.add(shopping_list)
     db.flush()
 
-    for (food_id, display, unit), exact in requirements.items():
-        remaining = max(exact - plan_reserved[(food_id, unit)], Decimal("0"))
-        if food_id:
+    for requirement in requirements.values():
+        food_id = requirement["food_id"]
+        food_ids = requirement["food_ids"]
+        display = convert_ingredient_text(db, str(requirement["display"]), "uk") or str(requirement["display"])
+        unit = str(requirement["unit"])
+        exact = Decimal(requirement["exact"])
+        reserved = sum(
+            (plan_reserved[(candidate_id, unit)] for candidate_id in food_ids),
+            Decimal("0"),
+        )
+        remaining = max(exact - reserved, Decimal("0"))
+        if food_ids:
             lots = db.scalars(
                 select(PantryLot)
                 .where(
                     PantryLot.household_id == household_id,
-                    PantryLot.food_record_id == food_id,
+                    PantryLot.food_record_id.in_(food_ids),
                     PantryLot.unit == unit,
                 )
                 .order_by(PantryLot.expires_on.asc().nullslast())
