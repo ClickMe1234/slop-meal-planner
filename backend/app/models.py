@@ -37,6 +37,11 @@ class UserRole(str, enum.Enum):
     COLLABORATOR = "collaborator"
 
 
+class IngredientLocale(str, enum.Enum):
+    UK = "uk"
+    US = "us"
+
+
 class TargetMode(str, enum.Enum):
     CALORIE = "calorie"
     MACROS = "macros"
@@ -107,7 +112,17 @@ class User(IdMixin, AuditMixin, Base):
     role: Mapped[str] = mapped_column(String(20), default=UserRole.COLLABORATOR.value)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    ingredient_locale: Mapped[str] = mapped_column(String(2), default=IngredientLocale.UK.value)
     member_id: Mapped[str | None] = mapped_column(ForeignKey("household_member.id", ondelete="SET NULL"), nullable=True)
+
+
+class IngredientNameEquivalent(IdMixin, Base):
+    __tablename__ = "ingredient_name_equivalent"
+    __table_args__ = (UniqueConstraint("us_name", "uk_name"),)
+
+    us_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    uk_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
 
 
 class UserSession(IdMixin, Base):

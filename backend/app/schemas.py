@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .models import JobStatus, MealType, PlanStatus, RecipeEligibility, RecipeTag, TargetMode, UserRole
+from .models import IngredientLocale, JobStatus, MealType, PlanStatus, RecipeEligibility, RecipeTag, TargetMode, UserRole
 
 MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
 
@@ -37,7 +37,12 @@ class UserOut(APIModel):
     role: UserRole
     active: bool
     must_change_password: bool
+    ingredient_locale: IngredientLocale
     member_id: str | None
+
+
+class UserPreferencesUpdate(APIModel):
+    ingredient_locale: IngredientLocale
 
 
 class AuthOut(APIModel):

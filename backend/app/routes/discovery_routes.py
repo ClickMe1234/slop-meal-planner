@@ -15,6 +15,8 @@ from ..discovery.http import PoliteHttpFetcher
 from ..discovery.urls import canonicalize_url
 from ..errors import DomainError
 from ..models import Recipe
+from ..models import IngredientLocale
+from ..services.regional_ingredients import query_for_locale
 
 router = APIRouter(prefix="/recipe-discovery", tags=["recipe discovery"])
 
@@ -85,7 +87,15 @@ async def discover_recipes(
         unknown = set(selected_sources) - supported
         if unknown:
             raise DomainError("UNSUPPORTED_RECIPE_SOURCE", f"Unsupported recipe source: {', '.join(sorted(unknown))}", 422)
-    response = await _live_service().search(q, request_key=scoped_request_key, sources=selected_sources)
+    response = await _live_service().search(
+        q,
+        request_key=scoped_request_key,
+        sources=selected_sources,
+        source_queries={
+            "good_food": query_for_locale(db, q, IngredientLocale.UK),
+            "allrecipes": query_for_locale(db, q, IngredientLocale.US),
+        },
+    )
     saved_rows = db.scalars(
         select(Recipe.source_url).where(
             Recipe.household_id == context.user.household_id,

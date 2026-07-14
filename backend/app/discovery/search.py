@@ -68,6 +68,7 @@ class LiveSearchService:
         *,
         request_key: str | None = None,
         sources: tuple[str, ...] | None = None,
+        source_queries: dict[str, str] | None = None,
     ) -> CombinedSearchResponse:
         normalised = self.normalise_query(query)
         if len(normalised) < self.policy.minimum_query_length:
@@ -79,7 +80,15 @@ class LiveSearchService:
             if selected is None or adapter.key in selected
         )
         source_key = ",".join(sorted(adapter.key for adapter in adapters))
-        cache_key = f"{source_key}:{normalised}"
+        normalised_source_queries = {
+            key: self.normalise_query(value)
+            for key, value in (source_queries or {}).items()
+        }
+        query_key = ",".join(
+            f"{adapter.key}={normalised_source_queries.get(adapter.key, normalised)}"
+            for adapter in adapters
+        )
+        cache_key = f"{source_key}:{query_key}"
 
         generation = None
         if request_key:
@@ -94,7 +103,17 @@ class LiveSearchService:
         cached = self._cache.get(cache_key)
         cache_hit = cached is not None and now <= cached[0]
         if not cache_hit:
-            source_results = tuple(await asyncio.gather(*(self._search_source(adapter, normalised) for adapter in adapters)))
+            source_results = tuple(
+                await asyncio.gather(
+                    *(
+                        self._search_source(
+                            adapter,
+                            normalised_source_queries.get(adapter.key, normalised),
+                        )
+                        for adapter in adapters
+                    )
+                )
+            )
             ttl = (
                 self.policy.error_cache_ttl_seconds
                 if any(source.error_code for source in source_results)
@@ -142,8 +161,14 @@ class LiveSearchService:
         *,
         request_key: str | None = None,
         sources: tuple[str, ...] | None = None,
+        source_queries: dict[str, str] | None = None,
     ) -> CombinedSearchResponse:
-        return await self.search_remote(query, request_key=request_key, sources=sources)
+        return await self.search_remote(
+            query,
+            request_key=request_key,
+            sources=sources,
+            source_queries=source_queries,
+        )
 
     async def nutrition_preview(self, url: str) -> ExtractedRecipe:
         """Fetch and cache publisher nutrition without importing the recipe."""

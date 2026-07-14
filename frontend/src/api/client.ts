@@ -110,7 +110,8 @@ export const api = {
     csrfToken = null
     sessionStorage.removeItem(csrfStorageKey)
   },
-  me: () => request<{ id: string; username: string; role: 'owner' | 'collaborator'; member_id?: string; must_change_password: boolean }>('/auth/me'),
+  me: () => request<{ id: string; username: string; role: 'owner' | 'collaborator'; member_id?: string; must_change_password: boolean; ingredient_locale: IngredientLocale }>('/auth/me'),
+  updateMe: (ingredientLocale: IngredientLocale) => request('/auth/me', { method: 'PATCH', body: JSON.stringify({ ingredient_locale: ingredientLocale }) }),
   changePassword: (currentPassword: string, newPassword: string) => request<void>('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
   setTarget: (memberId: string, payload: Record<string, unknown>) => request(`/household-members/${memberId}/target`, { method: 'PUT', body: JSON.stringify(payload) }),
   listMembers: () => request<BackendMember[]>('/household-members'),
@@ -153,6 +154,7 @@ export const api = {
 export const isDemoMode = import.meta.env.VITE_DEMO_MODE !== 'false'
 
 export type BackendMealType = 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'side'
+export type IngredientLocale = 'uk' | 'us'
 
 export interface BackendRecipe {
   id: string

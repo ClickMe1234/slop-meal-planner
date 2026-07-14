@@ -79,6 +79,21 @@ def test_remote_search_only_calls_selected_publishers():
     asyncio.run(run())
 
 
+def test_remote_search_can_use_a_regional_query_for_each_publisher():
+    async def run():
+        fetcher = FakeFetcher()
+        service = LiveSearchService(fetcher, policy=SearchPolicy(debounce_ms=0))
+        await service.search_remote(
+            "courgette",
+            source_queries={"good_food": "courgette", "allrecipes": "zucchini"},
+        )
+
+        assert any("bbcgoodfood.com/search?q=courgette" in url for url in fetcher.calls)
+        assert any("allrecipes.com/search?q=zucchini" in url for url in fetcher.calls)
+
+    asyncio.run(run())
+
+
 def test_default_registry_only_enables_current_publishers():
     assert {adapter.key for adapter in default_registry.adapters} == {"good_food", "allrecipes"}
 

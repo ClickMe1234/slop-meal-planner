@@ -20,14 +20,17 @@ from ..schemas import (
 )
 from ..services.pantry import adjust_lot, balances, reserve_plan_batches
 from ..services.shopping import build_shopping_list
+from ..services.regional_ingredients import convert_ingredient_text
 
 router = APIRouter(tags=["pantry and shopping"])
 
 
-def _pantry_out(db: Session, lot: PantryLot) -> PantryLotOut:
+def _pantry_out(db: Session, lot: PantryLot, ingredient_locale: str = "uk") -> PantryLotOut:
     on_hand, reserved, usable = balances(db, lot)
+    data = {column.name: getattr(lot, column.name) for column in lot.__table__.columns}
+    data["display_name"] = convert_ingredient_text(db, data["display_name"], ingredient_locale)
     return PantryLotOut(
-        **{column.name: getattr(lot, column.name) for column in lot.__table__.columns},
+        **data,
         on_hand_quantity=on_hand,
         reserved_quantity=reserved,
         usable_quantity=usable,
@@ -43,7 +46,7 @@ def list_pantry(
         .where(PantryLot.household_id == context.user.household_id)
         .order_by(PantryLot.expires_on.asc().nullslast(), PantryLot.display_name)
     ).all()
-    return [_pantry_out(db, lot) for lot in lots]
+    return [_pantry_out(db, lot, context.user.ingredient_locale) for lot in lots]
 
 
 @router.post("/pantry-items", response_model=PantryLotOut, status_code=201)
@@ -64,7 +67,7 @@ def create_pantry_lot(
     db.add(lot)
     db.commit()
     db.refresh(lot)
-    return _pantry_out(db, lot)
+    return _pantry_out(db, lot, context.user.ingredient_locale)
 
 
 @router.post("/pantry-items/{lot_id}/adjust", response_model=PantryLotOut)
@@ -80,10 +83,10 @@ def adjust_pantry_lot(
     adjust_lot(db, lot.id, payload.quantity_delta, payload.reason)
     db.commit()
     db.refresh(lot)
-    return _pantry_out(db, lot)
+    return _pantry_out(db, lot, context.user.ingredient_locale)
 
 
-def _shopping_out(db: Session, shopping_list: ShoppingList) -> ShoppingListOut:
+def _shopping_out(db: Session, shopping_list: ShoppingList, ingredient_locale: str = "uk") -> ShoppingListOut:
     items = db.scalars(
         select(ShoppingItem)
         .where(ShoppingItem.shopping_list_id == shopping_list.id)
@@ -91,7 +94,13 @@ def _shopping_out(db: Session, shopping_list: ShoppingList) -> ShoppingListOut:
     ).all()
     return ShoppingListOut(
         **{column.name: getattr(shopping_list, column.name) for column in shopping_list.__table__.columns},
-        items=items,
+        items=[
+            {
+                **{column.name: getattr(item, column.name) for column in item.__table__.columns},
+                "display_name": convert_ingredient_text(db, item.display_name, ingredient_locale),
+            }
+            for item in items
+        ],
     )
 
 
@@ -121,7 +130,7 @@ def build_list(
     )
     db.commit()
     db.refresh(shopping_list)
-    return _shopping_out(db, shopping_list)
+    return _shopping_out(db, shopping_list, context.user.ingredient_locale)
 
 
 @router.get("/shopping-lists/active", response_model=ShoppingListOut)
@@ -138,7 +147,7 @@ def active_list(
     )
     if shopping_list is None:
         raise NotFoundError("Active shopping list")
-    return _shopping_out(db, shopping_list)
+    return _shopping_out(db, shopping_list, context.user.ingredient_locale)
 
 
 @router.post("/shopping-lists/{list_id}/items", response_model=ShoppingItemOut, status_code=201)
@@ -239,4 +248,4 @@ def add_purchased_to_pantry(
     db.commit()
     for lot in lots:
         db.refresh(lot)
-    return [_pantry_out(db, lot) for lot in lots]
+    return [_pantry_out(db, lot, context.user.ingredient_locale) for lot in lots]
