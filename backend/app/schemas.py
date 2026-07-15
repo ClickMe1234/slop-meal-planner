@@ -428,6 +428,7 @@ class ShoppingListOut(APIModel):
     name: str
     meal_plan_id: str | None
     active: bool
+    rebuild_recommended: bool
     version: int
     items: list[ShoppingItemOut]
 

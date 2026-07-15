@@ -30,7 +30,8 @@ WORKDIR /build/backend
 COPY backend/ ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip setuptools wheel && \
-    pip install ".[workers]"
+    pip install ".[workers]" && \
+    python -m nltk.downloader -d "$VIRTUAL_ENV/nltk_data" averaged_perceptron_tagger_eng
 
 FROM ${PYTHON_IMAGE} AS runtime
 ARG APP_VERSION=dev
@@ -44,6 +45,7 @@ LABEL org.opencontainers.image.title="Meal Planner" \
 ENV APP_VERSION=${APP_VERSION} \
     APP_REVISION=${APP_REVISION} \
     PATH="/opt/venv/bin:$PATH" \
+    NLTK_DATA="/opt/venv/nltk_data" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     FRONTEND_DIST_DIR=/app/frontend/dist \

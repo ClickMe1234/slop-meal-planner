@@ -192,7 +192,9 @@ export interface BackendRecipeDetail extends BackendRecipe {
     unit?: string
     quantity_grams?: number
     food_phrase?: string
+    parsed_food_phrase?: string
     preparation?: string
+    name_confidence?: number
     included: boolean
     optional: boolean
     needs_review: boolean
@@ -312,7 +314,10 @@ export interface BackendShoppingItem {
 
 export interface BackendShoppingList {
   id: string
+  meal_plan_id?: string | null
   name: string
+  active: boolean
+  rebuild_recommended: boolean
   version: number
   items: BackendShoppingItem[]
 }

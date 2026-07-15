@@ -25,7 +25,8 @@ from .models import (
     RecipeVersion,
     UserSession,
 )
-from .services.ingredients import parse_ingredient
+from .services.ingredient_names import ingredient_name_keys, preferred_ingredient_name
+from .services.ingredients import PARSER_VERSION, parse_ingredient
 from .services.nutrition import publisher_values
 
 celery_app = Celery(
@@ -156,6 +157,13 @@ def process_recipe_import(self, job_id: str) -> dict:
             db.flush()
             for position, line in enumerate(extracted.ingredient_lines):
                 parsed = parse_ingredient(line)
+                name_keys = ingredient_name_keys(db, parsed.food_phrase)
+                display_name, remembered = preferred_ingredient_name(
+                    db,
+                    job.household_id,
+                    name_keys,
+                    parsed.food_phrase,
+                )
                 db.add(
                     RecipeIngredient(
                         recipe_version_id=version.id,
@@ -164,11 +172,20 @@ def process_recipe_import(self, job_id: str) -> dict:
                         quantity=parsed.quantity,
                         unit=parsed.unit,
                         quantity_grams=parsed.quantity_grams,
-                        food_phrase=parsed.food_phrase,
+                        food_phrase=display_name,
+                        parsed_food_phrase=parsed.food_phrase,
                         preparation=parsed.preparation,
+                        parser_version=PARSER_VERSION,
+                        name_confidence=(
+                            Decimal(str(round(parsed.name_confidence, 4)))
+                            if parsed.name_confidence is not None
+                            else None
+                        ),
+                        name_overridden=remembered,
+                        parser_name_keys=name_keys,
                         included=not parsed.optional,
                         optional=parsed.optional,
-                        needs_review=False,
+                        needs_review=parsed.needs_review and not remembered,
                     )
                 )
             if publisher_values(version) is not None and version.yield_servings:

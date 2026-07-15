@@ -18,6 +18,7 @@ const ALL_SOURCES = SOURCE_OPTIONS.map(option => option.value)
 
 export function savedRecipePlanningBadge(recipe: Pick<Recipe, 'state' | 'mealKinds'>): { tone: 'green' | 'warning'; label: string } {
   if (!recipe.mealKinds.length) return { tone: 'warning', label: 'Needs meal types' }
+  if (recipe.state === 'needs_review') return { tone: 'warning', label: 'Shopping review needed' }
   if (recipe.state !== 'ready') return { tone: 'warning', label: 'Needs recipe review' }
   return { tone: 'green', label: 'Used for planning' }
 }
@@ -209,7 +210,7 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
       <p className="recipe-meta">{yieldServings ? `Serves ${yieldServings}` : 'Yield not reported'}{recipe.mealKinds.length ? ` · ${recipe.mealKinds.join(' · ')}` : ''}</p>
       {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>Nutrition from {nutritionSource} · per serving</span><Badge tone={planningBadge?.tone ?? 'green'}>{planningBadge?.label ?? 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
       {missingMealTypes && <div className="recipe-planning-note recipe-planning-note--warning" role="status"><strong>Not used for meal planning</strong><span>Add breakfast, lunch, dinner, snack or side so the planner knows where this recipe belongs.</span></div>}
-      <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{missingMealTypes ? 'Add meal types' : 'Edit meal types'}</Link> : <Button disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}</div>
+      <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{recipe.reviewCount ? 'Review ingredients' : missingMealTypes ? 'Add meal types' : 'Edit meal types'}</Link> : <Button disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}</div>
     </div>
   </Card></div>
 }
@@ -258,7 +259,7 @@ function mapSavedRecipe(recipe: BackendRecipe): Recipe {
     nutrition: reported,
     nutritionSource: reported ? 'publisher' : undefined,
     nutritionSourceName: sourceName(recipe),
-    state: reported && recipe.yield_servings ? 'ready' : 'no_nutrition',
+    state: recipe.review_count ? 'needs_review' : reported && recipe.yield_servings ? 'ready' : 'no_nutrition',
     reviewCount: recipe.review_count ?? 0,
     mealKinds: mealKindLabels(recipe.meal_types),
   }
