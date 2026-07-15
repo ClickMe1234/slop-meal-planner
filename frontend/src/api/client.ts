@@ -14,6 +14,7 @@ export interface ApiAction {
   ingredient_id?: string
   batch_id?: string
   suggestion?: string
+  current_display_name?: string
 }
 
 export interface ApiNutritionViolation {
@@ -136,6 +137,7 @@ export const api = {
   addPantry: (payload: { display_name: string; quantity: number; unit: string; always_have?: boolean }) => request<BackendPantryItem>('/pantry-items', { method: 'POST', body: JSON.stringify(payload) }),
   activeShoppingList: () => request<BackendShoppingList>('/shopping-lists/active'),
   patchShoppingItem: (listId: string, itemId: string, payload: { expected_version: number; checked?: boolean }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  renameShoppingItem: (listId: string, itemId: string, payload: { display_name: string; expected_display_name: string }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items/${itemId}/name`, { method: 'PUT', body: JSON.stringify(payload) }),
   addShoppingItem: (listId: string, payload: { display_name: string; exact_quantity: number; purchase_quantity: number; unit: string; category: string }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items`, { method: 'POST', body: JSON.stringify(payload) }),
   addPurchasedToPantry: (listId: string) => request<BackendPantryItem[]>(`/shopping-lists/${listId}/add-purchased-to-pantry`, { method: 'POST' }),
   generatePlan: (payload: Record<string, unknown>) => request<BackendPlan>('/meal-plans/generate', { method: 'POST', body: JSON.stringify(payload) }),

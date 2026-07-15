@@ -40,6 +40,7 @@ from ..schemas import (
 )
 from ..services.food_search import fetch_and_cache_usda_foods, normalise_food_query
 from ..services.ingredient_names import (
+    household_name_overrides,
     ingredient_name_keys,
     preferred_ingredient_name,
     remember_ingredient_name,
@@ -134,6 +135,7 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
     version = _latest_version(db, recipe.id)
     if version is None:
         raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+    name_overrides = household_name_overrides(db, recipe.household_id)
     ingredients = []
     for row in version.ingredients:
         item = {column.name: getattr(row, column.name) for column in row.__table__.columns}
@@ -145,7 +147,11 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
             automatic_name = convert_ingredient_text(db, parsed.food_phrase, "uk") or parsed.food_phrase
             keys = ingredient_name_keys(db, automatic_name, row.food_phrase)
             display_name, remembered = preferred_ingredient_name(
-                db, recipe.household_id, keys, automatic_name
+                db,
+                recipe.household_id,
+                keys,
+                automatic_name,
+                overrides=name_overrides,
             )
             item.update(
                 quantity=row.quantity if row.quantity is not None else parsed.quantity,
@@ -165,11 +171,28 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
                 optional=row.optional or parsed.optional,
                 included=row.included and not parsed.optional,
                 needs_review=(
-                    row.needs_review
-                    if row.name_overridden or remembered
-                    else parsed.needs_review
+                    False if row.name_overridden or remembered else parsed.needs_review
                 ),
             )
+        keys = list(
+            item.get("parser_name_keys")
+            or ingredient_name_keys(
+                db,
+                item.get("parsed_food_phrase"),
+                item.get("food_phrase"),
+            )
+        )
+        display_name, remembered = preferred_ingredient_name(
+            db,
+            recipe.household_id,
+            keys,
+            item.get("food_phrase") or item.get("parsed_food_phrase") or row.original_text,
+            overrides=name_overrides,
+        )
+        if remembered:
+            item["food_phrase"] = display_name
+            item["name_overridden"] = True
+            item["needs_review"] = False
         item["original_text"] = convert_ingredient_text(db, item["original_text"], ingredient_locale)
         item["food_phrase"] = convert_ingredient_text(db, item.get("food_phrase"), ingredient_locale)
         item["parsed_food_phrase"] = convert_ingredient_text(

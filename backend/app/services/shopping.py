@@ -68,7 +68,32 @@ def build_shopping_list(
         for ingredient in version.ingredients:
             if not ingredient.included or ingredient.shopping_excluded:
                 continue
-            if ingredient.needs_review:
+            automatic_name = (
+                ingredient.parsed_food_phrase
+                or ingredient.food_phrase
+                or ingredient.original_text
+            )
+            source_keys = list(
+                dict.fromkeys(
+                    [
+                        *ingredient_name_keys(db, automatic_name),
+                        *(ingredient.parser_name_keys or []),
+                    ]
+                )
+            )
+            base_name = (
+                ingredient.food_phrase
+                if ingredient.name_overridden and ingredient.food_phrase
+                else automatic_name
+            )
+            display, remembered = preferred_ingredient_name(
+                db,
+                household_id,
+                source_keys,
+                base_name,
+                overrides=name_overrides,
+            )
+            if ingredient.needs_review and not remembered:
                 review_actions.setdefault(
                     ingredient.id,
                     {
@@ -110,31 +135,6 @@ def build_shopping_list(
                     },
                 )
                 continue
-            automatic_name = (
-                ingredient.parsed_food_phrase
-                or ingredient.food_phrase
-                or ingredient.original_text
-            )
-            source_keys = list(
-                dict.fromkeys(
-                    [
-                        *ingredient_name_keys(db, automatic_name),
-                        *(ingredient.parser_name_keys or []),
-                    ]
-                )
-            )
-            base_name = (
-                ingredient.food_phrase
-                if ingredient.name_overridden and ingredient.food_phrase
-                else automatic_name
-            )
-            display, _ = preferred_ingredient_name(
-                db,
-                household_id,
-                source_keys,
-                base_name,
-                overrides=name_overrides,
-            )
             grouping_key = next(
                 (value for value in source_keys if value.startswith("stem:")),
                 canonical_ingredient_key(db, display),

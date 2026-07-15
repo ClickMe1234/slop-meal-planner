@@ -1,14 +1,19 @@
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import func, select
+
 from app.models import (
     Household,
+    IngredientNameOverride,
     MealBatch,
     MealPlan,
     Recipe,
     RecipeIngredient,
     RecipeVersion,
+    ShoppingItem,
     ShoppingList,
+    User,
 )
 from app.services.ingredient_names import (
     ingredient_name_keys,
@@ -148,3 +153,110 @@ def test_reparse_preserves_a_user_overridden_name(db):
     assert ingredient.food_phrase == "our garden squash"
     assert ingredient.parsed_food_phrase == "courgette"
     assert ingredient.name_overridden is True
+
+
+def test_shopping_name_edit_remembers_generated_names_and_detects_conflicts(
+    client,
+    owner,
+    session_factory,
+):
+    with session_factory() as db:
+        user = db.get(User, owner["user"]["id"])
+        shopping_list = ShoppingList(
+            household_id=user.household_id,
+            name="Current shopping list",
+            active=True,
+        )
+        db.add(shopping_list)
+        db.flush()
+        item = ShoppingItem(
+            shopping_list_id=shopping_list.id,
+            display_name="courgettes",
+            exact_quantity=Decimal("2"),
+            purchase_quantity=Decimal("2"),
+            unit="item",
+            category="Produce",
+            source_name_keys=ingredient_name_keys(db, "courgettes"),
+        )
+        db.add(item)
+        db.commit()
+        list_id, item_id = shopping_list.id, item.id
+
+    headers = {"X-CSRF-Token": owner["csrf_token"]}
+    renamed = client.put(
+        f"/api/v1/shopping-lists/{list_id}/items/{item_id}/name",
+        headers=headers,
+        json={
+            "display_name": "garden courgette",
+            "expected_display_name": "courgettes",
+        },
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["display_name"] == "garden courgette"
+
+    conflict = client.put(
+        f"/api/v1/shopping-lists/{list_id}/items/{item_id}/name",
+        headers=headers,
+        json={
+            "display_name": "summer squash",
+            "expected_display_name": "courgettes",
+        },
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["code"] == "SHOPPING_NAME_CONFLICT"
+    assert conflict.json()["actions"][0]["current_display_name"] == "garden courgette"
+
+    with session_factory() as db:
+        user = db.get(User, owner["user"]["id"])
+        override_count = db.scalar(
+            select(func.count(IngredientNameOverride.id)).where(
+                IngredientNameOverride.household_id == user.household_id
+            )
+        )
+        display_name, remembered = preferred_ingredient_name(
+            db,
+            user.household_id,
+            ingredient_name_keys(db, "courgette"),
+            "courgette",
+        )
+        recipe = Recipe(
+            household_id=user.household_id,
+            title="Remembered courgettes",
+            source_type="url",
+            source_url="https://example.com/remembered-courgettes",
+        )
+        db.add(recipe)
+        db.flush()
+        version = RecipeVersion(
+            recipe_id=recipe.id,
+            version_number=1,
+            title=recipe.title,
+            yield_servings=Decimal("2"),
+        )
+        db.add(version)
+        db.flush()
+        db.add(
+            RecipeIngredient(
+                recipe_version_id=version.id,
+                position=0,
+                original_text="2 courgettes",
+                quantity=Decimal("2"),
+                unit="item",
+                food_phrase="courgettes",
+                parsed_food_phrase="courgettes",
+                parser_version=PARSER_VERSION,
+                parser_name_keys=ingredient_name_keys(db, "courgettes"),
+                needs_review=True,
+            )
+        )
+        db.commit()
+        recipe_id = recipe.id
+    assert override_count == 2
+    assert display_name == "garden courgette"
+    assert remembered is True
+
+    remembered_recipe = client.get(f"/api/v1/recipes/{recipe_id}")
+    assert remembered_recipe.status_code == 200, remembered_recipe.text
+    assert remembered_recipe.json()["ingredients"][0]["food_phrase"] == "garden courgette"
+    assert remembered_recipe.json()["ingredients"][0]["needs_review"] is False
+    assert remembered_recipe.json()["review_count"] == 0
