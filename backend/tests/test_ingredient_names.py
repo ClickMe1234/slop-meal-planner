@@ -155,6 +155,99 @@ def test_reparse_preserves_a_user_overridden_name(db):
     assert ingredient.name_overridden is True
 
 
+def test_reparse_repairs_only_unambiguous_quantity_arithmetic(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    recipe = Recipe(
+        household_id=household.id,
+        title="Calculated ingredients",
+        source_type="url",
+        source_url="https://example.com/calculated-ingredients",
+    )
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id,
+        version_number=1,
+        title=recipe.title,
+        yield_servings=Decimal("2"),
+    )
+    db.add(version)
+    db.flush()
+    delight = RecipeIngredient(
+        recipe_version_id=version.id,
+        position=0,
+        original_text="2 x 55g bars Turkish delight halved and sliced",
+        quantity=Decimal("2"),
+        unit="g",
+        quantity_grams=Decimal("110"),
+        food_phrase="Turkish delight",
+        parsed_food_phrase="Turkish delight",
+        parser_version="ingredient-parser-nlp-2.7.0+adapter1",
+    )
+    chicken = RecipeIngredient(
+        recipe_version_id=version.id,
+        position=1,
+        original_text="4 skinless, boneless chicken breast halves - cooked and diced",
+        quantity=Decimal("4"),
+        unit="item",
+        food_phrase="chicken breast halves",
+        parsed_food_phrase="chicken breast halves",
+        parser_version="ingredient-parser-nlp-2.7.0+adapter1",
+    )
+    reviewed_onions = RecipeIngredient(
+        recipe_version_id=version.id,
+        position=2,
+        original_text="2 onions",
+        quantity=Decimal("3"),
+        unit="item",
+        food_phrase="onions",
+        parsed_food_phrase="onions",
+        parser_version="ingredient-parser-nlp-2.7.0+adapter1",
+    )
+    db.add_all([delight, chicken, reviewed_onions])
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 26),
+    )
+    db.add(plan)
+    db.flush()
+    db.add(
+        MealBatch(
+            meal_plan_id=plan.id,
+            recipe_version_id=version.id,
+            servings=Decimal("2"),
+            planned_cook_date=date(2026, 7, 20),
+        )
+    )
+    shopping_list = ShoppingList(
+        household_id=household.id,
+        meal_plan_id=plan.id,
+        name="Current shopping list",
+        active=True,
+    )
+    db.add(shopping_list)
+    db.flush()
+
+    result = reparse_stale_imported_ingredients(db)
+
+    assert result.scanned == 3
+    assert result.changed == 2
+    assert result.lists_marked == 1
+    assert delight.quantity == Decimal("2")
+    assert delight.unit == "bar"
+    assert delight.quantity_grams == Decimal("110")
+    assert chicken.quantity == Decimal("2")
+    assert chicken.unit == "item"
+    assert chicken.food_phrase == "chicken breasts"
+    assert reviewed_onions.quantity == Decimal("3")
+    assert reviewed_onions.unit == "item"
+    assert shopping_list.rebuild_recommended is True
+
+
 def test_shopping_name_edit_remembers_generated_names_and_detects_conflicts(
     client,
     owner,

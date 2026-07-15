@@ -3,6 +3,12 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.4.2 - 2026-07-15
+
+- Calculate explicit ingredient arithmetic such as `2 x 55 g` package sizes and nested item counts instead of retaining only the multiplier.
+- Convert unambiguous fractional item descriptions such as four chicken breast halves into two whole chicken breasts.
+- Repair stale calculated quantities in existing URL imports at startup while leaving ordinary reviewed quantities unchanged.
+
 ## 0.4.1 - 2026-07-15
 
 - Round shopping and pantry quantities according to their units, including whole metric amounts, culinary fractions, indivisible items, and two-decimal litre values.

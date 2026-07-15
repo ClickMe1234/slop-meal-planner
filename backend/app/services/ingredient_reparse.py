@@ -51,6 +51,11 @@ def reparse_stale_imported_ingredients(db: Session) -> ReparseResult:
         name_changed = " ".join(previous_name.casefold().split()) != " ".join(
             parsed.food_phrase.casefold().split()
         )
+        amount_changed = parsed.quantity_calculated and (
+            row.quantity != parsed.quantity
+            or row.unit != parsed.unit
+            or row.quantity_grams != parsed.quantity_grams
+        )
         row.parsed_food_phrase = parsed.food_phrase
         row.parser_version = PARSER_VERSION
         row.name_confidence = (
@@ -59,13 +64,21 @@ def reparse_stale_imported_ingredients(db: Session) -> ReparseResult:
             else None
         )
         row.parser_name_keys = keys
+        if amount_changed:
+            # Only deterministic arithmetic (for example 2 x 55 g or four
+            # breast halves) is authoritative during automatic repair. This
+            # avoids replacing ordinary quantities that a user may have
+            # corrected while reviewing an imported recipe.
+            row.quantity = parsed.quantity
+            row.unit = parsed.unit
+            row.quantity_grams = parsed.quantity_grams
         if not row.name_overridden:
             row.food_phrase = parsed.food_phrase
             row.preparation = parsed.preparation
             row.needs_review = parsed.needs_review
         if row.needs_review:
             flagged += 1
-        if name_changed:
+        if name_changed or amount_changed:
             changed += 1
             changed_version_ids.add(row.recipe_version_id)
 

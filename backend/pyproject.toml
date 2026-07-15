@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "meal-planner-backend"
-version = "0.4.1"
+version = "0.4.2"
 description = "Private household meal planning API"
 requires-python = ">=3.12"
 dependencies = [

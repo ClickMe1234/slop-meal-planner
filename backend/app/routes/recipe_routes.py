@@ -144,6 +144,7 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         # recipe version without rewriting the historical import.
         if row.parser_version != PARSER_VERSION:
             parsed = parse_ingredient(row.original_text)
+            calculated_amount = parsed.quantity_calculated
             automatic_name = convert_ingredient_text(db, parsed.food_phrase, "uk") or parsed.food_phrase
             keys = ingredient_name_keys(db, automatic_name, row.food_phrase)
             display_name, remembered = preferred_ingredient_name(
@@ -154,10 +155,20 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
                 overrides=name_overrides,
             )
             item.update(
-                quantity=row.quantity if row.quantity is not None else parsed.quantity,
-                unit=row.unit if row.unit is not None else parsed.unit,
+                quantity=(
+                    parsed.quantity
+                    if calculated_amount
+                    else row.quantity if row.quantity is not None else parsed.quantity
+                ),
+                unit=(
+                    parsed.unit
+                    if calculated_amount
+                    else row.unit if row.unit is not None else parsed.unit
+                ),
                 quantity_grams=(
-                    row.quantity_grams
+                    parsed.quantity_grams
+                    if calculated_amount
+                    else row.quantity_grams
                     if row.quantity_grams is not None
                     else parsed.quantity_grams
                 ),

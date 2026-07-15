@@ -9,7 +9,7 @@ from typing import Any
 from ingredient_parser import parse_ingredient as parse_nlp_ingredient
 
 
-PARSER_VERSION = "ingredient-parser-nlp-2.7.0+adapter1"
+PARSER_VERSION = "ingredient-parser-nlp-2.7.0+adapter2"
 MIN_NAME_CONFIDENCE = 0.75
 
 
@@ -23,6 +23,7 @@ class ParsedIngredient:
     optional: bool = False
     name_confidence: float | None = None
     needs_review: bool = False
+    quantity_calculated: bool = False
 
 
 _UNICODE_FRACTIONS = {
@@ -82,6 +83,28 @@ _UNIT_ALIASES = {
 }
 _PACK_UNITS = {
     "can", "tin", "jar", "packet", "pack", "bottle", "bar", "pot",
+}
+_PACK_PATTERN = r"cans?|tins?|jars?|packets?|packs?|packages?|bottles?|bars?|pots?"
+_MULTIPACK = re.compile(
+    rf"^(?P<count>{_NUMBER})\s*(?:x|\u00d7|\u2715)\s*"
+    rf"(?P<size>{_NUMBER})\s*(?P<size_unit>[A-Za-z]+)\b"
+    rf"(?:\s+(?P<pack>{_PACK_PATTERN}))?\s*",
+    re.IGNORECASE,
+)
+_COUNT_MULTIPLIER = re.compile(
+    rf"^(?P<count>{_NUMBER})\s*(?:x|\u00d7|\u2715)\s*(?P<size>{_NUMBER})\b",
+    re.IGNORECASE,
+)
+_PORTION_DIVISORS = {
+    "halves": Decimal("2"),
+    "thirds": Decimal("3"),
+    "quarters": Decimal("4"),
+}
+_IRREGULAR_PLURALS = {
+    "leaf": "leaves",
+    "loaf": "loaves",
+    "potato": "potatoes",
+    "tomato": "tomatoes",
 }
 _DESCRIPTIVE_UNITS = {
     "pinch", "dash", "splash", "drizzle", "handful", "sprig", "stalk", "bunch",
@@ -216,13 +239,11 @@ def _semantic_parse(original: str) -> tuple[str, str | None, float | None, bool,
     return food_phrase, preparation, confidence, needs_review, parsed
 
 
-def _amount_from_parse(original: str, parsed: Any | None) -> tuple[Decimal | None, str | None, Decimal | None]:
-    multipack = re.match(
-        rf"^(?P<count>{_NUMBER})\s*[x×]\s*(?P<size>{_NUMBER})\s*(?P<size_unit>[A-Za-z]+)\b"
-        rf"(?:\s+(?P<pack>cans?|tins?|jars?|packets?|packs?|packages?|bottles?|bars?|pots?))?\s*",
-        original,
-        re.IGNORECASE,
-    )
+def _amount_from_parse(
+    original: str,
+    parsed: Any | None,
+) -> tuple[Decimal | None, str | None, Decimal | None, bool]:
+    multipack = _MULTIPACK.match(original)
     if multipack:
         count = _decimal(multipack.group("count"))
         size = _decimal(multipack.group("size"))
@@ -233,7 +254,17 @@ def _amount_from_parse(original: str, parsed: Any | None) -> tuple[Decimal | Non
             if count is not None and size is not None and size_unit in _MASS_FACTORS
             else None
         )
-        return count, pack or size_unit, grams
+        if count is not None and size is not None and size_unit is not None:
+            if pack:
+                return count, pack, grams, True
+            return count * size, size_unit, grams, True
+
+    count_multiplier = _COUNT_MULTIPLIER.match(original)
+    if count_multiplier:
+        count = _decimal(count_multiplier.group("count"))
+        size = _decimal(count_multiplier.group("size"))
+        if count is not None and size is not None:
+            return count * size, "item", None, True
 
     amounts: list[tuple[Any, Decimal, str | None, str]] = []
     for amount in getattr(parsed, "amount", []) if parsed is not None else []:
@@ -255,8 +286,8 @@ def _amount_from_parse(original: str, parsed: Any | None) -> tuple[Decimal | Non
             pack_match = re.search(r"\b(cans?|tins?|jars?|packets?|packs?|packages?|bottles?|bars?|pots?)\b", mass[3])
             pack = _canonical_unit(pack_match.group(1)) if pack_match else None
         if pack:
-            return (multiplier or count or (None, Decimal("1"), None, ""))[1], pack, grams
-        return mass[1], mass[2], grams
+            return (multiplier or count or (None, Decimal("1"), None, ""))[1], pack, grams, False
+        return mass[1], mass[2], grams, False
 
     if amounts:
         first = amounts[0]
@@ -264,12 +295,12 @@ def _amount_from_parse(original: str, parsed: Any | None) -> tuple[Decimal | Non
         if unit is None:
             size = str(getattr(getattr(parsed, "size", None), "text", "") or "").casefold()
             unit = size if size in {"small", "medium", "large"} else "item"
-        return first[1], unit, None
+        return first[1], unit, None, False
 
     size_text = str(getattr(getattr(parsed, "size", None), "text", "") or "") if parsed is not None else ""
     size_match = re.match(rf"^(?P<amount>{_NUMBER})\s*(?P<unit>cm|mm|m)\b", size_text, re.IGNORECASE)
     if size_match:
-        return _decimal(size_match.group("amount")), size_match.group("unit").casefold(), None
+        return _decimal(size_match.group("amount")), size_match.group("unit").casefold(), None, False
 
     descriptive = re.match(
         rf"^(?:an?|one)?\s*(?:small|medium|large)?\s*(?P<unit>{'|'.join(_DESCRIPTIVE_UNITS)})s?\b",
@@ -277,8 +308,53 @@ def _amount_from_parse(original: str, parsed: Any | None) -> tuple[Decimal | Non
         re.IGNORECASE,
     )
     if descriptive:
-        return Decimal("1"), _UNIT_ALIASES[descriptive.group("unit").casefold()], None
-    return None, None, None
+        return Decimal("1"), _UNIT_ALIASES[descriptive.group("unit").casefold()], None, False
+    return None, None, None, False
+
+
+def _pluralise_last_word(phrase: str) -> str:
+    words = phrase.split()
+    if not words:
+        return phrase
+    word = words[-1]
+    folded = word.casefold()
+    if folded.endswith("s"):
+        return phrase
+    if folded in _IRREGULAR_PLURALS:
+        words[-1] = _IRREGULAR_PLURALS[folded]
+    elif len(word) > 1 and folded.endswith("y") and folded[-2] not in "aeiou":
+        words[-1] = f"{word[:-1]}ies"
+    elif folded.endswith(("ch", "sh", "x", "z")):
+        words[-1] = f"{word}es"
+    else:
+        words[-1] = f"{word}s"
+    return " ".join(words)
+
+
+def _apply_portion_math(
+    food_phrase: str,
+    quantity: Decimal | None,
+    unit: str | None,
+    grams: Decimal | None,
+) -> tuple[str, Decimal | None, bool]:
+    portion = re.search(
+        rf"\b(?P<portion>{'|'.join(_PORTION_DIVISORS)})$",
+        food_phrase,
+        re.IGNORECASE,
+    )
+    if portion is None:
+        return food_phrase, quantity, False
+
+    base = food_phrase[: portion.start()].strip(" ,;:-")
+    if not base:
+        return food_phrase, quantity, False
+    # A plural fractional form ("breast halves", "potato quarters") names
+    # portions of the preceding food rather than a distinct ingredient.
+    food_phrase = _pluralise_last_word(base)
+    if quantity is None or grams is not None or unit not in {None, "item"}:
+        return food_phrase, quantity, False
+    divisor = _PORTION_DIVISORS[portion.group("portion").casefold()]
+    return food_phrase, quantity / divisor, True
 
 
 def parse_ingredient(text: str) -> ParsedIngredient:
@@ -292,7 +368,14 @@ def parse_ingredient(text: str) -> ParsedIngredient:
     original = " ".join(_normalise_fractions(text).split()).strip()
     optional = bool(re.search(r"\boptional\b", original, re.IGNORECASE))
     food_phrase, preparation, confidence, needs_review, parsed = _semantic_parse(original)
-    quantity, unit, grams = _amount_from_parse(original, parsed)
+    quantity, unit, grams, quantity_calculated = _amount_from_parse(original, parsed)
+    food_phrase, quantity, portion_calculated = _apply_portion_math(
+        food_phrase,
+        quantity,
+        unit,
+        grams,
+    )
+    quantity_calculated = quantity_calculated or portion_calculated
     food_phrase = re.sub(r"\s+", " ", food_phrase).strip(" .") or original or "Ingredient"
     return ParsedIngredient(
         quantity,
@@ -303,6 +386,7 @@ def parse_ingredient(text: str) -> ParsedIngredient:
         optional,
         confidence,
         needs_review,
+        quantity_calculated,
     )
 
 
