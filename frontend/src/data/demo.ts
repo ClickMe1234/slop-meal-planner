@@ -99,12 +99,12 @@ export const demoWeek: DayPlan[] = [
 ]
 
 export const demoPantry: PantryItem[] = [
-  { id: 'p1', name: 'Basmati rice', quantity: 900, unit: 'g', reserved: 450, category: 'Cupboard', staple: true },
-  { id: 'p2', name: 'Eggs', quantity: 8, unit: 'eggs', reserved: 5, category: 'Dairy & eggs', expires: '18 Jul' },
-  { id: 'p3', name: 'Greek yoghurt', quantity: 500, unit: 'g', reserved: 350, category: 'Dairy & eggs', expires: '15 Jul' },
-  { id: 'p4', name: 'Chickpeas', quantity: 3, unit: 'tins', reserved: 2, category: 'Cupboard' },
-  { id: 'p5', name: 'Olive oil', quantity: 620, unit: 'ml', reserved: 90, category: 'Cupboard', staple: true },
-  { id: 'p6', name: 'Spinach', quantity: 180, unit: 'g', reserved: 150, category: 'Fruit & veg', expires: '14 Jul' }
+  { id: 'p1', name: 'Basmati rice', quantity: 900, unit: 'g', reserved: 450, quantityDisplay: '900 g', reservedDisplay: '450 g', usableDisplay: '450 g', category: 'Cupboard', staple: true },
+  { id: 'p2', name: 'Eggs', quantity: 8, unit: 'eggs', reserved: 5, quantityDisplay: '8 eggs', reservedDisplay: '5 eggs', usableDisplay: '3 eggs', category: 'Dairy & eggs', expires: '18 Jul' },
+  { id: 'p3', name: 'Greek yoghurt', quantity: 500, unit: 'g', reserved: 350, quantityDisplay: '500 g', reservedDisplay: '350 g', usableDisplay: '150 g', category: 'Dairy & eggs', expires: '15 Jul' },
+  { id: 'p4', name: 'Chickpeas', quantity: 3, unit: 'tins', reserved: 2, quantityDisplay: '3 tins', reservedDisplay: '2 tins', usableDisplay: '1 tin', category: 'Cupboard' },
+  { id: 'p5', name: 'Olive oil', quantity: 620, unit: 'ml', reserved: 90, quantityDisplay: '620 ml', reservedDisplay: '90 ml', usableDisplay: '530 ml', category: 'Cupboard', staple: true },
+  { id: 'p6', name: 'Spinach', quantity: 180, unit: 'g', reserved: 150, quantityDisplay: '180 g', reservedDisplay: '150 g', usableDisplay: '30 g', category: 'Fruit & veg', expires: '14 Jul' }
 ]
 
 export const initialShopping: ShoppingItem[] = [
