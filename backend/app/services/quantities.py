@@ -257,5 +257,6 @@ def format_quantity(value: Decimal | int | str | SupportsFloat, unit: str) -> st
     rounded = round_quantity(value, canonical_unit)
     rendered = _format_number(rounded, quantity_rule(canonical_unit))
     singular, plural = _UNIT_LABELS.get(canonical_unit, (canonical_unit, canonical_unit))
-    label = singular if abs(rounded) == 1 else plural
+    magnitude = abs(rounded)
+    label = singular if Decimal("0") < magnitude <= Decimal("1") else plural
     return f"{rendered} {label}".strip()

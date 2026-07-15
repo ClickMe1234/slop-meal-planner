@@ -58,6 +58,7 @@ def test_purchase_quantities_always_round_up(value, unit, expected):
         ("1020.5829", "g", "1,021 g"),
         ("1.20", "l", "1.2 l"),
         ("0.25", "tsp", "¼ tsp"),
+        ("0.5", "cup", "½ cup"),
         ("1.125", "cup", "1⅛ cups"),
         ("1", "clove", "1 clove"),
         ("2", "clove", "2 cloves"),
