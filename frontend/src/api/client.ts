@@ -292,21 +292,27 @@ export type RecipeSourceKey = 'good_food' | 'allrecipes'
 export interface BackendPantryItem {
   id: string
   display_name: string
-  initial_quantity: number
+  initial_quantity: number | string
   unit: string
   expires_on?: string
   always_have: boolean
-  on_hand_quantity: number
-  reserved_quantity: number
-  usable_quantity: number
+  on_hand_quantity: number | string
+  reserved_quantity: number | string
+  usable_quantity: number | string
+  initial_quantity_display: string
+  on_hand_quantity_display: string
+  reserved_quantity_display: string
+  usable_quantity_display: string
   version: number
 }
 
 export interface BackendShoppingItem {
   id: string
   display_name: string
-  exact_quantity: number
-  purchase_quantity: number
+  exact_quantity: number | string
+  purchase_quantity: number | string
+  exact_quantity_display: string
+  purchase_quantity_display: string
   unit: string
   category: string
   checked: boolean

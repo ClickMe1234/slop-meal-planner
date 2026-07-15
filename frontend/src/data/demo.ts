@@ -109,11 +109,11 @@ export const demoPantry: PantryItem[] = [
 
 export const initialShopping: ShoppingItem[] = [
   { id: 's1', name: 'Chicken thighs', buy: '1.2 kg', exact: '1.08 kg required', category: 'Meat & fish', checked: false, updatedAt: 1 },
-  { id: 's2', name: 'Salmon fillets', buy: '4 fillets', exact: '3.5 fillets required', category: 'Meat & fish', checked: false, updatedAt: 1 },
-  { id: 's3', name: 'Eggs', buy: '6 eggs', exact: '4.75 eggs required', pantryUsed: '3 eggs reserved from pantry', category: 'Dairy & eggs', checked: false, updatedAt: 1 },
+  { id: 's2', name: 'Salmon fillets', buy: '4 fillets', exact: '', category: 'Meat & fish', checked: false, updatedAt: 1 },
+  { id: 's3', name: 'Eggs', buy: '6 eggs', exact: '5 eggs required', pantryUsed: '3 eggs reserved from pantry', category: 'Dairy & eggs', checked: false, updatedAt: 1 },
   { id: 's4', name: 'Greek yoghurt', buy: '500 g', exact: '430 g required', pantryUsed: '150 g available in pantry', category: 'Dairy & eggs', checked: true, updatedAt: 1 },
-  { id: 's5', name: 'Red peppers', buy: '3', exact: '2.5 required', category: 'Fruit & veg', checked: false, updatedAt: 1 },
-  { id: 's6', name: 'Lemons', buy: '2', exact: '1.5 required', category: 'Fruit & veg', checked: false, updatedAt: 1 },
+  { id: 's5', name: 'Red peppers', buy: '3 items', exact: '', category: 'Fruit & veg', checked: false, updatedAt: 1 },
+  { id: 's6', name: 'Lemons', buy: '2 items', exact: '', category: 'Fruit & veg', checked: false, updatedAt: 1 },
   { id: 's7', name: 'Chickpeas', buy: '2 × 400 g tins', exact: '760 g required', pantryUsed: '1 tin already available', category: 'Cupboard', checked: false, updatedAt: 1 },
   { id: 's8', name: 'Arborio rice', buy: '500 g', exact: '380 g required', category: 'Cupboard', checked: false, updatedAt: 1 }
 ]

@@ -21,6 +21,12 @@ from ..schemas import (
 )
 from ..services.pantry import adjust_lot, balances, reserve_plan_batches
 from ..services.ingredient_names import ingredient_name_keys, remember_ingredient_name
+from ..services.quantities import (
+    canonical_quantity_unit,
+    format_quantity,
+    round_purchase_quantity,
+    round_quantity,
+)
 from ..services.shopping import build_shopping_list
 from ..services.regional_ingredients import convert_ingredient_text
 
@@ -31,11 +37,17 @@ def _pantry_out(db: Session, lot: PantryLot, ingredient_locale: str = "uk") -> P
     on_hand, reserved, usable = balances(db, lot)
     data = {column.name: getattr(lot, column.name) for column in lot.__table__.columns}
     data["display_name"] = convert_ingredient_text(db, data["display_name"], ingredient_locale)
+    data["unit"] = canonical_quantity_unit(lot.unit)
+    data["initial_quantity"] = round_quantity(lot.initial_quantity, data["unit"])
     return PantryLotOut(
         **data,
         on_hand_quantity=on_hand,
         reserved_quantity=reserved,
         usable_quantity=usable,
+        initial_quantity_display=format_quantity(data["initial_quantity"], data["unit"]),
+        on_hand_quantity_display=format_quantity(on_hand, data["unit"]),
+        reserved_quantity_display=format_quantity(reserved, data["unit"]),
+        usable_quantity_display=format_quantity(usable, data["unit"]),
     )
 
 
@@ -57,11 +69,12 @@ def create_pantry_lot(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
+    unit = canonical_quantity_unit(payload.unit)
     lot = PantryLot(
         household_id=context.user.household_id,
         display_name=payload.display_name,
-        initial_quantity=payload.quantity,
-        unit=payload.unit,
+        initial_quantity=round_quantity(payload.quantity, unit),
+        unit=unit,
         food_record_id=payload.food_record_id,
         expires_on=payload.expires_on,
         always_have=payload.always_have,
@@ -96,14 +109,28 @@ def _shopping_out(db: Session, shopping_list: ShoppingList, ingredient_locale: s
     ).all()
     return ShoppingListOut(
         **{column.name: getattr(shopping_list, column.name) for column in shopping_list.__table__.columns},
-        items=[
-            {
-                **{column.name: getattr(item, column.name) for column in item.__table__.columns},
-                "display_name": convert_ingredient_text(db, item.display_name, ingredient_locale),
-            }
-            for item in items
-        ],
+        items=[_shopping_item_data(db, item, ingredient_locale) for item in items],
     )
+
+
+def _shopping_item_data(
+    db: Session,
+    item: ShoppingItem,
+    ingredient_locale: str,
+) -> dict[str, object]:
+    data = {column.name: getattr(item, column.name) for column in item.__table__.columns}
+    unit = canonical_quantity_unit(item.unit)
+    exact = round_quantity(item.exact_quantity, unit)
+    purchase = max(round_purchase_quantity(item.purchase_quantity, unit), exact)
+    data.update(
+        display_name=convert_ingredient_text(db, item.display_name, ingredient_locale),
+        exact_quantity=exact,
+        purchase_quantity=purchase,
+        exact_quantity_display=format_quantity(exact, unit),
+        purchase_quantity_display=format_quantity(purchase, unit),
+        unit=unit,
+    )
+    return data
 
 
 def _shopping_item_out(
@@ -111,11 +138,7 @@ def _shopping_item_out(
     item: ShoppingItem,
     ingredient_locale: str = "uk",
 ) -> ShoppingItemOut:
-    data = {column.name: getattr(item, column.name) for column in item.__table__.columns}
-    data["display_name"] = convert_ingredient_text(
-        db, item.display_name, ingredient_locale
-    )
-    return ShoppingItemOut(**data)
+    return ShoppingItemOut(**_shopping_item_data(db, item, ingredient_locale))
 
 
 @router.post("/shopping-lists/build", response_model=ShoppingListOut, status_code=201)
@@ -174,12 +197,15 @@ def add_manual_item(
     shopping_list = db.get(ShoppingList, list_id)
     if shopping_list is None or shopping_list.household_id != context.user.household_id:
         raise NotFoundError("Shopping list")
+    unit = canonical_quantity_unit(payload.unit)
+    exact = round_quantity(payload.exact_quantity, unit)
+    purchase = max(round_purchase_quantity(payload.purchase_quantity, unit), exact)
     item = ShoppingItem(
         shopping_list_id=shopping_list.id,
         display_name=payload.display_name,
-        exact_quantity=payload.exact_quantity,
-        purchase_quantity=payload.purchase_quantity,
-        unit=payload.unit,
+        exact_quantity=exact,
+        purchase_quantity=purchase,
+        unit=unit,
         category=payload.category,
         manual=True,
     )
@@ -212,6 +238,9 @@ def patch_item(
     for field in ("checked", "purchase_quantity", "category"):
         value = getattr(payload, field)
         if value is not None:
+            if field == "purchase_quantity":
+                exact = round_quantity(item.exact_quantity, item.unit)
+                value = max(round_purchase_quantity(value, item.unit), exact)
             setattr(item, field, value)
     item.version += 1
     shopping_list.version += 1
@@ -312,12 +341,13 @@ def add_purchased_to_pantry(
         raise DomainError("NO_PURCHASED_ITEMS", "Tick purchased items before adding them to the pantry")
     lots: list[PantryLot] = []
     for item in checked:
+        unit = canonical_quantity_unit(item.unit)
         lot = PantryLot(
             household_id=context.user.household_id,
             food_record_id=item.food_record_id,
             display_name=item.display_name,
-            initial_quantity=item.purchase_quantity,
-            unit=item.unit,
+            initial_quantity=round_quantity(item.purchase_quantity, unit),
+            unit=unit,
         )
         db.add(lot)
         lots.append(lot)

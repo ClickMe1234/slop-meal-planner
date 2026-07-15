@@ -872,7 +872,8 @@ def test_accept_replaces_a_legacy_pre_accept_shopping_list(
     assert active["meal_plan_id"] == plan["id"]
     assert len(active["items"]) == 1
     assert active["items"][0]["display_name"] == "rice"
-    assert active["items"][0]["exact_quantity"] == "100.0000"
+    assert active["items"][0]["exact_quantity"] == "100"
+    assert active["items"][0]["exact_quantity_display"] == "100 g"
 
     with session_factory() as db:
         assert db.get(ShoppingList, stale_id).active is False

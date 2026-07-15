@@ -493,7 +493,7 @@ export function ShoppingPage() {
                   <input type="checkbox" checked={item.checked} onChange={() => toggle(item.id)}/>
                   <span className="custom-check"><Check/></span>
                 </label>
-                <span className="shopping-copy"><strong>{item.name}</strong><span>{item.exact}{item.pantryUsed && <> · {item.pantryUsed}</>}</span></span>
+                <span className="shopping-copy"><strong>{item.name}</strong>{(item.exact || item.pantryUsed) && <span>{item.exact}{item.exact && item.pantryUsed && <> · </>}{item.pantryUsed}</span>}</span>
                 <strong className="buy-amount">{item.buy}</strong>
                 {item.manual && <Badge>Manual</Badge>}
                 {mutation?.status === 'pending' && <Badge tone="warning">Name pending</Badge>}
@@ -539,12 +539,15 @@ function manualShoppingItem(name: string): ShoppingItem {
   }
 }
 
-function mapShoppingItem(item: BackendShoppingItem): ShoppingItem {
+export function mapShoppingItem(item: BackendShoppingItem): ShoppingItem {
+  const exact = item.exact_quantity_display === item.purchase_quantity_display
+    ? ''
+    : `${item.exact_quantity_display} required`
   return {
     id: item.id,
     name: item.display_name,
-    buy: `${item.purchase_quantity} ${item.unit}`,
-    exact: `Exact: ${item.exact_quantity} ${item.unit}`,
+    buy: item.purchase_quantity_display,
+    exact,
     category: item.category,
     checked: item.checked,
     manual: item.manual,

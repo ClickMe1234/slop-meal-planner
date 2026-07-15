@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..errors import DomainError, NotFoundError
 from ..models import MealBatch, PantryLot, PantryReservation, PantryTransaction, RecipeVersion
+from .quantities import canonical_quantity_unit, round_quantity
 
 
 def balances(db: Session, lot: PantryLot) -> tuple[Decimal, Decimal, Decimal]:
@@ -20,23 +21,29 @@ def balances(db: Session, lot: PantryLot) -> tuple[Decimal, Decimal, Decimal]:
             PantryReservation.pantry_lot_id == lot.id
         )
     )
-    on_hand = Decimal(lot.initial_quantity) + Decimal(movement or 0)
-    reserved_amount = Decimal(reserved or 0)
-    return on_hand, reserved_amount, on_hand - reserved_amount
+    on_hand = round_quantity(
+        Decimal(lot.initial_quantity) + Decimal(movement or 0), lot.unit
+    )
+    reserved_amount = round_quantity(Decimal(reserved or 0), lot.unit)
+    usable = round_quantity(on_hand - reserved_amount, lot.unit)
+    return on_hand, reserved_amount, usable
 
 
 def adjust_lot(db: Session, lot_id: str, delta: Decimal, reason: str) -> PantryTransaction:
     lot = db.get(PantryLot, lot_id)
     if lot is None:
         raise NotFoundError("Pantry lot")
+    rounded_delta = round_quantity(delta, lot.unit)
+    if rounded_delta == 0:
+        raise DomainError("PANTRY_ADJUSTMENT_EMPTY", "Enter a non-zero pantry adjustment")
     on_hand, reserved, _ = balances(db, lot)
-    if on_hand + delta < reserved:
+    if on_hand + rounded_delta < reserved:
         raise DomainError(
             "PANTRY_QUANTITY_CONFLICT",
             "This adjustment would reduce stock below the quantity reserved by accepted plans",
         )
     transaction = PantryTransaction(
-        pantry_lot_id=lot.id, quantity_delta=delta, reason=reason
+        pantry_lot_id=lot.id, quantity_delta=rounded_delta, reason=reason
     )
     db.add(transaction)
     lot.version += 1
@@ -64,7 +71,8 @@ def reserve_plan_batches(db: Session, household_id: str, batches: list[MealBatch
             if ingredient.quantity_grams is not None:
                 required, unit = Decimal(ingredient.quantity_grams) * scale, "g"
             elif ingredient.quantity is not None and ingredient.unit:
-                required, unit = Decimal(ingredient.quantity) * scale, ingredient.unit
+                required = Decimal(ingredient.quantity) * scale
+                unit = canonical_quantity_unit(ingredient.unit)
             else:
                 continue
             key = (ingredient.food_record_id, unit)
@@ -74,14 +82,15 @@ def reserve_plan_batches(db: Session, household_id: str, batches: list[MealBatch
             select(PantryReservation).where(PantryReservation.meal_batch_id == batch.id)
         ).all()
         existing_by_lot = {reservation.pantry_lot_id: reservation for reservation in existing_reservations}
-        for (food_record_id, unit), required in requirements.items():
+        for (food_record_id, unit), unrounded_required in requirements.items():
+            required = round_quantity(unrounded_required, unit)
             existing = sum(
                 (
                     Decimal(reservation.quantity)
                     for reservation in existing_reservations
                     if (reserved_lot := db.get(PantryLot, reservation.pantry_lot_id)) is not None
                     and reserved_lot.food_record_id == food_record_id
-                    and reservation.unit == unit
+                    and canonical_quantity_unit(reservation.unit) == unit
                 ),
                 Decimal("0"),
             )
@@ -103,12 +112,14 @@ def reserve_plan_batches(db: Session, household_id: str, batches: list[MealBatch
                 if quantity > 0:
                     reservation = existing_by_lot.get(lot.id)
                     if reservation is not None:
-                        reservation.quantity = Decimal(reservation.quantity) + quantity
+                        reservation.quantity = round_quantity(
+                            Decimal(reservation.quantity) + quantity, unit
+                        )
                     else:
                         reservation = PantryReservation(
                             pantry_lot_id=lot.id,
                             meal_batch_id=batch.id,
-                            quantity=quantity,
+                            quantity=round_quantity(quantity, unit),
                             unit=unit,
                         )
                         db.add(reservation)

@@ -55,6 +55,9 @@ export interface PantryItem {
   quantity: number
   unit: string
   reserved: number
+  quantityDisplay?: string
+  reservedDisplay?: string
+  usableDisplay?: string
   category: string
   expires?: string
   staple?: boolean
