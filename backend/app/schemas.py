@@ -411,6 +411,19 @@ class ShoppingItemPatch(VersionedUpdate):
     category: str | None = None
 
 
+class ShoppingItemNameUpdate(APIModel):
+    display_name: str = Field(min_length=1, max_length=240)
+    expected_display_name: str = Field(min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def strip_names(self):
+        self.display_name = self.display_name.strip()
+        self.expected_display_name = self.expected_display_name.strip()
+        if not self.display_name or not self.expected_display_name:
+            raise ValueError("shopping item names cannot be blank")
+        return self
+
+
 class ShoppingItemOut(APIModel):
     id: str
     display_name: str
@@ -428,6 +441,7 @@ class ShoppingListOut(APIModel):
     name: str
     meal_plan_id: str | None
     active: bool
+    rebuild_recommended: bool
     version: int
     items: list[ShoppingItemOut]
 

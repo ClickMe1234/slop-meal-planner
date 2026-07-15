@@ -14,11 +14,13 @@ from ..schemas import (
     PantryLotOut,
     ShoppingBuildRequest,
     ShoppingItemCreate,
+    ShoppingItemNameUpdate,
     ShoppingItemOut,
     ShoppingItemPatch,
     ShoppingListOut,
 )
 from ..services.pantry import adjust_lot, balances, reserve_plan_batches
+from ..services.ingredient_names import ingredient_name_keys, remember_ingredient_name
 from ..services.shopping import build_shopping_list
 from ..services.regional_ingredients import convert_ingredient_text
 
@@ -104,6 +106,18 @@ def _shopping_out(db: Session, shopping_list: ShoppingList, ingredient_locale: s
     )
 
 
+def _shopping_item_out(
+    db: Session,
+    item: ShoppingItem,
+    ingredient_locale: str = "uk",
+) -> ShoppingItemOut:
+    data = {column.name: getattr(item, column.name) for column in item.__table__.columns}
+    data["display_name"] = convert_ingredient_text(
+        db, item.display_name, ingredient_locale
+    )
+    return ShoppingItemOut(**data)
+
+
 @router.post("/shopping-lists/build", response_model=ShoppingListOut, status_code=201)
 def build_list(
     payload: ShoppingBuildRequest,
@@ -173,7 +187,7 @@ def add_manual_item(
     shopping_list.version += 1
     db.commit()
     db.refresh(item)
-    return item
+    return _shopping_item_out(db, item, context.user.ingredient_locale)
 
 
 @router.patch("/shopping-lists/{list_id}/items/{item_id}", response_model=ShoppingItemOut)
@@ -203,7 +217,78 @@ def patch_item(
     shopping_list.version += 1
     db.commit()
     db.refresh(item)
-    return item
+    return _shopping_item_out(db, item, context.user.ingredient_locale)
+
+
+@router.put(
+    "/shopping-lists/{list_id}/items/{item_id}/name",
+    response_model=ShoppingItemOut,
+)
+def update_item_name(
+    list_id: str,
+    item_id: str,
+    payload: ShoppingItemNameUpdate,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    """Compare-and-set an item name and remember generated-item corrections."""
+
+    shopping_list = db.scalar(
+        select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
+    )
+    item = db.scalar(
+        select(ShoppingItem).where(ShoppingItem.id == item_id).with_for_update()
+    )
+    if (
+        shopping_list is None
+        or shopping_list.household_id != context.user.household_id
+        or item is None
+        or item.shopping_list_id != shopping_list.id
+    ):
+        raise NotFoundError("Shopping item")
+
+    desired_name = (
+        convert_ingredient_text(db, payload.display_name.strip(), "uk")
+        or payload.display_name.strip()
+    )
+    expected_name = (
+        convert_ingredient_text(db, payload.expected_display_name.strip(), "uk")
+        or payload.expected_display_name.strip()
+    )
+    current_key = " ".join(item.display_name.casefold().split())
+    desired_key = " ".join(desired_name.casefold().split())
+    expected_key = " ".join(expected_name.casefold().split())
+    if desired_key == current_key:
+        return _shopping_item_out(db, item, context.user.ingredient_locale)
+    if expected_key != current_key:
+        current_display_name = (
+            convert_ingredient_text(
+                db, item.display_name, context.user.ingredient_locale
+            )
+            or item.display_name
+        )
+        raise DomainError(
+            "SHOPPING_NAME_CONFLICT",
+            "This ingredient name changed elsewhere while your edit was offline.",
+            409,
+            actions=[{"current_display_name": current_display_name}],
+        )
+
+    if not item.manual:
+        keys = list(item.source_name_keys or ingredient_name_keys(db, item.display_name))
+        desired_name = remember_ingredient_name(
+            db,
+            context.user.household_id,
+            keys,
+            desired_name,
+        )
+        item.source_name_keys = keys
+    item.display_name = desired_name
+    item.version += 1
+    shopping_list.version += 1
+    db.commit()
+    db.refresh(item)
+    return _shopping_item_out(db, item, context.user.ingredient_locale)
 
 
 @router.post("/shopping-lists/{list_id}/add-purchased-to-pantry", response_model=list[PantryLotOut])

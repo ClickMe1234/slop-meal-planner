@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from decimal import Decimal
 from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -33,11 +34,18 @@ from ..schemas import (
     NutritionCalculationOut,
     RecipeCreate,
     RecipeDetail,
+    RecipeIngredientIn,
     RecipeReviewUpdate,
     RecipeSummary,
 )
 from ..services.food_search import fetch_and_cache_usda_foods, normalise_food_query
-from ..services.ingredients import parse_ingredient
+from ..services.ingredient_names import (
+    household_name_overrides,
+    ingredient_name_keys,
+    preferred_ingredient_name,
+    remember_ingredient_name,
+)
+from ..services.ingredients import PARSER_VERSION, parse_ingredient
 from ..services.regional_ingredients import convert_ingredient_text, equivalent_terms, query_for_locale
 from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
 from ..services.pantry import reserve_plan_batches
@@ -70,33 +78,132 @@ def _replace_meal_types(db: Session, recipe: Recipe, meal_types: list[RecipeTag]
         db.add(RecipeMealType(recipe_id=recipe.id, meal_type=meal_type.value))
 
 
+def _normalised_name(value: str | None) -> str:
+    return " ".join((value or "").casefold().split())
+
+
+def _ingredient_values(
+    db: Session,
+    household_id: str,
+    row: RecipeIngredientIn,
+    *,
+    reviewed: bool,
+) -> dict:
+    parsed = parse_ingredient(row.original_text)
+    automatic_name = convert_ingredient_text(db, parsed.food_phrase, "uk") or parsed.food_phrase
+    submitted_name = convert_ingredient_text(db, row.food_phrase, "uk") if row.food_phrase else None
+    original_name = convert_ingredient_text(db, row.original_text, "uk") or row.original_text
+    keys = ingredient_name_keys(db, automatic_name)
+    explicitly_changed = bool(
+        submitted_name
+        and _normalised_name(submitted_name)
+        not in {_normalised_name(original_name), _normalised_name(automatic_name)}
+    )
+    if explicitly_changed:
+        display_name = remember_ingredient_name(db, household_id, keys, submitted_name or automatic_name)
+        remembered = True
+    else:
+        display_name, remembered = preferred_ingredient_name(
+            db, household_id, keys, automatic_name
+        )
+    values = row.model_dump()
+    if values["quantity"] is None and values["unit"] is None:
+        values["quantity"] = parsed.quantity
+        values["unit"] = parsed.unit
+    if values["quantity_grams"] is None:
+        values["quantity_grams"] = parsed.quantity_grams
+    values.update(
+        food_phrase=display_name,
+        parsed_food_phrase=automatic_name,
+        preparation=row.preparation or parsed.preparation,
+        parser_version=PARSER_VERSION,
+        name_confidence=(
+            Decimal(str(round(parsed.name_confidence, 4)))
+            if parsed.name_confidence is not None
+            else None
+        ),
+        name_overridden=remembered,
+        parser_name_keys=keys,
+        optional=row.optional or parsed.optional,
+        included=row.included and not (parsed.optional and "included" not in row.model_fields_set),
+        needs_review=False if reviewed or remembered else parsed.needs_review,
+    )
+    return values
+
+
 def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -> RecipeDetail:
     version = _latest_version(db, recipe.id)
     if version is None:
         raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+    name_overrides = household_name_overrides(db, recipe.household_id)
     ingredients = []
     for row in version.ingredients:
         item = {column.name: getattr(row, column.name) for column in row.__table__.columns}
         # Drafts created before ingredient parsing was introduced are enriched
         # on read. Saving the review persists these fields in the next immutable
         # recipe version without rewriting the historical import.
-        if recipe.source_type == "url" and row.quantity is None and row.unit is None:
+        if row.parser_version != PARSER_VERSION:
             parsed = parse_ingredient(row.original_text)
+            automatic_name = convert_ingredient_text(db, parsed.food_phrase, "uk") or parsed.food_phrase
+            keys = ingredient_name_keys(db, automatic_name, row.food_phrase)
+            display_name, remembered = preferred_ingredient_name(
+                db,
+                recipe.household_id,
+                keys,
+                automatic_name,
+                overrides=name_overrides,
+            )
             item.update(
-                quantity=parsed.quantity,
-                unit=parsed.unit,
-                quantity_grams=parsed.quantity_grams,
-                food_phrase=(
-                    parsed.food_phrase
-                    if not row.food_phrase or row.food_phrase == row.original_text
-                    else row.food_phrase
+                quantity=row.quantity if row.quantity is not None else parsed.quantity,
+                unit=row.unit if row.unit is not None else parsed.unit,
+                quantity_grams=(
+                    row.quantity_grams
+                    if row.quantity_grams is not None
+                    else parsed.quantity_grams
                 ),
+                food_phrase=row.food_phrase if row.name_overridden else display_name,
+                parsed_food_phrase=automatic_name,
                 preparation=row.preparation or parsed.preparation,
+                parser_version=PARSER_VERSION,
+                name_confidence=parsed.name_confidence,
+                name_overridden=row.name_overridden or remembered,
+                parser_name_keys=keys,
                 optional=row.optional or parsed.optional,
                 included=row.included and not parsed.optional,
+                needs_review=(
+                    False if row.name_overridden or remembered else parsed.needs_review
+                ),
             )
+        keys = list(
+            item.get("parser_name_keys")
+            or ingredient_name_keys(
+                db,
+                item.get("parsed_food_phrase"),
+                item.get("food_phrase"),
+            )
+        )
+        display_name, remembered = preferred_ingredient_name(
+            db,
+            recipe.household_id,
+            keys,
+            item.get("food_phrase") or item.get("parsed_food_phrase") or row.original_text,
+            overrides=name_overrides,
+        )
+        if remembered:
+            item["food_phrase"] = display_name
+            item["name_overridden"] = True
+            item["needs_review"] = False
         item["original_text"] = convert_ingredient_text(db, item["original_text"], ingredient_locale)
         item["food_phrase"] = convert_ingredient_text(db, item.get("food_phrase"), ingredient_locale)
+        item["parsed_food_phrase"] = convert_ingredient_text(
+            db, item.get("parsed_food_phrase"), ingredient_locale
+        )
+        for field in ("quantity", "quantity_grams", "name_confidence"):
+            if isinstance(item.get(field), Decimal):
+                plain = format(item[field], "f")
+                if "." in plain:
+                    plain = plain.rstrip("0").rstrip(".")
+                item[field] = Decimal(plain or "0")
         ingredients.append(item)
     reported_values = publisher_values(version)
     calculation = latest_calculation(db, version.id)
@@ -129,6 +236,14 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         planner_warnings.append(
             "Complete publisher-reported per-serving nutrition and a serving yield are required."
         )
+    review_count = sum(
+        1 for ingredient in ingredients if ingredient["included"] and ingredient["needs_review"]
+    )
+    if review_count:
+        planner_warnings.append(
+            f"Confirm {review_count} uncertain ingredient name"
+            f"{'s' if review_count != 1 else ''} before creating the shopping list."
+        )
     summary = RecipeSummary(
         id=recipe.id,
         title=recipe.title,
@@ -142,11 +257,7 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         publisher_nutrition=version.publisher_nutrition,
         calculated_nutrition=nutrition_values,
         nutrition_method=nutrition_method,
-        review_count=(
-            0
-            if recipe.source_type == "url"
-            else sum(1 for ingredient in version.ingredients if ingredient.included and ingredient.needs_review)
-        ),
+        review_count=review_count,
         meal_types=meal_types,
         planner_eligible=(
             effective_eligibility == RecipeEligibility.PLANNER_READY
@@ -233,9 +344,15 @@ def create_recipe(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    eligibility = RecipeEligibility.NEEDS_REVIEW.value
-    if payload.yield_servings and payload.ingredients and not any(i.needs_review for i in payload.ingredients):
-        eligibility = RecipeEligibility.DRAFT.value
+    ingredient_values = [
+        _ingredient_values(
+            db,
+            context.user.household_id,
+            item,
+            reviewed=False,
+        )
+        for item in payload.ingredients
+    ]
     recipe = Recipe(
         household_id=context.user.household_id,
         title=payload.title,
@@ -243,7 +360,7 @@ def create_recipe(
         source_url=payload.source_url,
         publisher=payload.publisher,
         image_url=payload.image_url,
-        eligibility=eligibility,
+        eligibility=RecipeEligibility.DRAFT.value,
     )
     db.add(recipe)
     db.flush()
@@ -259,8 +376,8 @@ def create_recipe(
     )
     db.add(version)
     db.flush()
-    for position, item in enumerate(payload.ingredients):
-        db.add(RecipeIngredient(recipe_version_id=version.id, position=position, **item.model_dump()))
+    for position, item in enumerate(ingredient_values):
+        db.add(RecipeIngredient(recipe_version_id=version.id, position=position, **item))
     if publisher_values(version) is not None and version.yield_servings:
         recipe.eligibility = RecipeEligibility.PLANNER_READY.value
     db.commit()
@@ -382,12 +499,21 @@ def save_recipe_review(
     )
     db.add(next_version)
     db.flush()
-    for position, item in enumerate(payload.ingredients):
+    ingredient_values = [
+        _ingredient_values(
+            db,
+            context.user.household_id,
+            item,
+            reviewed=True,
+        )
+        for item in payload.ingredients
+    ]
+    for position, item in enumerate(ingredient_values):
         db.add(
             RecipeIngredient(
                 recipe_version_id=next_version.id,
                 position=position,
-                **item.model_dump(),
+                **item,
             )
         )
     if payload.meal_types is not None:

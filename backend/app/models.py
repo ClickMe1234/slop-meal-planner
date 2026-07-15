@@ -125,6 +125,17 @@ class IngredientNameEquivalent(IdMixin, Base):
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
 
 
+class IngredientNameOverride(IdMixin, AuditMixin, Base):
+    __tablename__ = "ingredient_name_override"
+    __table_args__ = (UniqueConstraint("household_id", "ingredient_key"),)
+
+    household_id: Mapped[str] = mapped_column(
+        ForeignKey("household.id", ondelete="CASCADE"), index=True
+    )
+    ingredient_key: Mapped[str] = mapped_column(String(240), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(240), nullable=False)
+
+
 class UserSession(IdMixin, Base):
     __tablename__ = "user_session"
 
@@ -240,7 +251,12 @@ class RecipeIngredient(IdMixin, Base):
     unit: Mapped[str | None] = mapped_column(String(40))
     quantity_grams: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     food_phrase: Mapped[str | None] = mapped_column(String(240))
+    parsed_food_phrase: Mapped[str | None] = mapped_column(String(240))
     preparation: Mapped[str | None] = mapped_column(String(160))
+    parser_version: Mapped[str | None] = mapped_column(String(80))
+    name_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    name_overridden: Mapped[bool] = mapped_column(Boolean, default=False)
+    parser_name_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
     included: Mapped[bool] = mapped_column(Boolean, default=True)
     optional: Mapped[bool] = mapped_column(Boolean, default=False)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -409,6 +425,7 @@ class ShoppingList(IdMixin, AuditMixin, Base):
     meal_plan_id: Mapped[str | None] = mapped_column(ForeignKey("meal_plan.id", ondelete="SET NULL"), index=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    rebuild_recommended: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ShoppingItem(IdMixin, AuditMixin, Base):
@@ -423,6 +440,7 @@ class ShoppingItem(IdMixin, AuditMixin, Base):
     category: Mapped[str] = mapped_column(String(80), default="Other")
     checked: Mapped[bool] = mapped_column(Boolean, default=False)
     manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_name_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
 Index("ix_recipe_household_title", Recipe.household_id, Recipe.title)

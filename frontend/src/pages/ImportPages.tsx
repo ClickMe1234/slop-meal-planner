@@ -220,6 +220,7 @@ interface ImportedIngredientRow {
   food_record_id?: string
   included: boolean
   optional: boolean
+  needs_review: boolean
   shopping_excluded: boolean
 }
 
@@ -237,6 +238,7 @@ function LiveImportReviewPage() {
   const requestedReturnTo = searchParams.get('returnTo')
   const returnTo = requestedReturnTo?.startsWith('/') && !requestedReturnTo.startsWith('//') ? requestedReturnTo : '/recipes'
   const focusIngredient = searchParams.get('focusIngredient') ?? ''
+  const focusField = searchParams.get('focusField') ?? 'amount'
   const suggestedMealTypes = normaliseRecipeMealTypes(
     (searchParams.get('suggestedMealTypes') ?? searchParams.get('suggestedMealType') ?? '')
       .split(',')
@@ -268,6 +270,7 @@ function LiveImportReviewPage() {
       food_record_id: item.food_record_id,
       included: item.included,
       optional: item.optional,
+      needs_review: item.needs_review,
       shopping_excluded: item.shopping_excluded ?? false,
     })))
   }, [recipe.data, suggestedMealTypes.join(',')])
@@ -277,11 +280,13 @@ function LiveImportReviewPage() {
     const timeout = window.setTimeout(() => {
       const ingredientRow = document.getElementById(`ingredient-${focusIngredient}`)
       ingredientRow?.scrollIntoView?.({ block: 'center' })
-      ingredientRow?.querySelector<HTMLInputElement>('[data-shopping-quantity-input]')?.focus()
+      ingredientRow?.querySelector<HTMLInputElement>(
+        focusField === 'name' ? '[data-shopping-name-input]' : '[data-shopping-quantity-input]',
+      )?.focus()
       focusedIngredient.current = focusIngredient
     }, 0)
     return () => window.clearTimeout(timeout)
-  }, [focusIngredient, rows])
+  }, [focusField, focusIngredient, rows])
 
   const update = (index: number, change: Partial<ImportedIngredientRow>) => setRows(all => all.map((row, rowIndex) => rowIndex === index ? { ...row, ...change } : row))
   const save = async () => {
@@ -362,11 +367,13 @@ function LiveImportReviewPage() {
         <div className="ingredient-review-list">{rows.map((row, index) => {
           const shoppingQuantityMissing = row.included && !row.shopping_excluded && (!row.amount || !row.unit)
           const warningId = `shopping-warning-${row.id}`
-          return <Card id={`ingredient-${row.id}`} key={row.id} className={`ingredient-row ${shoppingQuantityMissing ? 'ingredient-row--amount' : ''}`}>
+          const nameWarningId = `ingredient-name-warning-${row.id}`
+          return <Card id={`ingredient-${row.id}`} key={row.id} className={`ingredient-row ${row.needs_review ? 'ingredient-row--review' : ''} ${shoppingQuantityMissing ? 'ingredient-row--amount' : ''}`}>
             <div className="ingredient-copy">
               <small>Ingredient from recipe</small>
               <strong>{row.original_text}</strong>
               <div className="form-grid form-grid--ingredient">
+                <label className="ingredient-name-control">Shopping-list name<input data-shopping-name-input required value={row.food_phrase} aria-describedby={row.needs_review ? nameWarningId : undefined} onChange={event => update(index, { food_phrase: event.target.value, needs_review: false })}/><small className="field-help">Use only the ingredient itself, for example “courgette” rather than “cubed courgette”.</small></label>
                 <label>Amount<input data-shopping-quantity-input type="number" min="0" step="any" value={row.amount} aria-describedby={shoppingQuantityMissing ? warningId : undefined} onChange={event => update(index, { amount: event.target.value, quantity_grams: gramsFor(event.target.value, row.unit) || row.quantity_grams })}/></label>
                 <label>Unit<input list="ingredient-unit-options" value={row.unit} aria-describedby={shoppingQuantityMissing ? warningId : undefined} onChange={event => update(index, { unit: event.target.value, quantity_grams: gramsFor(row.amount, event.target.value) })} placeholder="e.g. tbsp, clove, large"/></label>
               </div>
@@ -375,6 +382,7 @@ function LiveImportReviewPage() {
                 <label className="check-label"><input type="checkbox" checked={row.optional} onChange={event => update(index, { optional: event.target.checked, included: event.target.checked ? false : row.included })}/>Optional</label>
               </div>
               <label className="check-label shopping-exclusion-control"><input type="checkbox" checked={row.shopping_excluded} onChange={event => update(index, { shopping_excluded: event.target.checked })}/>Do not add this to the shopping list <small>(to taste / already stocked)</small></label>
+              {row.needs_review && <span className="ingredient-inline-warning" id={nameWarningId}>Please confirm the shopping-list name. We were not sufficiently confident in the automatic result.</span>}
               {shoppingQuantityMissing && <span className="ingredient-inline-warning" id={warningId}>Enter an amount and unit, or leave this ingredient off the shopping list.</span>}
             </div>
           </Card>

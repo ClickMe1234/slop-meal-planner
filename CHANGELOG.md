@@ -3,6 +3,14 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.4.0 - 2026-07-15
+
+- Parse ingredient names with a local NLP model so preparation adjectives and comma-separated descriptors do not replace the ingredient itself.
+- Treat descriptive measures such as handfuls and sprigs as quantities, retain confidence metadata, and route uncertain results through recipe review.
+- Reparse existing URL imports during migration while preserving user overrides and leaving active shopping lists unchanged until an explicit rebuild.
+- Let shoppers edit ingredient names inline and remember generated-item corrections for the whole household.
+- Queue name edits offline and require an explicit resolution if another device changed the same name before synchronisation.
+
 ## 0.3.0 - 2026-07-14
 
 - Redesign the application shell and primary workflows for responsive desktop and mobile use.

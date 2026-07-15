@@ -29,6 +29,10 @@ with psycopg.connect(database_url, autocommit=True) as connection:
             ["alembic", "-c", "alembic.ini", "upgrade", "head"],
             check=True,
         )
+        subprocess.run(
+            ["python", "-m", "scripts.reparse_ingredients"],
+            check=True,
+        )
     finally:
         connection.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
 PY

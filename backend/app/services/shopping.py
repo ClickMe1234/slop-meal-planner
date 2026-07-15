@@ -17,6 +17,11 @@ from ..models import (
     ShoppingList,
 )
 from .pantry import balances
+from .ingredient_names import (
+    household_name_overrides,
+    ingredient_name_keys,
+    preferred_ingredient_name,
+)
 from .regional_ingredients import canonical_ingredient_key, convert_ingredient_text
 
 
@@ -46,6 +51,7 @@ def build_shopping_list(
         previous_items = db.scalars(
             select(ShoppingItem).where(ShoppingItem.shopping_list_id == previous.id)
         ).all()
+    name_overrides = household_name_overrides(db, household_id)
     for previous_list in previous_lists:
         previous_list.active = False
         previous_list.version += 1
@@ -61,6 +67,52 @@ def build_shopping_list(
         scale = Decimal(batch.servings) / Decimal(version.yield_servings)
         for ingredient in version.ingredients:
             if not ingredient.included or ingredient.shopping_excluded:
+                continue
+            automatic_name = (
+                ingredient.parsed_food_phrase
+                or ingredient.food_phrase
+                or ingredient.original_text
+            )
+            source_keys = list(
+                dict.fromkeys(
+                    [
+                        *ingredient_name_keys(db, automatic_name),
+                        *(ingredient.parser_name_keys or []),
+                    ]
+                )
+            )
+            base_name = (
+                ingredient.food_phrase
+                if ingredient.name_overridden and ingredient.food_phrase
+                else automatic_name
+            )
+            display, remembered = preferred_ingredient_name(
+                db,
+                household_id,
+                source_keys,
+                base_name,
+                overrides=name_overrides,
+            )
+            if ingredient.needs_review and not remembered:
+                review_actions.setdefault(
+                    ingredient.id,
+                    {
+                        "kind": "review_recipe",
+                        "label": f"Confirm {ingredient.original_text}",
+                        "href": (
+                            f"/recipes/{version.recipe_id}/review?"
+                            f"focusIngredient={ingredient.id}&focusField=name"
+                        ),
+                        "suggestion": (
+                            "Confirm the ingredient name and shopping amount, or mark "
+                            "Do not add to shopping list."
+                        ),
+                        "recipe_id": version.recipe_id,
+                        "recipe_version_id": version.id,
+                        "ingredient_id": ingredient.id,
+                        "batch_id": batch.id,
+                    },
+                )
                 continue
             if ingredient.quantity_grams is not None:
                 amount, unit = Decimal(ingredient.quantity_grams), "g"
@@ -83,14 +135,18 @@ def build_shopping_list(
                     },
                 )
                 continue
-            display = ingredient.food_phrase or ingredient.original_text
-            key = (canonical_ingredient_key(db, display), unit.casefold())
+            grouping_key = next(
+                (value for value in source_keys if value.startswith("stem:")),
+                canonical_ingredient_key(db, display),
+            )
+            key = (grouping_key, unit.casefold())
             requirement = requirements.setdefault(
                 key,
                 {
                     "food_id": ingredient.food_record_id,
                     "food_ids": {ingredient.food_record_id} if ingredient.food_record_id else set(),
                     "display": display,
+                    "source_keys": set(source_keys),
                     "unit": unit,
                     "exact": Decimal("0"),
                 },
@@ -99,13 +155,14 @@ def build_shopping_list(
                 requirement["food_id"] = ingredient.food_record_id
             if ingredient.food_record_id:
                 requirement["food_ids"].add(ingredient.food_record_id)
+            requirement["source_keys"].update(source_keys)
             requirement["exact"] = Decimal(requirement["exact"]) + amount * scale
 
     if review_actions:
         count = len(review_actions)
         raise DomainError(
             "SHOPPING_REVIEW_REQUIRED",
-            f"Confirm a shopping quantity for {count} recipe ingredient{'s' if count != 1 else ''}.",
+            f"Review {count} recipe ingredient{'s' if count != 1 else ''} before building the shopping list.",
             actions=list(review_actions.values()),
         )
 
@@ -134,6 +191,7 @@ def build_shopping_list(
         food_ids = requirement["food_ids"]
         display = convert_ingredient_text(db, str(requirement["display"]), "uk") or str(requirement["display"])
         unit = str(requirement["unit"])
+        source_keys = set(requirement["source_keys"])
         exact = Decimal(requirement["exact"])
         reserved = sum(
             (plan_reserved[(candidate_id, unit)] for candidate_id in food_ids),
@@ -161,9 +219,19 @@ def build_shopping_list(
                     item
                     for item in previous_items
                     if not item.manual
-                    and item.food_record_id == food_id
-                    and item.display_name == display
                     and item.unit == unit
+                    and (
+                        (
+                            food_id is not None
+                            and item.food_record_id == food_id
+                        )
+                        or bool(
+                            source_keys.intersection(
+                                item.source_name_keys
+                                or [canonical_ingredient_key(db, item.display_name)]
+                            )
+                        )
+                    )
                 ),
                 None,
             )
@@ -178,6 +246,7 @@ def build_shopping_list(
                     category="Other",
                     checked=prior.checked if prior is not None else False,
                     manual=False,
+                    source_name_keys=sorted(source_keys),
                 )
             )
     for item in previous_items:
@@ -193,6 +262,7 @@ def build_shopping_list(
                     category=item.category,
                     checked=item.checked,
                     manual=True,
+                    source_name_keys=list(item.source_name_keys or []),
                 )
             )
     db.flush()
