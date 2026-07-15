@@ -172,7 +172,8 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     assert shopping.status_code == 201, shopping.text
     shopping_data = shopping.json()
     item = shopping_data["items"][0]
-    assert item["exact_quantity"] == "100.0000"
+    assert item["exact_quantity"] == "100"
+    assert item["exact_quantity_display"] == "100 g"
     checked = client.patch(
         f"/api/v1/shopping-lists/{shopping_data['id']}/items/{item['id']}",
         headers=headers,
@@ -185,8 +186,9 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
         headers=headers,
     )
     assert purchased.status_code == 200, purchased.text
-    assert purchased.json()[0]["reserved_quantity"] == "100.0000"
-    assert purchased.json()[0]["usable_quantity"] == "0.0000"
+    assert purchased.json()[0]["reserved_quantity"] == "100"
+    assert purchased.json()[0]["reserved_quantity_display"] == "100 g"
+    assert purchased.json()[0]["usable_quantity"] == "0"
 
     plan = client.get(f"/api/v1/meal-plans/{plan_id}").json()
     batch_id = plan["occurrences"][0]["batch_id"]
@@ -195,5 +197,6 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     )
     assert cooked.status_code == 204
     pantry = client.get("/api/v1/pantry-items").json()[0]
-    assert pantry["on_hand_quantity"] == "0.0000"
+    assert pantry["on_hand_quantity"] == "0"
+    assert pantry["on_hand_quantity_display"] == "0 g"
     assert Decimal(pantry["reserved_quantity"]) == 0

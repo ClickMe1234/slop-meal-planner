@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from decimal import Decimal, ROUND_CEILING
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,6 +17,11 @@ from ..models import (
     ShoppingList,
 )
 from .pantry import balances
+from .quantities import (
+    canonical_quantity_unit,
+    round_purchase_quantity,
+    round_quantity,
+)
 from .ingredient_names import (
     household_name_overrides,
     ingredient_name_keys,
@@ -25,13 +30,8 @@ from .ingredient_names import (
 from .regional_ingredients import canonical_ingredient_key, convert_ingredient_text
 
 
-COUNT_UNITS = {"count", "each", "item", "egg", "eggs"}
-
-
 def round_purchase(quantity: Decimal, unit: str) -> Decimal:
-    if unit.lower() in COUNT_UNITS:
-        return quantity.to_integral_value(rounding=ROUND_CEILING)
-    return quantity
+    return round_purchase_quantity(quantity, unit)
 
 
 def build_shopping_list(
@@ -117,7 +117,8 @@ def build_shopping_list(
             if ingredient.quantity_grams is not None:
                 amount, unit = Decimal(ingredient.quantity_grams), "g"
             elif ingredient.quantity is not None and ingredient.unit:
-                amount, unit = Decimal(ingredient.quantity), ingredient.unit
+                amount = Decimal(ingredient.quantity)
+                unit = canonical_quantity_unit(ingredient.unit)
             else:
                 review_actions.setdefault(
                     ingredient.id,
@@ -139,7 +140,7 @@ def build_shopping_list(
                 (value for value in source_keys if value.startswith("stem:")),
                 canonical_ingredient_key(db, display),
             )
-            key = (grouping_key, unit.casefold())
+            key = (grouping_key, unit)
             requirement = requirements.setdefault(
                 key,
                 {
@@ -178,7 +179,10 @@ def build_shopping_list(
         for reservation in reservations:
             lot = db.get(PantryLot, reservation.pantry_lot_id)
             if lot is not None:
-                plan_reserved[(lot.food_record_id, reservation.unit)] += Decimal(reservation.quantity)
+                reservation_unit = canonical_quantity_unit(reservation.unit)
+                plan_reserved[(lot.food_record_id, reservation_unit)] += Decimal(
+                    reservation.quantity
+                )
 
     shopping_list = ShoppingList(
         household_id=household_id, meal_plan_id=plan.id, name=name, active=True
@@ -190,7 +194,7 @@ def build_shopping_list(
         food_id = requirement["food_id"]
         food_ids = requirement["food_ids"]
         display = convert_ingredient_text(db, str(requirement["display"]), "uk") or str(requirement["display"])
-        unit = str(requirement["unit"])
+        unit = canonical_quantity_unit(str(requirement["unit"]))
         source_keys = set(requirement["source_keys"])
         exact = Decimal(requirement["exact"])
         reserved = sum(
@@ -219,7 +223,7 @@ def build_shopping_list(
                     item
                     for item in previous_items
                     if not item.manual
-                    and item.unit == unit
+                    and canonical_quantity_unit(item.unit) == unit
                     and (
                         (
                             food_id is not None
@@ -240,7 +244,7 @@ def build_shopping_list(
                     shopping_list_id=shopping_list.id,
                     food_record_id=food_id,
                     display_name=display,
-                    exact_quantity=remaining,
+                    exact_quantity=round_quantity(remaining, unit),
                     purchase_quantity=round_purchase(remaining, unit),
                     unit=unit,
                     category="Other",
@@ -256,9 +260,9 @@ def build_shopping_list(
                     shopping_list_id=shopping_list.id,
                     food_record_id=item.food_record_id,
                     display_name=item.display_name,
-                    exact_quantity=item.exact_quantity,
-                    purchase_quantity=item.purchase_quantity,
-                    unit=item.unit,
+                    exact_quantity=round_quantity(item.exact_quantity, item.unit),
+                    purchase_quantity=round_purchase(item.purchase_quantity, item.unit),
+                    unit=canonical_quantity_unit(item.unit),
                     category=item.category,
                     checked=item.checked,
                     manual=True,

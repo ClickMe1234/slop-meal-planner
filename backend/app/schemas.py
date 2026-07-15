@@ -389,6 +389,10 @@ class PantryLotOut(APIModel):
     on_hand_quantity: Decimal
     reserved_quantity: Decimal
     usable_quantity: Decimal
+    initial_quantity_display: str
+    on_hand_quantity_display: str
+    reserved_quantity_display: str
+    usable_quantity_display: str
     version: int
 
 
@@ -429,6 +433,8 @@ class ShoppingItemOut(APIModel):
     display_name: str
     exact_quantity: Decimal
     purchase_quantity: Decimal
+    exact_quantity_display: str
+    purchase_quantity_display: str
     unit: str
     category: str
     checked: bool

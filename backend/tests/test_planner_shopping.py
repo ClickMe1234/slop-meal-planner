@@ -11,7 +11,7 @@ from app.services.planner import (
     choose_shared_recipe,
 )
 from app.services.shopping import round_purchase
-from app.services.pantry import reserve_plan_batches
+from app.services.pantry import balances, reserve_plan_batches
 from app.services.shopping import build_shopping_list
 from app.models import (
     FoodRecord,
@@ -44,9 +44,11 @@ def test_planner_chooses_recipe_and_quarter_portions():
     assert choice.portions == {"a": Decimal("1.0"), "b": Decimal("0.75")}
 
 
-def test_shopping_rounds_count_but_not_weight():
+def test_shopping_rounds_purchase_amounts_for_their_unit():
     assert round_purchase(Decimal("3.75"), "eggs") == 4
-    assert round_purchase(Decimal("430.5"), "g") == Decimal("430.5")
+    assert round_purchase(Decimal("430.5"), "g") == 431
+    assert round_purchase(Decimal("1.231"), "l") == Decimal("1.24")
+    assert round_purchase(Decimal("1.01"), "tbsp") == Decimal("1.25")
 
 
 def test_planner_never_silently_relaxes_hard_tolerance():
@@ -229,3 +231,110 @@ def test_accepted_plan_reservations_reduce_the_shopping_remainder(db):
     shopping = build_shopping_list(db, household.id, plan.id, "Week shopping")
     item = db.scalar(select(ShoppingItem).where(ShoppingItem.shopping_list_id == shopping.id))
     assert item.exact_quantity == Decimal("150")
+
+
+def test_shopping_keeps_readable_required_amount_but_rounds_purchase_up(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    recipe = Recipe(household_id=household.id, title="Rice bowl")
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id, version_number=1, title=recipe.title, yield_servings=1
+    )
+    db.add(version)
+    db.flush()
+    db.add(
+        RecipeIngredient(
+            recipe_version_id=version.id,
+            position=0,
+            original_text="430.1 g rice",
+            quantity_grams=Decimal("430.1"),
+            food_phrase="Rice",
+        )
+    )
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+    db.add(plan)
+    db.flush()
+    db.add(
+        MealBatch(
+            meal_plan_id=plan.id,
+            recipe_version_id=version.id,
+            servings=1,
+            planned_cook_date=plan.start_date,
+        )
+    )
+    db.flush()
+
+    shopping = build_shopping_list(db, household.id, plan.id, "Week shopping")
+    item = db.scalar(
+        select(ShoppingItem).where(ShoppingItem.shopping_list_id == shopping.id)
+    )
+
+    assert item.exact_quantity == Decimal("430")
+    assert item.purchase_quantity == Decimal("431")
+
+
+def test_pantry_reservations_round_indivisible_recipe_units(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    food = FoodRecord(
+        provider="cofid", provider_record_id="celery", dataset_version="2021", name="Celery"
+    )
+    db.add(food)
+    db.flush()
+    recipe = Recipe(household_id=household.id, title="Celery salad")
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id, version_number=1, title=recipe.title, yield_servings=1
+    )
+    db.add(version)
+    db.flush()
+    db.add(
+        RecipeIngredient(
+            recipe_version_id=version.id,
+            position=0,
+            original_text="1/2 stalk celery",
+            quantity=Decimal("0.5"),
+            unit="stalk",
+            food_phrase="Celery",
+            food_record_id=food.id,
+        )
+    )
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+    db.add(plan)
+    db.flush()
+    batch = MealBatch(
+        meal_plan_id=plan.id,
+        recipe_version_id=version.id,
+        servings=1,
+        planned_cook_date=plan.start_date,
+    )
+    lot = PantryLot(
+        household_id=household.id,
+        food_record_id=food.id,
+        display_name="Celery",
+        initial_quantity=1,
+        unit="stalk",
+    )
+    db.add_all([batch, lot])
+    db.flush()
+
+    reserve_plan_batches(db, household.id, [batch])
+    reservation = db.scalar(select(PantryReservation))
+
+    assert reservation.quantity == Decimal("1")
+    assert balances(db, lot) == (Decimal("1"), Decimal("1"), Decimal("0"))

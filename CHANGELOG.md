@@ -3,6 +3,12 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.4.1 - 2026-07-15
+
+- Round shopping and pantry quantities according to their units, including whole metric amounts, culinary fractions, indivisible items, and two-decimal litre values.
+- Apply the same policy to pantry stock, adjustments, reservations, and cooking deductions so stored balances match the displayed quantities.
+- Normalise existing quantity data safely at startup and return human-readable quantity labels for the shopping, pantry, copy, share, download, and offline views.
+
 ## 0.4.0 - 2026-07-15
 
 - Parse ingredient names with a local NLP model so preparation adjectives and comma-separated descriptors do not replace the ingredient itself.
