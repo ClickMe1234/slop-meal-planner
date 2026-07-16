@@ -349,6 +349,64 @@ def list_recipes(
     }
 
 
+@router.get("/recipe-ingredients", response_model=dict)
+def list_recipe_ingredients(
+    q: str = Query(default="", max_length=200),
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    """Return distinct ingredients from the household's current saved recipes."""
+
+    recipes = db.scalars(
+        select(Recipe)
+        .where(
+            Recipe.household_id == context.user.household_id,
+            Recipe.archived_at.is_(None),
+        )
+        .order_by(Recipe.title)
+    ).all()
+    query_terms = equivalent_terms(db, q.strip()) if q.strip() else []
+    ingredients: dict[str, dict] = {}
+    for recipe in recipes:
+        version = _latest_version(db, recipe.id)
+        if version is None:
+            continue
+        for ingredient in version.ingredients:
+            phrase = " ".join(
+                (ingredient.food_phrase or ingredient.original_text or "").strip().split()
+            )
+            if not ingredient.included or not phrase:
+                continue
+            normalised = phrase.casefold()
+            display_name = convert_ingredient_text(
+                db, phrase, context.user.ingredient_locale
+            )
+            searchable = " ".join(
+                {
+                    normalised,
+                    display_name.casefold(),
+                    (convert_ingredient_text(db, phrase, "uk") or phrase).casefold(),
+                    (convert_ingredient_text(db, phrase, "us") or phrase).casefold(),
+                }
+            )
+            if query_terms and not any(term in searchable for term in query_terms):
+                continue
+            result = ingredients.setdefault(
+                normalised,
+                {
+                    "id": normalised,
+                    "term": normalised,
+                    "name": display_name,
+                    "recipes": [],
+                },
+            )
+            if not any(item["id"] == recipe.id for item in result["recipes"]):
+                result["recipes"].append({"id": recipe.id, "title": recipe.title})
+
+    items = sorted(ingredients.values(), key=lambda item: item["name"].casefold())
+    return {"items": items, "total": len(items)}
+
+
 @router.post("/recipes", response_model=RecipeDetail, status_code=201)
 def create_recipe(
     payload: RecipeCreate,

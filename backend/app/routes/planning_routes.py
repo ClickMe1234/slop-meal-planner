@@ -49,6 +49,7 @@ from ..services.planner import (
     choose_shared_recipe,
     rebalance_plan_portions,
 )
+from ..services.regional_ingredients import equivalent_terms
 from ..services.shopping import build_shopping_list
 
 router = APIRouter(prefix="/meal-plans", tags=["meal planning"])
@@ -145,6 +146,28 @@ def _restriction_terms(
     return hard, preferred, disliked
 
 
+def _normalise_ingredient_terms(values: list[str]) -> frozenset[str]:
+    return frozenset(
+        " ".join(value.casefold().split()) for value in values if value.strip()
+    )
+
+
+def _expanded_ingredient_terms(db: Session, values: list[str]) -> frozenset[str]:
+    return _normalise_ingredient_terms(
+        [term for value in values for term in equivalent_terms(db, value)]
+    )
+
+
+def _matching_ingredient_terms(
+    candidate: RecipeCandidate, terms: frozenset[str]
+) -> frozenset[str]:
+    return frozenset(
+        term
+        for term in terms
+        if re.search(rf"(?<!\w){re.escape(term)}(?!\w)", candidate.ingredient_text)
+    )
+
+
 def _plan_guidance(plan: MealPlan) -> dict[str, list[str]]:
     for diagnostic in plan.diagnostics or []:
         if isinstance(diagnostic, dict) and diagnostic.get("code") == "GENERATION_GUIDANCE":
@@ -158,11 +181,23 @@ def _plan_guidance(plan: MealPlan) -> dict[str, list[str]]:
                 "exclude_food_record_ids": list(
                     diagnostic.get("exclude_food_record_ids") or []
                 ),
+                "must_use_ingredient_terms": list(
+                    diagnostic.get("must_use_ingredient_terms") or []
+                ),
+                "prefer_ingredient_terms": list(
+                    diagnostic.get("prefer_ingredient_terms") or []
+                ),
+                "exclude_ingredient_terms": list(
+                    diagnostic.get("exclude_ingredient_terms") or []
+                ),
             }
     return {
         "must_use_food_record_ids": [],
         "prefer_food_record_ids": [],
         "exclude_food_record_ids": [],
+        "must_use_ingredient_terms": [],
+        "prefer_ingredient_terms": [],
+        "exclude_ingredient_terms": [],
     }
 
 
@@ -177,7 +212,14 @@ def _validate_mutable_plan_constraints(
 
     guidance = _plan_guidance(plan)
     excluded_foods = frozenset(guidance["exclude_food_record_ids"])
+    excluded_terms = _expanded_ingredient_terms(
+        db, guidance["exclude_ingredient_terms"]
+    )
+    must_use_terms = _normalise_ingredient_terms(
+        guidance["must_use_ingredient_terms"]
+    )
     covered_foods: set[str] = set()
+    covered_terms: set[str] = set()
     remediation_occurrence: MealOccurrence | None = None
     remediation_batch: MealBatch | None = None
 
@@ -266,7 +308,10 @@ def _validate_mutable_plan_constraints(
                         }
                     ],
                 )
-        if candidate.food_record_ids & excluded_foods:
+        if (
+            candidate.food_record_ids & excluded_foods
+            or _matching_ingredient_terms(candidate, excluded_terms)
+        ):
             occurrence = occurrences[0]
             raise DomainError(
                 "PLAN_EXCLUDED_INGREDIENT",
@@ -322,8 +367,17 @@ def _validate_mutable_plan_constraints(
                 ],
             )
         covered_foods.update(candidate.food_record_ids)
+        covered_terms.update(
+            _matching_ingredient_terms(
+                candidate,
+                must_use_terms,
+            )
+        )
     missing_must_use = set(guidance["must_use_food_record_ids"]) - covered_foods
-    if missing_must_use:
+    missing_must_use_terms = (
+        must_use_terms - covered_terms
+    )
+    if missing_must_use or missing_must_use_terms:
         actions = []
         if remediation_occurrence is not None and remediation_batch is not None:
             actions.append(
@@ -530,6 +584,15 @@ def generate_plan(
     excluded_foods = frozenset(payload.exclude_food_record_ids)
     remaining_must_use = set(payload.must_use_food_record_ids)
     preferred_foods = frozenset(payload.prefer_food_record_ids)
+    excluded_ingredient_terms = _expanded_ingredient_terms(
+        db, payload.exclude_ingredient_terms
+    )
+    remaining_must_use_terms = set(
+        _normalise_ingredient_terms(payload.must_use_ingredient_terms)
+    )
+    preferred_ingredient_terms = _expanded_ingredient_terms(
+        db, payload.prefer_ingredient_terms
+    )
 
     dates = [slot.meal_date for slot in payload.slots]
     grouped_slots: dict[str, list] = {}
@@ -542,6 +605,9 @@ def generate_plan(
             "must_use_food_record_ids": list(payload.must_use_food_record_ids),
             "prefer_food_record_ids": list(payload.prefer_food_record_ids),
             "exclude_food_record_ids": list(payload.exclude_food_record_ids),
+            "must_use_ingredient_terms": list(payload.must_use_ingredient_terms),
+            "prefer_ingredient_terms": list(payload.prefer_ingredient_terms),
+            "exclude_ingredient_terms": list(payload.exclude_ingredient_terms),
         }
     ]
     for key, slots in grouped_slots.items():
@@ -623,11 +689,14 @@ def generate_plan(
         hard_terms, preferred_terms, disliked_terms = _restriction_terms(db, member_ids)
         meal_type = slot.meal_type.casefold()
         candidates = list(candidates_by_meal_type.get(meal_type, []))
-        if excluded_foods:
+        if excluded_foods or excluded_ingredient_terms:
             candidates = [
                 candidate
                 for candidate in candidates
                 if not candidate.food_record_ids & excluded_foods
+                and not _matching_ingredient_terms(
+                    candidate, excluded_ingredient_terms
+                )
             ]
         if not candidates:
             raise DomainError(
@@ -647,7 +716,12 @@ def generate_plan(
                 f"Hard restrictions removed every recipe for {slot.meal_date} {slot.meal_type}",
             )
         must_use_candidates = [
-            candidate for candidate in safe_candidates if candidate.food_record_ids & remaining_must_use
+            candidate
+            for candidate in safe_candidates
+            if candidate.food_record_ids & remaining_must_use
+            or _matching_ingredient_terms(
+                candidate, frozenset(remaining_must_use_terms)
+            )
         ]
         candidates_for_choice = must_use_candidates or safe_candidates
         unused_candidates = [
@@ -662,7 +736,7 @@ def generate_plan(
                     participants,
                     preferred_food_record_ids=preferred_foods,
                     prior_recipe_uses=recipe_uses,
-                    preferred_terms=preferred_terms,
+                    preferred_terms=preferred_terms | preferred_ingredient_terms,
                     disliked_terms=disliked_terms,
                     # Allocations are soft meal-level targets. Hard nutrition
                     # bounds are checked after all of the day's meals combine.
@@ -676,7 +750,7 @@ def generate_plan(
                     participants,
                     preferred_food_record_ids=preferred_foods,
                     prior_recipe_uses=recipe_uses,
-                    preferred_terms=preferred_terms,
+                    preferred_terms=preferred_terms | preferred_ingredient_terms,
                     disliked_terms=disliked_terms,
                     enforce_nutrition_bounds=False,
                 )
@@ -703,6 +777,9 @@ def generate_plan(
                 }
             )
         remaining_must_use -= choice.candidate.food_record_ids
+        remaining_must_use_terms -= _matching_ingredient_terms(
+            choice.candidate, frozenset(remaining_must_use_terms)
+        )
         recipe_uses[choice.candidate.recipe_id] = (
             recipe_uses.get(choice.candidate.recipe_id, 0) + len(slots)
         )
@@ -774,7 +851,7 @@ def generate_plan(
                 ],
                 issues=failures,
             )
-    if remaining_must_use:
+    if remaining_must_use or remaining_must_use_terms:
         raise DomainError(
             "MUST_USE_INGREDIENT_INFEASIBLE",
             "No feasible selected recipe covers every must-use ingredient",
