@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
@@ -61,6 +61,42 @@ describe('PlanPage wizard', () => {
 
     expect(screen.getByRole('heading', { name: 'Who needs each meal?' })).toBeInTheDocument()
     expect(screen.getAllByRole('checkbox', { name: /you needs breakfast/i })).toHaveLength(7)
+  })
+
+  it('imports pantry items by drag and drop and blocks unavailable must-use ingredients', async () => {
+    const user = userEvent.setup()
+    renderPlanner()
+    const days = screen.getByRole('spinbutton', { name: 'Number of days' })
+    fireEvent.change(days, { target: { value: '1' } })
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.click(screen.getByRole('button', { name: /import from pantry/i }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Import ingredients from your pantry' })
+    const miso = within(dialog).getByText('White miso').closest('.pantry-import-item') as HTMLElement
+    const unavailableWarning = 'This pantry ingredient is not used by any saved recipe, so it cannot be marked Must use.'
+    expect(within(miso).getByLabelText(unavailableWarning)).toHaveAttribute('data-tooltip', unavailableWarning)
+    expect(within(miso).getByRole('button', { name: 'Must' })).toBeDisabled()
+    await user.click(within(miso).getByRole('button', { name: 'Prefer' }))
+    expect(within(dialog).getByRole('status')).toHaveTextContent('White miso moved to Prefer')
+
+    const spinach = within(dialog).getByText('Spinach').closest('.pantry-import-item') as HTMLElement
+    const mustZone = within(dialog).getByText('The finished plan must include these.').closest('.pantry-drop-zone') as HTMLElement
+    const transfer = {
+      effectAllowed: 'move',
+      dropEffect: 'move',
+      values: new Map<string, string>(),
+      setData(type: string, value: string) { this.values.set(type, value) },
+      getData(type: string) { return this.values.get(type) ?? '' },
+    }
+    fireEvent.dragStart(spinach, { dataTransfer: transfer })
+    fireEvent.dragOver(mustZone, { dataTransfer: transfer })
+    fireEvent.drop(mustZone, { dataTransfer: transfer })
+
+    expect(within(mustZone).getByText('Spinach')).toBeInTheDocument()
+    expect(within(dialog).getByRole('status')).toHaveTextContent('Spinach moved to Must use')
   })
 
   it('shows portion-adjusted daily nutrition and lets each day collapse', async () => {
