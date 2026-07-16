@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import { ApiError, type BackendPlanDetail } from '../api/client'
-import { PlanGenerationError, PlanPage } from './PlanPage'
+import { buildRecipeImpactDecks, PlanGenerationError, PlanPage } from './PlanPage'
 import { storeDemoPlan } from './planner'
 
 function renderPlanner() {
@@ -97,6 +97,43 @@ describe('PlanPage wizard', () => {
 
     expect(within(mustZone).getByText('Spinach')).toBeInTheDocument()
     expect(within(dialog).getByRole('status')).toHaveTextContent('Spinach moved to Must use')
+
+    const chickpeas = within(dialog).getByText('Chickpeas').closest('.pantry-import-item') as HTMLElement
+    await user.click(within(chickpeas).getByRole('button', { name: 'Prefer' }))
+
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }))
+    await user.type(screen.getByRole('textbox', { name: 'Find an ingredient' }), 'Peanuts')
+    await user.click(screen.getByRole('button', { name: 'Exclude' }))
+
+    const favoured = screen.getByLabelText('Favoured recipes deck')
+    const excluded = screen.getByLabelText('Excluded recipes deck')
+    expect(within(favoured).getByText('Fragrant green vegetable curry')).toBeInTheDocument()
+    expect(within(favoured).getByText('Must-use match')).toBeInTheDocument()
+    await user.click(within(favoured).getByRole('button', { name: 'Next favoured recipe' }))
+    expect(within(favoured).getByText('Salmon with summer greens')).toBeInTheDocument()
+    await user.click(within(favoured).getByRole('button', { name: 'Next favoured recipe' }))
+    expect(within(favoured).getByText('Harissa chicken with chickpeas')).toBeInTheDocument()
+    expect(within(favoured).getByText('Preferred match')).toBeInTheDocument()
+    expect(within(excluded).getByText('Apple and peanut butter')).toBeInTheDocument()
+    expect(screen.getByText('Not found in a saved recipe: White miso')).toBeInTheDocument()
+    expect(screen.getByText('Ingredient-only preview. Meal tags, household rules and nutrition targets still shape the final plan.')).toBeInTheDocument()
+  })
+
+  it('keeps excluded recipes out of the favoured deck and orders must-use matches first', () => {
+    const catalogue = [
+      { id: 'spinach', term: 'spinach', name: 'Spinach', recipes: [{ id: 'both', title: 'Both rules' }, { id: 'must', title: 'Must recipe' }] },
+      { id: 'beans', term: 'beans', name: 'Beans', recipes: [{ id: 'both', title: 'Both rules' }, { id: 'prefer', title: 'Preferred recipe' }] },
+      { id: 'nuts', term: 'nuts', name: 'Nuts', recipes: [{ id: 'both', title: 'Both rules' }] },
+    ]
+    const decks = buildRecipeImpactDecks(catalogue, {
+      must: [catalogue[0]],
+      prefer: [catalogue[1]],
+      exclude: [catalogue[2]],
+    })
+
+    expect(decks.favoured.map(recipe => recipe.id)).toEqual(['must', 'prefer'])
+    expect(decks.favoured.map(recipe => recipe.tier)).toEqual(['must', 'prefer'])
+    expect(decks.excluded.map(recipe => recipe.id)).toEqual(['both'])
   })
 
   it('shows portion-adjusted daily nutrition and lets each day collapse', async () => {

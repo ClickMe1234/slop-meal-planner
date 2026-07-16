@@ -162,6 +162,7 @@ export interface BackendRecipeIngredientChoice {
   id: string
   term: string
   name: string
+  recipes: Array<{ id: string; title: string }>
 }
 
 export interface BackendRecipe {

@@ -366,7 +366,7 @@ def list_recipe_ingredients(
         .order_by(Recipe.title)
     ).all()
     query_terms = equivalent_terms(db, q.strip()) if q.strip() else []
-    ingredients: dict[str, dict[str, str]] = {}
+    ingredients: dict[str, dict] = {}
     for recipe in recipes:
         version = _latest_version(db, recipe.id)
         if version is None:
@@ -391,10 +391,17 @@ def list_recipe_ingredients(
             )
             if query_terms and not any(term in searchable for term in query_terms):
                 continue
-            ingredients.setdefault(
+            result = ingredients.setdefault(
                 normalised,
-                {"id": normalised, "term": normalised, "name": display_name},
+                {
+                    "id": normalised,
+                    "term": normalised,
+                    "name": display_name,
+                    "recipes": [],
+                },
             )
+            if not any(item["id"] == recipe.id for item in result["recipes"]):
+                result["recipes"].append({"id": recipe.id, "title": recipe.title})
 
     items = sorted(ingredients.values(), key=lambda item: item["name"].casefold())
     return {"items": items, "total": len(items)}

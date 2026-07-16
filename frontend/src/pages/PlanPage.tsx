@@ -104,10 +104,10 @@ const demoTarget: BackendTarget = {
   version: 1,
 }
 const demoIngredientCatalogue: IngredientChoice[] = [
-  { id: 'spinach', term: 'spinach', name: 'Spinach' },
-  { id: 'chickpeas', term: 'chickpeas', name: 'Chickpeas' },
-  { id: 'chicken thighs', term: 'chicken thighs', name: 'Chicken thighs' },
-  { id: 'peanuts', term: 'peanuts', name: 'Peanuts' },
+  { id: 'spinach', term: 'spinach', name: 'Spinach', recipes: [{ id: 'green-curry', title: 'Fragrant green vegetable curry' }, { id: 'salmon-greens', title: 'Salmon with summer greens' }] },
+  { id: 'chickpeas', term: 'chickpeas', name: 'Chickpeas', recipes: [{ id: 'harissa-chicken', title: 'Harissa chicken with chickpeas' }] },
+  { id: 'chicken thighs', term: 'chicken thighs', name: 'Chicken thighs', recipes: [{ id: 'harissa-chicken', title: 'Harissa chicken with chickpeas' }] },
+  { id: 'peanuts', term: 'peanuts', name: 'Peanuts', recipes: [{ id: 'apple-peanut-butter', title: 'Apple and peanut butter' }] },
 ]
 const demoPantryItems: BackendPantryItem[] = [
   { id: 'demo-spinach', display_name: 'Spinach', initial_quantity: 200, unit: 'g', always_have: false, on_hand_quantity: 200, reserved_quantity: 0, usable_quantity: 200, initial_quantity_display: '200 g', on_hand_quantity_display: '200 g', reserved_quantity_display: '0 g', usable_quantity_display: '200 g', version: 1 },
@@ -213,12 +213,10 @@ export function PlanPage() {
   const recipeIngredientCatalogue = useQuery({
     queryKey: ['recipe-ingredients', 'catalogue'],
     queryFn: () => api.searchRecipeIngredients(''),
-    enabled: !isDemoMode && pantryImportOpen,
+    enabled: !isDemoMode && (pantryImportOpen || step === 4),
   })
   const ingredientResults: IngredientChoice[] = isDemoMode
-    ? ['Spinach', 'Chickpeas', 'Chicken thighs', 'Peanuts']
-      .filter(name => name.toLowerCase().includes(ingredientQuery.trim().toLowerCase()))
-      .map(name => ({ id: name.toLowerCase(), term: name.toLowerCase(), name }))
+    ? demoIngredientCatalogue.filter(item => item.name.toLowerCase().includes(ingredientQuery.trim().toLowerCase()))
     : (ingredientSearch.data?.items ?? []).slice(0, 8)
 
   const dates = useMemo(() => plannerDates(startDate, days), [startDate, days])
@@ -368,16 +366,16 @@ export function PlanPage() {
   return <div className="page">
     <PageHeader eyebrow="Automatic planning" title="Build your next meal plan" description="Set exactly who needs each meal and when you want to cook. Portions, ingredients and shopping quantities follow those choices."/>
     {error && <Card className="planner-generation-error"><PlanGenerationError error={error}/>{error.code === 'NUTRITION_TARGET_INFEASIBLE' && <Button variant="secondary" disabled={generating} onClick={() => requestGeneration(true)}>Continue anyway</Button>}</Card>}
-    <div className="planner-layout">
+    <div className={`planner-layout${step === 4 ? ' planner-layout--ingredients' : ''}`}>
       <aside className="wizard-sidebar"><ol>{wizardSteps.map((name, index) => <li key={name} className={index < step ? 'done' : index === step ? 'active' : ''}><button type="button" disabled={index > maxVisitedStep} onClick={() => openStep(index)}><span>{index < step ? <Check size={15}/> : index + 1}</span><div><strong>{name}</strong><small>{stepDescriptions[index]}</small></div></button></li>)}</ol></aside>
-      <Card className="wizard-panel">
+      <Card className={`wizard-panel${step === 4 ? ' wizard-panel--ingredients' : ''}`}>
         <div className="wizard-panel-heading"><p className="eyebrow">Step {step + 1} of {wizardSteps.length}</p><h2>{stepTitles[step]}</h2><p>{stepHelp[step]}</p></div>
 
         {step === 0 && <DateStep startDate={startDate} days={days} dates={dates} onStartDate={setStartDate} onDays={value => setDays(clampDays(value))}/>}
         {step === 1 && <PeopleStep members={members} selectedMemberIds={selectedMemberIds} targets={targetsByMember} loading={membersQuery.isLoading || selectedTargetLoading} onToggle={toggleMember}/>}
         {step === 2 && <AttendanceStep dates={dates} members={members.filter(member => selectedMemberIds.includes(member.id))} attendance={attendance} onToggle={toggleAttendance}/>}
         {step === 3 && <CookDaysStep dates={dates} selectedMemberIds={selectedMemberIds} attendance={attendance} cookStarts={cookStarts} slots={slots} foodSafetyAcknowledged={foodSafetyAcknowledged} onToggle={toggleCookStart} onAcknowledge={setFoodSafetyAcknowledged}/>}
-        {step === 4 && <IngredientsStep query={ingredientQuery} onQuery={setIngredientQuery} loading={ingredientSearch.isFetching} results={ingredientResults} guidance={ingredientGuidance} profileRestrictions={profileRestrictions} onAdd={addIngredient} onRemove={removeIngredient} onOpenPantry={() => setPantryImportOpen(true)}/>}
+        {step === 4 && <IngredientsStep query={ingredientQuery} onQuery={setIngredientQuery} loading={ingredientSearch.isFetching} results={ingredientResults} guidance={ingredientGuidance} profileRestrictions={profileRestrictions} catalogue={isDemoMode ? demoIngredientCatalogue : (recipeIngredientCatalogue.data?.items ?? [])} impactLoading={!isDemoMode && recipeIngredientCatalogue.isLoading} impactError={!isDemoMode && recipeIngredientCatalogue.isError} onAdd={addIngredient} onRemove={removeIngredient} onOpenPantry={() => setPantryImportOpen(true)}/>}
         {step === 5 && <ReviewStep dates={dates} slots={slots} members={members.filter(member => selectedMemberIds.includes(member.id))} guidance={ingredientGuidance} profileRestrictionCount={profileRestrictions.length} generating={generating}/>}
 
         <div className="wizard-actions">
@@ -473,8 +471,8 @@ export function PlanGenerationError({ error }: { error: ApiError }) {
 
 type ProfileRestriction = BackendRestriction & { memberName: string }
 
-function IngredientsStep({ query, onQuery, loading, results, guidance, profileRestrictions, onAdd, onRemove, onOpenPantry }: { query: string; onQuery: (value: string) => void; loading: boolean; results: IngredientChoice[]; guidance: IngredientGuidance; profileRestrictions: ProfileRestriction[]; onAdd: (kind: keyof IngredientGuidance, food: IngredientChoice) => void; onRemove: (kind: keyof IngredientGuidance, foodId: string) => void; onOpenPantry: () => void }) {
-  return <div className="ingredient-guidance"><div className="ingredient-guidance-tools"><label>Find an ingredient<div className="planner-food-search"><Search size={18}/><input value={query} onChange={event => onQuery(event.target.value)} placeholder="Search ingredients in saved recipes…"/></div></label><Button variant="secondary" onClick={onOpenPantry}><PackageOpen size={17}/>Import from pantry</Button></div>{loading && <Loading label="Searching saved ingredients…"/>}{query.trim().length >= 2 && !loading && <div className="planner-food-results">{results.map(food => <div key={food.id}><strong>{food.name}</strong><span><Button variant="ghost" onClick={() => onAdd('must', food)}>Must use</Button><Button variant="ghost" onClick={() => onAdd('prefer', food)}>Prefer</Button><Button variant="ghost" onClick={() => onAdd('exclude', food)}>Exclude</Button></span></div>)}{!results.length && <p className="muted">No matching saved recipe ingredients found.</p>}</div>}{(['must', 'prefer', 'exclude'] as const).map(kind => <div className="guidance-block" key={kind}><strong>{kind === 'must' ? 'Must use' : capitalise(kind)}</strong><div className="tag-row">{guidance[kind].map(food => <button type="button" className={`tag${kind === 'prefer' ? ' tag--warm' : kind === 'exclude' ? ' tag--danger' : ''}`} key={food.id} onClick={() => onRemove(kind, food.id)} aria-label={`Remove ${food.name} from ${kind}`}>{food.name}<X size={13}/></button>)}{!guidance[kind].length && <span className="muted">None</span>}</div></div>)}<div className="profile-guidance"><div><strong>Household profile rules</strong><Link to="/settings/preferences">Edit profiles</Link></div><p>These saved preferences and restrictions are applied automatically.</p><div className="tag-row">{profileRestrictions.map(item => <span className={`tag${item.hard ? ' tag--danger' : item.kind === 'prefer' ? ' tag--warm' : ''}`} key={`${item.member_id}-${item.id}`} title={`${item.memberName} · ${item.kind}`}>{item.value}</span>)}{!profileRestrictions.length && <span className="muted">No saved rules for the selected people.</span>}</div></div></div>
+function IngredientsStep({ query, onQuery, loading, results, guidance, profileRestrictions, catalogue, impactLoading, impactError, onAdd, onRemove, onOpenPantry }: { query: string; onQuery: (value: string) => void; loading: boolean; results: IngredientChoice[]; guidance: IngredientGuidance; profileRestrictions: ProfileRestriction[]; catalogue: IngredientChoice[]; impactLoading: boolean; impactError: boolean; onAdd: (kind: keyof IngredientGuidance, food: IngredientChoice) => void; onRemove: (kind: keyof IngredientGuidance, foodId: string) => void; onOpenPantry: () => void }) {
+  return <div className="ingredient-guidance-workspace"><div className="ingredient-guidance"><div className="ingredient-guidance-tools"><label>Find an ingredient<div className="planner-food-search"><Search size={18}/><input value={query} onChange={event => onQuery(event.target.value)} placeholder="Search ingredients in saved recipes…"/></div></label><div className="ingredient-guidance-tool-buttons"><Button variant="secondary" onClick={onOpenPantry}><PackageOpen size={17}/>Import from pantry</Button></div></div>{loading && <Loading label="Searching saved ingredients…"/>}{query.trim().length >= 2 && !loading && <div className="planner-food-results">{results.map(food => <div key={food.id}><strong>{food.name}</strong><span><Button variant="ghost" onClick={() => onAdd('must', food)}>Must use</Button><Button variant="ghost" onClick={() => onAdd('prefer', food)}>Prefer</Button><Button variant="ghost" onClick={() => onAdd('exclude', food)}>Exclude</Button></span></div>)}{!results.length && <p className="muted">No matching saved recipe ingredients found.</p>}</div>}{(['must', 'prefer', 'exclude'] as const).map(kind => <div className="guidance-block" key={kind}><strong>{kind === 'must' ? 'Must use' : capitalise(kind)}</strong><div className="tag-row">{guidance[kind].map(food => <button type="button" className={`tag${kind === 'prefer' ? ' tag--warm' : kind === 'exclude' ? ' tag--danger' : ''}`} key={food.id} onClick={() => onRemove(kind, food.id)} aria-label={`Remove ${food.name} from ${kind}`}>{food.name}<X size={13}/></button>)}{!guidance[kind].length && <span className="muted">None</span>}</div></div>)}<div className="profile-guidance"><div><strong>Household profile rules</strong><Link to="/settings/preferences">Edit profiles</Link></div><p>These saved preferences and restrictions are applied automatically.</p><div className="tag-row">{profileRestrictions.map(item => <span className={`tag${item.hard ? ' tag--danger' : item.kind === 'prefer' ? ' tag--warm' : ''}`} key={`${item.member_id}-${item.id}`} title={`${item.memberName} · ${item.kind}`}>{item.value}</span>)}{!profileRestrictions.length && <span className="muted">No saved rules for the selected people.</span>}</div></div></div><GuidanceImpactDecks catalogue={catalogue} guidance={guidance} loading={impactLoading} error={impactError}/></div>
 }
 
 function normaliseIngredientName(value: string): string {
@@ -559,6 +557,65 @@ function PantryIngredientImport({ pantry, catalogue, guidance, loading, error, o
     const invalidMustDrop = kind === 'must' && Boolean(draggedItem && !draggedItem.available)
     return <div key={kind} className={`pantry-drop-zone pantry-drop-zone--${kind}${overKind === kind ? ' is-over' : ''}${invalidMustDrop ? ' is-locked' : ''}`} onDragEnter={() => setOverKind(kind)} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setOverKind('') }} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = invalidMustDrop ? 'none' : 'move' }} onDrop={event => drop(event, kind)}><div className="pantry-drop-zone-title"><strong>{pantryGuidanceLabels[kind]}</strong><span>{guidance[kind].length}</span></div><p>{kind === 'must' ? 'The finished plan must include these.' : kind === 'prefer' ? 'Favour recipes containing these where possible.' : 'Keep these out of this plan.'}</p><div className="pantry-drop-zone-items">{guidance[kind].map(choice => <span className="tag" key={choice.id}>{choice.name}</span>)}{!guidance[kind].length && <span className="pantry-drop-placeholder">Drop pantry ingredients here</span>}</div>{invalidMustDrop && <small><TriangleAlert/>Not found in saved recipes</small>}</div>
   })}</div>{message && <p className="pantry-import-status" role="status">{message}</p>}</section></div>}<div className="pantry-import-footer"><p><TriangleAlert/>Amber items are not ingredients in any saved recipe.</p><Button onClick={onClose}>Done</Button></div></Card></div>
+}
+
+type RecipeImpactReason = { kind: keyof IngredientGuidance; ingredient: string }
+type RecipeImpact = { id: string; title: string; tier: keyof IngredientGuidance; reasons: RecipeImpactReason[] }
+
+export function buildRecipeImpactDecks(catalogue: IngredientChoice[], guidance: IngredientGuidance): { favoured: RecipeImpact[]; excluded: RecipeImpact[]; unmatched: string[] } {
+  const matches = Object.fromEntries((['must', 'prefer', 'exclude'] as const).map(kind => [kind, new Map<string, RecipeImpact>()])) as Record<keyof IngredientGuidance, Map<string, RecipeImpact>>
+  const unmatched: string[] = []
+  for (const kind of ['must', 'prefer', 'exclude'] as const) {
+    for (const choice of guidance[kind]) {
+      const source = catalogue.find(item => item.id === choice.id || item.term === choice.term)
+        ?? matchPantryIngredient(choice.name, catalogue)
+        ?? choice
+      if (!source.recipes?.length) {
+        unmatched.push(choice.name)
+        continue
+      }
+      for (const recipe of source.recipes) {
+        const impact = matches[kind].get(recipe.id) ?? { ...recipe, tier: kind, reasons: [] }
+        if (!impact.reasons.some(reason => reason.ingredient === choice.name)) impact.reasons.push({ kind, ingredient: choice.name })
+        matches[kind].set(recipe.id, impact)
+      }
+    }
+  }
+  const excludedIds = new Set(matches.exclude.keys())
+  const must = [...matches.must.values()].filter(recipe => !excludedIds.has(recipe.id)).sort((left, right) => left.title.localeCompare(right.title))
+  const mustIds = new Set(must.map(recipe => recipe.id))
+  const preferred = [...matches.prefer.values()].filter(recipe => !excludedIds.has(recipe.id) && !mustIds.has(recipe.id)).sort((left, right) => left.title.localeCompare(right.title))
+  for (const recipe of must) {
+    const preferredMatch = matches.prefer.get(recipe.id)
+    if (preferredMatch) recipe.reasons.push(...preferredMatch.reasons.filter(reason => !recipe.reasons.some(existing => existing.kind === reason.kind && existing.ingredient === reason.ingredient)))
+  }
+  return {
+    favoured: [...must, ...preferred],
+    excluded: [...matches.exclude.values()].sort((left, right) => left.title.localeCompare(right.title)),
+    unmatched,
+  }
+}
+
+function RecipeImpactDeck({ title, description, tone, recipes }: { title: string; description: string; tone: 'favoured' | 'excluded'; recipes: RecipeImpact[] }) {
+  const [index, setIndex] = useState(0)
+  const [pointerStart, setPointerStart] = useState<number | null>(null)
+  const [motion, setMotion] = useState<'next' | 'previous'>('next')
+  const [motionKey, setMotionKey] = useState(0)
+  useEffect(() => setIndex(current => recipes.length ? Math.min(current, recipes.length - 1) : 0), [recipes.length])
+  const move = (amount: number) => {
+    if (recipes.length < 2) return
+    setMotion(amount > 0 ? 'next' : 'previous')
+    setMotionKey(current => current + 1)
+    setIndex(current => (current + amount + recipes.length) % recipes.length)
+  }
+  const current = recipes[index]
+  const deckLabel = tone === 'favoured' ? 'favoured' : 'excluded'
+  return <section className={`recipe-impact-deck recipe-impact-deck--${tone}`} aria-label={`${title} deck`}><div className="recipe-impact-deck-heading"><div><p className="eyebrow">{tone === 'favoured' ? 'Planner priority' : 'Removed first'}</p><h3>{title}</h3></div><strong>{recipes.length}</strong></div><p className="recipe-impact-deck-description">{description}</p><div className="recipe-impact-stack" tabIndex={current ? 0 : -1} role="group" aria-label={current ? `${current.title}, ${index + 1} of ${recipes.length}` : `No ${deckLabel} recipes`} onKeyDown={event => { if (event.key === 'ArrowLeft') move(-1); if (event.key === 'ArrowRight') move(1) }} onPointerDown={event => setPointerStart(event.clientX)} onPointerUp={event => { if (pointerStart !== null && Math.abs(event.clientX - pointerStart) > 38) move(event.clientX < pointerStart ? 1 : -1); setPointerStart(null) }} onPointerCancel={() => setPointerStart(null)}>{current ? <><span key={`back-${motionKey}`} className={`recipe-impact-card-shadow recipe-impact-card-shadow--back recipe-impact-card-shadow--${motion}`} aria-hidden="true"/><span key={`middle-${motionKey}`} className={`recipe-impact-card-shadow recipe-impact-card-shadow--middle recipe-impact-card-shadow--${motion}`} aria-hidden="true"/><article key={`${current.id}-${motionKey}`} className={`recipe-impact-card recipe-impact-card--${motion}`}><div className="recipe-impact-card-label"><span>{current.tier === 'must' ? 'Must-use match' : current.tier === 'prefer' ? 'Preferred match' : 'Excluded match'}</span><small>{index + 1} / {recipes.length}</small></div><div className="recipe-impact-card-art" aria-hidden="true"><span>{current.title.split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase()}</span></div><h4>{current.title}</h4><div className="recipe-impact-reasons">{current.reasons.map(reason => <span className={`tag${reason.kind === 'prefer' ? ' tag--warm' : reason.kind === 'exclude' ? ' tag--danger' : ''}`} key={`${reason.kind}-${reason.ingredient}`}>{reason.kind === 'must' ? 'Must' : reason.kind === 'prefer' ? 'Prefer' : "Don't use"}: {reason.ingredient}</span>)}</div></article></> : <div className="recipe-impact-empty"><strong>No recipes in this deck</strong><span>Add ingredient guidance to see which saved recipes are affected.</span></div>}</div><div className="recipe-impact-controls"><button type="button" aria-label={`Previous ${deckLabel} recipe`} disabled={recipes.length < 2} onClick={() => move(-1)}><ChevronLeft/></button><span>{recipes.length ? `${index + 1} of ${recipes.length}` : 'Empty deck'}</span><button type="button" aria-label={`Next ${deckLabel} recipe`} disabled={recipes.length < 2} onClick={() => move(1)}><ChevronRight/></button></div></section>
+}
+
+function GuidanceImpactDecks({ catalogue, guidance, loading, error }: { catalogue: IngredientChoice[]; guidance: IngredientGuidance; loading: boolean; error: boolean }) {
+  const decks = useMemo(() => buildRecipeImpactDecks(catalogue, guidance), [catalogue, guidance])
+  return <aside className="recipe-impact-panel" aria-labelledby="recipe-impact-title"><div className="recipe-impact-panel-heading"><div><p className="eyebrow">Live recipe impact</p><h2 id="recipe-impact-title">What these choices change</h2></div><span>Swipe the cards</span></div>{loading && <Loading label="Checking saved recipes…"/>}{error && <Notice tone="warning" title="Preview unavailable">The saved ingredient catalogue could not be loaded.</Notice>}{!loading && !error && <div className="recipe-impact-decks"><RecipeImpactDeck title="Favoured recipes" description="Must-use matches come first, followed by preferred matches." tone="favoured" recipes={decks.favoured}/><RecipeImpactDeck title="Excluded recipes" description="These recipes are removed before the planner ranks the rest." tone="excluded" recipes={decks.excluded}/></div>}{decks.unmatched.length > 0 && <div className="recipe-impact-unmatched"><TriangleAlert/><span>Not found in a saved recipe: {decks.unmatched.join(', ')}</span></div>}<p className="recipe-impact-note">Ingredient-only preview. Meal tags, household rules and nutrition targets still shape the final plan.</p></aside>
 }
 
 function ReviewStep({ dates, slots, members, guidance, profileRestrictionCount, generating }: { dates: PlannerDate[]; slots: PlannerSlot[]; members: BackendMember[]; guidance: IngredientGuidance; profileRestrictionCount: number; generating: boolean }) {

@@ -32,6 +32,7 @@ export interface IngredientChoice {
   id: string
   term: string
   name: string
+  recipes?: Array<{ id: string; title: string }>
 }
 
 export type IngredientGuidance = Record<'must' | 'prefer' | 'exclude', IngredientChoice[]>

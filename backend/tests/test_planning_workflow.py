@@ -138,7 +138,7 @@ def test_recipe_meal_types_are_optional_filterable_and_required_by_planner(clien
 
 
 def test_recipe_ingredient_search_uses_current_saved_recipe_ingredients(client, owner):
-    _create_recipe(
+    spinach = _create_recipe(
         client,
         owner,
         "Spinach pasta",
@@ -172,7 +172,12 @@ def test_recipe_ingredient_search_uses_current_saved_recipe_ingredients(client, 
     assert response.status_code == 200, response.text
     assert response.json() == {
         "items": [
-            {"id": "baby spinach", "term": "baby spinach", "name": "baby spinach"}
+            {
+                "id": "baby spinach",
+                "term": "baby spinach",
+                "name": "baby spinach",
+                "recipes": [{"id": spinach["id"], "title": "Spinach pasta"}],
+            }
         ],
         "total": 1,
     }
