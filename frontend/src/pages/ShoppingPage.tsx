@@ -387,7 +387,7 @@ export function ShoppingPage() {
       const updated = await api.buildShoppingList(mealPlanId)
       applyServerList(updated)
       await saveShoppingItems(updated.items.map(mapShoppingItem))
-      setNotice('The shopping list was rebuilt with the improved ingredient names.')
+      setNotice('The shopping list was rebuilt with the latest ingredient and measurement improvements.')
     } catch (reason) {
       if (reason instanceof ApiError && reason.code === 'SHOPPING_REVIEW_REQUIRED') {
         setRebuildProblem({ message: reason.message, actions: reason.actions })
@@ -453,9 +453,9 @@ export function ShoppingPage() {
         {!isDemoMode && <Button onClick={addPurchased}>Add purchased to pantry</Button>}
       </>}
     />
-    {rebuildRecommended && <Notice tone="warning" title="Improved ingredient names are available">
+    {rebuildRecommended && <Notice tone="warning" title="Shopping list improvements are available">
       <div className="shopping-rebuild-copy">
-        <p>Your current list is unchanged so checked and manual items remain safe. Rebuild when you are ready to apply the improved parsing.</p>
+        <p>Your current list is unchanged so checked and manual items remain safe. Rebuild when you are ready to apply improved ingredient names and measurement conversions.</p>
         {currentListMutations.length > 0 && <p className="field-help field-help--warning">Sync or resolve {currentListMutations.length} name edit{currentListMutations.length === 1 ? '' : 's'} first.</p>}
         <Button
           variant="secondary"
