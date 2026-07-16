@@ -137,6 +137,107 @@ def test_recipe_meal_types_are_optional_filterable_and_required_by_planner(clien
     assert empty_attendance.json()["code"] == "VALIDATION_ERROR"
 
 
+def test_recipe_ingredient_search_uses_current_saved_recipe_ingredients(client, owner):
+    _create_recipe(
+        client,
+        owner,
+        "Spinach pasta",
+        ["dinner"],
+        ingredients=[
+            {
+                "original_text": "200 g baby spinach",
+                "food_phrase": "baby spinach",
+                "quantity_grams": 200,
+                "unit": "g",
+            }
+        ],
+    )
+    _create_recipe(
+        client,
+        owner,
+        "Broccoli pasta",
+        ["dinner"],
+        ingredients=[
+            {
+                "original_text": "1 head broccoli",
+                "food_phrase": "broccoli",
+                "quantity": 1,
+                "unit": "head",
+            }
+        ],
+    )
+
+    response = client.get("/api/v1/recipe-ingredients?q=spin")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "items": [
+            {"id": "baby spinach", "term": "baby spinach", "name": "baby spinach"}
+        ],
+        "total": 1,
+    }
+
+
+def test_plan_specific_ingredient_terms_prefer_matching_saved_recipe(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    broccoli = _create_recipe(
+        client,
+        owner,
+        "Broccoli pasta",
+        ["dinner"],
+        ingredients=[
+            {
+                "original_text": "200 g broccoli",
+                "food_phrase": "broccoli",
+                "quantity_grams": 200,
+                "unit": "g",
+            }
+        ],
+    )
+    spinach = _create_recipe(
+        client,
+        owner,
+        "Spinach pasta",
+        ["dinner"],
+        ingredients=[
+            {
+                "original_text": "200 g spinach",
+                "food_phrase": "spinach",
+                "quantity_grams": 200,
+                "unit": "g",
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={
+            "name": "Prefer spinach",
+            "recipe_ids": [broccoli["id"], spinach["id"]],
+            "slots": [
+                {
+                    "meal_date": "2026-07-20",
+                    "meal_type": "dinner",
+                    "participant_member_ids": [member_id],
+                }
+            ],
+            "prefer_ingredient_terms": ["spinach", "garlic"],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    detail = client.get(f"/api/v1/meal-plans/{response.json()['id']}").json()
+    assert detail["occurrences"][0]["recipe_id"] == spinach["id"]
+    guidance = next(
+        item
+        for item in detail["plan"]["diagnostics"]
+        if item["code"] == "GENERATION_GUIDANCE"
+    )
+    assert guidance["prefer_ingredient_terms"] == ["spinach", "garlic"]
+
+
 def test_sides_apply_to_the_whole_batch_and_rebalance_all_plan_portions(client, owner):
     member_id = client.get("/api/v1/auth/me").json()["member_id"]
     _set_dinner_target(client, owner, member_id)

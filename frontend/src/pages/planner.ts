@@ -30,6 +30,7 @@ export interface PlannerSlot {
 
 export interface IngredientChoice {
   id: string
+  term: string
   name: string
 }
 

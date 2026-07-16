@@ -184,16 +184,16 @@ export function PlanPage() {
     return (restrictionQueries[index]?.data ?? []).map(item => ({ ...item, memberName: member?.name ?? 'Household member' }))
   }), [members, restrictionQueries, selectedMemberIds])
 
-  const foodSearch = useQuery({
-    queryKey: ['foods', 'planner', ingredientQuery.trim()],
-    queryFn: () => api.searchFoods(ingredientQuery.trim()),
+  const ingredientSearch = useQuery({
+    queryKey: ['recipe-ingredients', 'planner', ingredientQuery.trim()],
+    queryFn: () => api.searchRecipeIngredients(ingredientQuery.trim()),
     enabled: !isDemoMode && ingredientQuery.trim().length >= 2,
   })
-  const foodResults: IngredientChoice[] = isDemoMode
+  const ingredientResults: IngredientChoice[] = isDemoMode
     ? ['Spinach', 'Chickpeas', 'Chicken thighs', 'Peanuts']
       .filter(name => name.toLowerCase().includes(ingredientQuery.trim().toLowerCase()))
-      .map(name => ({ id: `demo-${name.toLowerCase().replaceAll(' ', '-')}`, name }))
-    : (foodSearch.data?.items ?? []).slice(0, 8).map(food => ({ id: food.id, name: food.name }))
+      .map(name => ({ id: name.toLowerCase(), term: name.toLowerCase(), name }))
+    : (ingredientSearch.data?.items ?? []).slice(0, 8)
 
   const dates = useMemo(() => plannerDates(startDate, days), [startDate, days])
   const slots = useMemo(() => buildPlanSlots({
@@ -290,9 +290,12 @@ export function PlanPage() {
         // An empty selection means all planner-ready household recipes. The
         // backend applies meal tags and nutrition rules without a page-size cap.
         recipe_ids: [],
-        must_use_food_record_ids: ingredientGuidance.must.map(item => item.id),
-        prefer_food_record_ids: ingredientGuidance.prefer.map(item => item.id),
-        exclude_food_record_ids: ingredientGuidance.exclude.map(item => item.id),
+        must_use_food_record_ids: [],
+        prefer_food_record_ids: [],
+        exclude_food_record_ids: [],
+        must_use_ingredient_terms: ingredientGuidance.must.map(item => item.term),
+        prefer_ingredient_terms: ingredientGuidance.prefer.map(item => item.term),
+        exclude_ingredient_terms: ingredientGuidance.exclude.map(item => item.term),
         ignore_nutrition_tolerances: ignoreNutritionTolerances,
       })
       const detail = await api.getPlan(plan.id)
@@ -348,7 +351,7 @@ export function PlanPage() {
         {step === 1 && <PeopleStep members={members} selectedMemberIds={selectedMemberIds} targets={targetsByMember} loading={membersQuery.isLoading || selectedTargetLoading} onToggle={toggleMember}/>}
         {step === 2 && <AttendanceStep dates={dates} members={members.filter(member => selectedMemberIds.includes(member.id))} attendance={attendance} onToggle={toggleAttendance}/>}
         {step === 3 && <CookDaysStep dates={dates} selectedMemberIds={selectedMemberIds} attendance={attendance} cookStarts={cookStarts} slots={slots} foodSafetyAcknowledged={foodSafetyAcknowledged} onToggle={toggleCookStart} onAcknowledge={setFoodSafetyAcknowledged}/>}
-        {step === 4 && <IngredientsStep query={ingredientQuery} onQuery={setIngredientQuery} loading={foodSearch.isFetching} results={foodResults} guidance={ingredientGuidance} profileRestrictions={profileRestrictions} onAdd={addIngredient} onRemove={removeIngredient}/>}
+        {step === 4 && <IngredientsStep query={ingredientQuery} onQuery={setIngredientQuery} loading={ingredientSearch.isFetching} results={ingredientResults} guidance={ingredientGuidance} profileRestrictions={profileRestrictions} onAdd={addIngredient} onRemove={removeIngredient}/>}
         {step === 5 && <ReviewStep dates={dates} slots={slots} members={members.filter(member => selectedMemberIds.includes(member.id))} guidance={ingredientGuidance} profileRestrictionCount={profileRestrictions.length} generating={generating}/>}
 
         <div className="wizard-actions">
@@ -436,7 +439,7 @@ export function PlanGenerationError({ error }: { error: ApiError }) {
 type ProfileRestriction = BackendRestriction & { memberName: string }
 
 function IngredientsStep({ query, onQuery, loading, results, guidance, profileRestrictions, onAdd, onRemove }: { query: string; onQuery: (value: string) => void; loading: boolean; results: IngredientChoice[]; guidance: IngredientGuidance; profileRestrictions: ProfileRestriction[]; onAdd: (kind: keyof IngredientGuidance, food: IngredientChoice) => void; onRemove: (kind: keyof IngredientGuidance, foodId: string) => void }) {
-  return <div className="ingredient-guidance"><label>Find an ingredient<div className="planner-food-search"><Search size={18}/><input value={query} onChange={event => onQuery(event.target.value)} placeholder="Search your food catalogue…"/></div></label>{loading && <Loading label="Searching foods…"/>}{query.trim().length >= 2 && !loading && <div className="planner-food-results">{results.map(food => <div key={food.id}><strong>{food.name}</strong><span><Button variant="ghost" onClick={() => onAdd('must', food)}>Must use</Button><Button variant="ghost" onClick={() => onAdd('prefer', food)}>Prefer</Button><Button variant="ghost" onClick={() => onAdd('exclude', food)}>Exclude</Button></span></div>)}{!results.length && <p className="muted">No matching foods found.</p>}</div>}{(['must', 'prefer', 'exclude'] as const).map(kind => <div className="guidance-block" key={kind}><strong>{kind === 'must' ? 'Must use' : capitalise(kind)}</strong><div className="tag-row">{guidance[kind].map(food => <button type="button" className={`tag${kind === 'prefer' ? ' tag--warm' : kind === 'exclude' ? ' tag--danger' : ''}`} key={food.id} onClick={() => onRemove(kind, food.id)} aria-label={`Remove ${food.name} from ${kind}`}>{food.name}<X size={13}/></button>)}{!guidance[kind].length && <span className="muted">None</span>}</div></div>)}<div className="profile-guidance"><div><strong>Household profile rules</strong><Link to="/settings/preferences">Edit profiles</Link></div><p>These saved preferences and restrictions are applied automatically.</p><div className="tag-row">{profileRestrictions.map(item => <span className={`tag${item.hard ? ' tag--danger' : item.kind === 'prefer' ? ' tag--warm' : ''}`} key={`${item.member_id}-${item.id}`} title={`${item.memberName} · ${item.kind}`}>{item.value}</span>)}{!profileRestrictions.length && <span className="muted">No saved rules for the selected people.</span>}</div></div></div>
+  return <div className="ingredient-guidance"><label>Find an ingredient<div className="planner-food-search"><Search size={18}/><input value={query} onChange={event => onQuery(event.target.value)} placeholder="Search ingredients in saved recipes…"/></div></label>{loading && <Loading label="Searching saved ingredients…"/>}{query.trim().length >= 2 && !loading && <div className="planner-food-results">{results.map(food => <div key={food.id}><strong>{food.name}</strong><span><Button variant="ghost" onClick={() => onAdd('must', food)}>Must use</Button><Button variant="ghost" onClick={() => onAdd('prefer', food)}>Prefer</Button><Button variant="ghost" onClick={() => onAdd('exclude', food)}>Exclude</Button></span></div>)}{!results.length && <p className="muted">No matching saved recipe ingredients found.</p>}</div>}{(['must', 'prefer', 'exclude'] as const).map(kind => <div className="guidance-block" key={kind}><strong>{kind === 'must' ? 'Must use' : capitalise(kind)}</strong><div className="tag-row">{guidance[kind].map(food => <button type="button" className={`tag${kind === 'prefer' ? ' tag--warm' : kind === 'exclude' ? ' tag--danger' : ''}`} key={food.id} onClick={() => onRemove(kind, food.id)} aria-label={`Remove ${food.name} from ${kind}`}>{food.name}<X size={13}/></button>)}{!guidance[kind].length && <span className="muted">None</span>}</div></div>)}<div className="profile-guidance"><div><strong>Household profile rules</strong><Link to="/settings/preferences">Edit profiles</Link></div><p>These saved preferences and restrictions are applied automatically.</p><div className="tag-row">{profileRestrictions.map(item => <span className={`tag${item.hard ? ' tag--danger' : item.kind === 'prefer' ? ' tag--warm' : ''}`} key={`${item.member_id}-${item.id}`} title={`${item.memberName} · ${item.kind}`}>{item.value}</span>)}{!profileRestrictions.length && <span className="muted">No saved rules for the selected people.</span>}</div></div></div>
 }
 
 function ReviewStep({ dates, slots, members, guidance, profileRestrictionCount, generating }: { dates: PlannerDate[]; slots: PlannerSlot[]; members: BackendMember[]; guidance: IngredientGuidance; profileRestrictionCount: number; generating: boolean }) {
