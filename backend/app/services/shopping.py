@@ -29,6 +29,7 @@ from .ingredient_names import (
     preferred_ingredient_name,
 )
 from .measurement_conversion import (
+    available_display_units,
     convert_quantity_to_unit,
     measurement_dimension,
     normalise_shopping_measurement,
@@ -139,7 +140,7 @@ def build_shopping_list(
             )
             density = (
                 Decimal(food.density_g_per_ml)
-                if profile is not None and food is not None and food.density_g_per_ml is not None
+                if food is not None and food.density_g_per_ml is not None
                 else profile.density_g_per_ml if profile is not None else None
             )
             if ingredient.quantity_grams is not None:
@@ -167,9 +168,15 @@ def build_shopping_list(
             amount, unit = normalise_shopping_measurement(
                 source_amount,
                 source_unit,
-                profile,
-                density_override=density,
+                density,
             )
+            source_display_unit = canonical_quantity_unit(source_unit)
+            if source_display_unit == "l":
+                source_display_unit = "ml"
+            elif measurement_dimension(source_display_unit) == "mass":
+                source_display_unit = "g"
+            if source_display_unit not in available_display_units(unit, density):
+                source_display_unit = available_display_units(unit, density)[0]
             grouping_key = (
                 f"measurement:{profile.canonical_name}"
                 if profile is not None
@@ -190,12 +197,13 @@ def build_shopping_list(
                     "source_keys": set(source_keys),
                     "unit": unit,
                     "density": density,
+                    "display_unit": source_display_unit,
                     "density_by_food": (
                         {ingredient.food_record_id: density}
                         if ingredient.food_record_id and density is not None
                         else {}
                     ),
-                    "cross_dimension": profile is not None,
+                    "cross_dimension": density is not None,
                     "profile_name": profile.canonical_name if profile is not None else None,
                     "exact": Decimal("0"),
                 },
@@ -209,7 +217,7 @@ def build_shopping_list(
             if requirement["density"] is None and density is not None:
                 requirement["density"] = density
             requirement["source_keys"].update(source_keys)
-            requirement["cross_dimension"] = bool(requirement["cross_dimension"]) or profile is not None
+            requirement["cross_dimension"] = bool(requirement["cross_dimension"]) or density is not None
             requirement["exact"] = Decimal(requirement["exact"]) + amount * scale
 
     if review_actions:
@@ -320,6 +328,13 @@ def build_shopping_list(
                     )
                 ]
             checked = bool(matching_prior) and all(item.checked for item in matching_prior)
+            valid_display_units = available_display_units(unit, default_density)
+            display_unit = str(requirement["display_unit"])
+            for prior in matching_prior:
+                prior_display = canonical_quantity_unit(prior.display_unit or prior.unit)
+                if prior_display in valid_display_units:
+                    display_unit = prior_display
+                    break
             db.add(
                 ShoppingItem(
                     shopping_list_id=shopping_list.id,
@@ -328,6 +343,8 @@ def build_shopping_list(
                     exact_quantity=round_quantity(remaining, unit),
                     purchase_quantity=round_purchase(remaining, unit),
                     unit=unit,
+                    density_g_per_ml=default_density,
+                    display_unit=display_unit,
                     category="Other",
                     checked=checked,
                     manual=False,
@@ -344,6 +361,8 @@ def build_shopping_list(
                     exact_quantity=round_quantity(item.exact_quantity, item.unit),
                     purchase_quantity=round_purchase(item.purchase_quantity, item.unit),
                     unit=canonical_quantity_unit(item.unit),
+                    density_g_per_ml=item.density_g_per_ml,
+                    display_unit=item.display_unit or canonical_quantity_unit(item.unit),
                     category=item.category,
                     checked=item.checked,
                     manual=True,

@@ -77,24 +77,23 @@ def _items(db, shopping_list):
 def test_registry_is_reviewed_and_has_complete_provenance():
     assert len(INGREDIENT_MEASUREMENT_PROFILES) >= 40
     assert all(profile.density_g_per_ml > 0 for profile in INGREDIENT_MEASUREMENT_PROFILES)
-    assert all(profile.preferred_shopping_unit in {"g", "ml"} for profile in INGREDIENT_MEASUREMENT_PROFILES)
     assert all(
         profile.source and profile.source_url and profile.source_reference
         for profile in INGREDIENT_MEASUREMENT_PROFILES
     )
 
 
-def test_dry_and_liquid_profiles_choose_different_shopping_dimensions():
+def test_known_densities_normalise_to_stable_mass_storage():
     flour = resolve_measurement_profile("all-purpose flour")
     milk = resolve_measurement_profile("whole milk")
 
-    assert normalise_shopping_measurement(Decimal("1"), "cup", flour) == (
+    assert normalise_shopping_measurement(Decimal("1"), "cup", flour.density_g_per_ml) == (
         Decimal("125.040"),
         "g",
     )
-    assert normalise_shopping_measurement(Decimal("103"), "g", milk) == (
-        Decimal("1E+2"),
-        "ml",
+    assert normalise_shopping_measurement(Decimal("103"), "g", milk.density_g_per_ml) == (
+        Decimal("103"),
+        "g",
     )
 
 
@@ -146,7 +145,7 @@ def test_shopping_combines_flour_volume_and_mass_into_grams(db):
     assert items[0].purchase_quantity == Decimal("226")
 
 
-def test_shopping_combines_milk_mass_and_volume_into_millilitres(db):
+def test_shopping_combines_milk_mass_and_volume_with_mass_storage(db):
     household, plan = _planned_recipe(
         db,
         [
@@ -170,9 +169,9 @@ def test_shopping_combines_milk_mass_and_volume_into_millilitres(db):
     items = _items(db, shopping)
 
     assert len(items) == 1
-    assert items[0].unit == "ml"
-    assert items[0].exact_quantity == Decimal("300")
-    assert items[0].purchase_quantity == Decimal("300")
+    assert items[0].unit == "g"
+    assert items[0].exact_quantity == Decimal("309")
+    assert items[0].purchase_quantity == Decimal("309")
 
 
 def test_unknown_ingredient_combines_spoons_as_ml_but_keeps_grams_separate(db):
@@ -256,8 +255,13 @@ def test_food_record_density_overrides_registry_and_cross_unit_pantry_is_deducte
     shopping = build_shopping_list(db, household.id, plan.id, "Week shopping")
     item = _items(db, shopping)[0]
 
-    assert item.unit == "ml"
-    assert item.exact_quantity == Decimal("150")
+    assert item.unit == "g"
+    assert item.exact_quantity == Decimal("158")
+
+
+def test_chia_and_coriander_have_reviewed_density_profiles():
+    assert resolve_measurement_profile("chia seed").density_g_per_ml == Decimal("0.72")
+    assert resolve_measurement_profile("fresh coriander").density_g_per_ml == Decimal("0.06667")
 
 
 def test_merged_item_is_checked_only_when_all_previous_lines_were_checked(db):

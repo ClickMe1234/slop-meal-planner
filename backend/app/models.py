@@ -437,6 +437,8 @@ class ShoppingItem(IdMixin, AuditMixin, Base):
     exact_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     purchase_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     unit: Mapped[str] = mapped_column(String(30), nullable=False)
+    density_g_per_ml: Mapped[Decimal | None] = mapped_column(Numeric(10, 5))
+    display_unit: Mapped[str | None] = mapped_column(String(30))
     category: Mapped[str] = mapped_column(String(80), default="Other")
     checked: Mapped[bool] = mapped_column(Boolean, default=False)
     manual: Mapped[bool] = mapped_column(Boolean, default=False)

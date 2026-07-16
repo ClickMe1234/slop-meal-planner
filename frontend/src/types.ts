@@ -73,6 +73,15 @@ export interface ShoppingItem {
   checked: boolean
   manual?: boolean
   updatedAt: number
+  unit?: string
+  quantityOptions?: ShoppingQuantityOption[]
+}
+
+export interface ShoppingQuantityOption {
+  unit: string
+  buy: string
+  exact: string
+  approximate: boolean
 }
 
 export interface JobStatus {

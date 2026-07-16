@@ -413,6 +413,7 @@ class ShoppingItemPatch(VersionedUpdate):
     checked: bool | None = None
     purchase_quantity: Decimal | None = Field(default=None, gt=0)
     category: str | None = None
+    display_unit: str | None = None
 
 
 class ShoppingItemNameUpdate(APIModel):
@@ -428,6 +429,15 @@ class ShoppingItemNameUpdate(APIModel):
         return self
 
 
+class ShoppingQuantityOption(APIModel):
+    unit: str
+    exact_quantity: Decimal
+    purchase_quantity: Decimal
+    exact_quantity_display: str
+    purchase_quantity_display: str
+    approximate: bool = False
+
+
 class ShoppingItemOut(APIModel):
     id: str
     display_name: str
@@ -436,6 +446,8 @@ class ShoppingItemOut(APIModel):
     exact_quantity_display: str
     purchase_quantity_display: str
     unit: str
+    available_units: list[str]
+    quantity_options: list[ShoppingQuantityOption]
     category: str
     checked: bool
     manual: bool

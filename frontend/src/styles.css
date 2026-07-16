@@ -28,6 +28,11 @@
   --radius: 16px;
 }
 
+.shopping-quantity { align-items:flex-end;display:grid;gap:6px;justify-items:end; }
+.shopping-unit-options { display:flex;flex-wrap:wrap;gap:3px;justify-content:flex-end; }
+.shopping-unit-options button { background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--muted);cursor:pointer;font:inherit;font-size:.58rem;line-height:1;padding:4px 5px; }
+.shopping-unit-options button:hover,.shopping-unit-options button.active { background:var(--primary-soft);border-color:var(--primary);color:var(--primary); }
+
 .ingredient-language-card { background:linear-gradient(135deg,var(--surface) 60%,var(--primary-soft)); }
 .ingredient-language-card .segmented { width:max-content; }
 .ingredient-language-example { align-items:center;border-top:1px solid var(--border);display:flex;gap:10px;padding-top:15px; }

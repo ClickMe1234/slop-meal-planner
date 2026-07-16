@@ -97,28 +97,37 @@ export function ShoppingPage() {
         const merged = serverItems.map(item => {
           const local = cachedById.get(item.id)
           const queued = queuedById.get(item.id)
-          return {
+          const mergedItem = {
             ...item,
             checked: local?.checked ?? item.checked,
             updatedAt: local?.updatedAt ?? item.updatedAt,
             name: queued?.desiredDisplayName ?? item.name,
           }
+          return local?.unit ? selectQuantityUnit(mergedItem, local.unit) : mergedItem
         })
         const nextVersions = Object.fromEntries(server.items.map(item => [item.id, item.version]))
         let checkedChangeConflict = false
         for (const original of server.items) {
           const local = cachedById.get(original.id)
-          if (local && local.checked !== original.checked) {
+          const displayUnit = local?.unit && original.available_units?.includes(local.unit)
+            && local.unit !== original.unit
+            ? local.unit
+            : undefined
+          const checked = local && local.checked !== original.checked ? local.checked : undefined
+          if (checked !== undefined || displayUnit) {
             try {
               const updated = await api.patchShoppingItem(server.id, original.id, {
                 expected_version: nextVersions[original.id],
-                checked: local.checked,
+                checked,
+                display_unit: displayUnit,
               })
               nextVersions[original.id] = updated.version
             } catch {
-              checkedChangeConflict = true
-              const mergedItem = merged.find(item => item.id === original.id)
-              if (mergedItem) mergedItem.checked = original.checked
+              if (checked !== undefined) {
+                checkedChangeConflict = true
+                const mergedItem = merged.find(item => item.id === original.id)
+                if (mergedItem) mergedItem.checked = original.checked
+              }
             }
           }
         }
@@ -263,6 +272,26 @@ export function ShoppingPage() {
   const startNameEdit = (item: ShoppingItem) => {
     setEditingId(item.id)
     setEditingName(item.name)
+  }
+
+  const selectUnit = async (id: string, unit: string) => {
+    const current = items.find(item => item.id === id)
+    if (!current || current.unit === unit) return
+    setItems(all => all.map(item => item.id === id
+      ? { ...selectQuantityUnit(item, unit), updatedAt: Date.now() }
+      : item))
+    if (!isDemoMode && online && listId && versions[id]) {
+      try {
+        const updated = await api.patchShoppingItem(listId, id, {
+          expected_version: versions[id],
+          display_unit: unit,
+        })
+        setItems(all => all.map(item => item.id === id ? mapShoppingItem(updated) : item))
+        setVersions(all => ({ ...all, [id]: updated.version }))
+      } catch {
+        setNotice('Unit choice saved on this device. It will be reconciled when the list reloads.')
+      }
+    }
   }
 
   const finishNameEdit = async (event: FormEvent, item: ShoppingItem) => {
@@ -494,7 +523,19 @@ export function ShoppingPage() {
                   <span className="custom-check"><Check/></span>
                 </label>
                 <span className="shopping-copy"><strong>{item.name}</strong>{(item.exact || item.pantryUsed) && <span>{item.exact}{item.exact && item.pantryUsed && <> · </>}{item.pantryUsed}</span>}</span>
-                <strong className="buy-amount">{item.buy}</strong>
+                <span className="shopping-quantity">
+                  <strong className="buy-amount">{item.buy}</strong>
+                  {(item.quantityOptions?.length ?? 0) > 1 && <span className="shopping-unit-options" aria-label={`Display unit for ${item.name}`}>
+                    {item.quantityOptions?.map(option => <button
+                      type="button"
+                      key={option.unit}
+                      className={item.unit === option.unit ? 'active' : ''}
+                      aria-pressed={item.unit === option.unit}
+                      title={option.approximate ? `Approximate conversion to ${unitLabel(option.unit)}` : `Show in ${unitLabel(option.unit)}`}
+                      onClick={() => selectUnit(item.id, option.unit)}
+                    >{unitLabel(option.unit)}</button>)}
+                  </span>}
+                </span>
                 {item.manual && <Badge>Manual</Badge>}
                 {mutation?.status === 'pending' && <Badge tone="warning">Name pending</Badge>}
                 <Button
@@ -552,7 +593,25 @@ export function mapShoppingItem(item: BackendShoppingItem): ShoppingItem {
     checked: item.checked,
     manual: item.manual,
     updatedAt: Date.now(),
+    unit: item.unit,
+    quantityOptions: (item.quantity_options ?? []).map(option => ({
+      unit: option.unit,
+      buy: option.purchase_quantity_display,
+      exact: option.exact_quantity_display === option.purchase_quantity_display
+        ? ''
+        : `${option.exact_quantity_display} required`,
+      approximate: option.approximate,
+    })),
   }
+}
+
+function selectQuantityUnit(item: ShoppingItem, unit: string): ShoppingItem {
+  const option = item.quantityOptions?.find(value => value.unit === unit)
+  return option ? { ...item, unit, buy: option.buy, exact: option.exact } : item
+}
+
+function unitLabel(unit: string): string {
+  return unit === 'cup' ? 'cups' : unit
 }
 
 function shoppingReviewHref(href: string): string {

@@ -174,6 +174,17 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     item = shopping_data["items"][0]
     assert item["exact_quantity"] == "100"
     assert item["exact_quantity_display"] == "100 g"
+    assert item["available_units"] == ["g", "ml", "tbsp", "tsp", "cup"]
+    assert len(item["quantity_options"]) == 5
+    converted = client.patch(
+        f"/api/v1/shopping-lists/{shopping_data['id']}/items/{item['id']}",
+        headers=headers,
+        json={"expected_version": item["version"], "display_unit": "cup"},
+    )
+    assert converted.status_code == 200, converted.text
+    item = converted.json()
+    assert item["unit"] == "cup"
+    assert item["purchase_quantity_display"].endswith(" cup")
     checked = client.patch(
         f"/api/v1/shopping-lists/{shopping_data['id']}/items/{item['id']}",
         headers=headers,

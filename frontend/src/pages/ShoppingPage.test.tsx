@@ -1,10 +1,10 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { ShoppingPage } from './ShoppingPage'
 
 
-describe('ShoppingPage ingredient names', () => {
+describe('ShoppingPage controls', () => {
   beforeEach(() => localStorage.clear())
 
   it('lets a shopper edit an ingredient name inline', async () => {
@@ -19,5 +19,16 @@ describe('ShoppingPage ingredient names', () => {
 
     expect(screen.getByText('Chicken thigh fillets')).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Ingredient name' })).not.toBeInTheDocument()
+  })
+
+  it('lets the shopper choose the most useful measurement unit', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    const controls = await screen.findByLabelText('Display unit for Greek yoghurt')
+    await user.click(within(controls).getByRole('button', { name: 'ml' }))
+
+    expect(screen.getByText('480 ml')).toBeInTheDocument()
+    expect(within(controls).getByRole('button', { name: 'ml' })).toHaveAttribute('aria-pressed', 'true')
   })
 })
