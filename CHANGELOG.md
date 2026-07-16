@@ -3,6 +3,13 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.5.0 - 2026-07-16
+
+- Combine mass and volumetric recipe requirements using reviewed ingredient densities while keeping shopping-list and pantry calculations stable.
+- Let shoppers display supported ingredients in grams, millilitres, tablespoons, teaspoons, or cups without changing the underlying quantity.
+- Persist unit choices across shopping-list rebuilds and reconcile choices made while offline.
+- Add reviewed density profiles for chia seeds and fresh, dried, and seed forms of coriander.
+
 ## 0.4.2 - 2026-07-15
 
 - Calculate explicit ingredient arithmetic such as `2 x 55 g` package sizes and nested item counts instead of retaining only the multiplier.

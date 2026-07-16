@@ -29,6 +29,11 @@ from ..services.quantities import (
 )
 from ..services.shopping import build_shopping_list
 from ..services.regional_ingredients import convert_ingredient_text
+from ..services.measurement_conversion import (
+    available_display_units,
+    convert_quantity_to_unit,
+    measurement_dimension,
+)
 
 router = APIRouter(tags=["pantry and shopping"])
 
@@ -119,16 +124,42 @@ def _shopping_item_data(
     ingredient_locale: str,
 ) -> dict[str, object]:
     data = {column.name: getattr(item, column.name) for column in item.__table__.columns}
-    unit = canonical_quantity_unit(item.unit)
-    exact = round_quantity(item.exact_quantity, unit)
-    purchase = max(round_purchase_quantity(item.purchase_quantity, unit), exact)
+    storage_unit = canonical_quantity_unit(item.unit)
+    density = Decimal(item.density_g_per_ml) if item.density_g_per_ml is not None else None
+    units = available_display_units(storage_unit, density)
+    selected_unit = canonical_quantity_unit(item.display_unit or storage_unit)
+    if selected_unit not in units:
+        selected_unit = units[0]
+    options: list[dict[str, object]] = []
+    for unit in units:
+        converted_exact = convert_quantity_to_unit(
+            Decimal(item.exact_quantity), storage_unit, unit, density
+        )
+        converted_purchase = convert_quantity_to_unit(
+            Decimal(item.purchase_quantity), storage_unit, unit, density
+        )
+        if converted_exact is None or converted_purchase is None:
+            continue
+        exact = round_quantity(converted_exact, unit)
+        purchase = max(round_purchase_quantity(converted_purchase, unit), exact)
+        options.append({
+            "unit": unit,
+            "exact_quantity": exact,
+            "purchase_quantity": purchase,
+            "exact_quantity_display": format_quantity(exact, unit),
+            "purchase_quantity_display": format_quantity(purchase, unit),
+            "approximate": measurement_dimension(storage_unit) != measurement_dimension(unit),
+        })
+    selected = next(option for option in options if option["unit"] == selected_unit)
     data.update(
         display_name=convert_ingredient_text(db, item.display_name, ingredient_locale),
-        exact_quantity=exact,
-        purchase_quantity=purchase,
-        exact_quantity_display=format_quantity(exact, unit),
-        purchase_quantity_display=format_quantity(purchase, unit),
-        unit=unit,
+        exact_quantity=selected["exact_quantity"],
+        purchase_quantity=selected["purchase_quantity"],
+        exact_quantity_display=selected["exact_quantity_display"],
+        purchase_quantity_display=selected["purchase_quantity_display"],
+        unit=selected_unit,
+        available_units=list(units),
+        quantity_options=options,
     )
     return data
 
@@ -206,6 +237,7 @@ def add_manual_item(
         exact_quantity=exact,
         purchase_quantity=purchase,
         unit=unit,
+        display_unit=unit,
         category=payload.category,
         manual=True,
     )
@@ -235,6 +267,18 @@ def patch_item(
         raise NotFoundError("Shopping item")
     if item.version != payload.expected_version:
         raise ConflictError()
+    if payload.display_unit is not None:
+        requested_unit = canonical_quantity_unit(payload.display_unit)
+        units = available_display_units(
+            item.unit,
+            Decimal(item.density_g_per_ml) if item.density_g_per_ml is not None else None,
+        )
+        if requested_unit not in units:
+            raise DomainError(
+                "SHOPPING_UNIT_UNAVAILABLE",
+                f"{requested_unit} is not available for this ingredient",
+            )
+        item.display_unit = requested_unit
     for field in ("checked", "purchase_quantity", "category"):
         value = getattr(payload, field)
         if value is not None:
