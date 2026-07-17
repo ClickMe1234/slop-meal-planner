@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from decimal import Decimal
+from typing import Literal
 from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -314,6 +315,7 @@ def list_recipes(
     q: str = Query(default="", max_length=200),
     meal_type: list[RecipeTag] = Query(default=[]),
     publisher_category: list[str] = Query(default=[]),
+    publisher_category_match: Literal["any", "all"] = Query(default="any"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=24, ge=1, le=100),
     context: AuthContext = Depends(get_auth_context),
@@ -365,17 +367,27 @@ def list_recipes(
             )
         )
     if selected_categories:
-        aliases = set().union(
-            *(CATEGORY_BY_KEY[key].normalised_aliases for key in selected_categories)
-        )
-        conditions.append(
-            exists(
-                select(RecipePublisherTag.id).where(
-                    RecipePublisherTag.recipe_id == Recipe.id,
-                    RecipePublisherTag.normalised_value.in_(aliases),
+        category_aliases = [CATEGORY_BY_KEY[key].normalised_aliases for key in selected_categories]
+        if publisher_category_match == "all":
+            conditions.extend(
+                exists(
+                    select(RecipePublisherTag.id).where(
+                        RecipePublisherTag.recipe_id == Recipe.id,
+                        RecipePublisherTag.normalised_value.in_(aliases),
+                    )
+                )
+                for aliases in category_aliases
+            )
+        else:
+            aliases = set().union(*category_aliases)
+            conditions.append(
+                exists(
+                    select(RecipePublisherTag.id).where(
+                        RecipePublisherTag.recipe_id == Recipe.id,
+                        RecipePublisherTag.normalised_value.in_(aliases),
+                    )
                 )
             )
-        )
     total = db.scalar(select(func.count(Recipe.id)).where(*conditions)) or 0
     recipes = db.scalars(
         select(Recipe)

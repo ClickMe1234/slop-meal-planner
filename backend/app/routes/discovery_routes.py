@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -104,6 +105,7 @@ async def discover_recipes(
     request_key: str | None = Query(default=None, max_length=100),
     sources: str | None = Query(default=None, max_length=200),
     publisher_category: list[str] = Query(default=[]),
+    publisher_category_match: Literal["any", "all"] = Query(default="any"),
     context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
@@ -134,6 +136,7 @@ async def discover_recipes(
             "allrecipes": query_for_locale(db, q, IngredientLocale.US),
         },
         categories=selected_categories,
+        category_match=publisher_category_match,
     )
     saved_rows = db.scalars(
         select(Recipe.source_url).where(

@@ -88,6 +88,37 @@ def test_saved_recipe_search_uses_raw_publisher_tags_and_category_aliases(
     assert narrowed.json()["items"] == []
 
 
+def test_saved_recipe_categories_can_match_any_or_all(client, owner, session_factory):
+    both = _create_recipe(client, owner, "Vegetarian lunch bowl")
+    vegetarian = _create_recipe(client, owner, "Vegetarian supper")
+    lunch = _create_recipe(client, owner, "Chicken lunch")
+    with session_factory() as db:
+        for recipe_id, tags in (
+            (both["id"], ("vegetarian", "lunch")),
+            (vegetarian["id"], ("vegetarian",)),
+            (lunch["id"], ("lunch",)),
+        ):
+            db.add_all([
+                RecipePublisherTag(
+                    recipe_id=recipe_id,
+                    kind="category",
+                    label=tag.title(),
+                    normalised_value=tag,
+                )
+                for tag in tags
+            ])
+        db.commit()
+
+    query = "publisher_category=vegetarian&publisher_category=lunch"
+    match_any = client.get(f"/api/v1/recipes?{query}&publisher_category_match=any")
+    match_all = client.get(f"/api/v1/recipes?{query}&publisher_category_match=all")
+
+    assert {item["id"] for item in match_any.json()["items"]} == {
+        both["id"], vegetarian["id"], lunch["id"]
+    }
+    assert [item["id"] for item in match_all.json()["items"]] == [both["id"]]
+
+
 def test_recipe_category_validation_rejects_unknown_or_more_than_three(client, owner):
     unknown = client.get("/api/v1/recipes?publisher_category=made_up")
     too_many = client.get(

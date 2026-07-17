@@ -8,7 +8,7 @@ import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader, Segmented
 import { MealTypePicker, mealKindLabels, type RecipeMealType } from '../components/MealTypePicker'
 import { demoRecipes } from '../data/demo'
 import type { Nutrition, Recipe } from '../types'
-import { api, ApiError, isDemoMode, type BackendRecipe, type BackendRecipeDetail, type DiscoveryResult, type RecipeCategoryOption, type RecipeSourceKey } from '../api/client'
+import { api, ApiError, isDemoMode, type BackendRecipe, type BackendRecipeDetail, type DiscoveryResult, type RecipeCategoryMatchMode, type RecipeCategoryOption, type RecipeSourceKey } from '../api/client'
 
 const SOURCE_OPTIONS: Array<{ value: RecipeSourceKey; label: string }> = [
   { value: 'good_food', label: 'Good Food' },
@@ -49,6 +49,14 @@ export function nextCategorySelection(current: string[], category: string, maxim
   return current.length < maximum ? [...current, category] : current
 }
 
+export function matchesSelectedCategories(recipeCategories: string[] | undefined, selectedCategories: string[], match: RecipeCategoryMatchMode): boolean {
+  if (!selectedCategories.length) return true
+  const available = new Set(recipeCategories ?? [])
+  return match === 'all'
+    ? selectedCategories.every(category => available.has(category))
+    : selectedCategories.some(category => available.has(category))
+}
+
 function reviewPayload(recipe: BackendRecipeDetail, mealTypes: RecipeMealType[]) {
   return {
     expected_version: recipe.version,
@@ -75,7 +83,7 @@ export function RecipesPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [query, setQuery] = useState('')
-  const [scope, setScope] = useState<'all' | 'saved'>('all')
+  const [scope, setScope] = useState<'discover' | 'saved'>('discover')
   const [pendingRecipe, setPendingRecipe] = useState<Recipe | null>(null)
   const [pendingMealTypes, setPendingMealTypes] = useState<RecipeMealType[]>([])
   const [finishing, setFinishing] = useState(false)
@@ -84,6 +92,7 @@ export function RecipesPage() {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [selectedSources, setSelectedSources] = useState<RecipeSourceKey[]>(ALL_SOURCES)
   const [selectedCategories, setSelectedCategories] = useState<string[]>([])
+  const [categoryMatch, setCategoryMatch] = useState<RecipeCategoryMatchMode>('any')
 
   const categoryQuery = useQuery({
     queryKey: ['recipe-categories'],
@@ -99,31 +108,32 @@ export function RecipesPage() {
   )
 
   const localSearch = useQuery({
-    queryKey: ['recipes', query, selectedCategories.join(',')],
-    queryFn: () => api.listRecipes(query, undefined, selectedCategories),
+    queryKey: ['recipes', query, selectedCategories.join(','), categoryMatch],
+    queryFn: () => api.listRecipes(query, undefined, selectedCategories, categoryMatch),
     enabled: !isDemoMode,
   })
   const remoteSearch = useQuery({
-    queryKey: ['recipe-discovery', query.trim(), selectedSources.join(','), selectedCategories.join(',')],
-    queryFn: () => api.searchRemote(query.trim(), 'recipe-page', selectedSources, selectedCategories),
-    enabled: !isDemoMode && scope === 'all' && (query.trim().length >= 2 || selectedCategories.length > 0) && selectedSources.length > 0,
+    queryKey: ['recipe-discovery', query.trim(), selectedSources.join(','), selectedCategories.join(','), categoryMatch],
+    queryFn: () => api.searchRemote(query.trim(), 'recipe-page', selectedSources, selectedCategories, categoryMatch),
+    enabled: !isDemoMode && scope === 'discover' && (query.trim().length >= 2 || selectedCategories.length > 0) && selectedSources.length > 0,
   })
 
   const results = useMemo(() => {
     if (isDemoMode) return demoRecipes.filter(recipe => {
       const matches = recipe.title.toLowerCase().includes(query.toLowerCase()) || recipe.source.toLowerCase().includes(query.toLowerCase())
       const sourceKey = SOURCE_OPTIONS.find(option => option.label === recipe.source)?.value
-      const matchesCategory = !selectedCategories.length || selectedCategories.some(category => recipe.matchedCategories?.includes(category))
-      return matches && matchesCategory && (!sourceKey || selectedSources.includes(sourceKey)) && (scope === 'all' || recipe.source === 'Saved recipe' || recipe.state === 'ready')
+      const matchesCategory = matchesSelectedCategories(recipe.matchedCategories, selectedCategories, categoryMatch)
+      const saved = recipe.source === 'Saved recipe' || recipe.state === 'ready'
+      return matches && matchesCategory && (scope === 'saved' ? saved : !saved && (!sourceKey || selectedSources.includes(sourceKey)))
     })
     const local = (localSearch.data?.items ?? []).map(recipe => mapSavedRecipe(recipe, categoryLabels))
     if (scope === 'saved') return local
     const localUrls = new Set(local.map(item => item.sourceUrl).filter(Boolean))
     const remote = (remoteSearch.data?.results ?? [])
-      .filter(item => !localUrls.has(item.url))
+      .filter(item => !item.already_saved && !localUrls.has(item.url))
       .map(recipe => mapDiscoveryResult(recipe, categoryLabels))
-    return [...local, ...remote]
-  }, [query, scope, selectedSources, selectedCategories, categoryLabels, localSearch.data, remoteSearch.data])
+    return remote
+  }, [query, scope, selectedSources, selectedCategories, categoryMatch, categoryLabels, localSearch.data, remoteSearch.data])
 
   const toggleSource = (source: RecipeSourceKey) => {
     setSelectedSources(current => current.includes(source) ? current.filter(item => item !== source) : [...current, source])
@@ -179,20 +189,20 @@ export function RecipesPage() {
   }
 
   return <div className="page">
-    <PageHeader eyebrow="Recipe catalogue" title="Find something delicious" description="Search your collection and trusted recipe websites in one place." actions={<><Link className="button button--secondary" to="/recipes/new"><ChefHat size={17}/>Custom recipe</Link><Link className="button button--secondary" to="/recipes/import"><Link2 size={17}/>Import from URL</Link></>}/>
+    <PageHeader eyebrow="Recipe catalogue" title="Find something delicious" description="Browse your saved collection or discover something new from trusted recipe websites." actions={<><Link className="button button--secondary" to="/recipes/new"><ChefHat size={17}/>Custom recipe</Link><Link className="button button--secondary" to="/recipes/import"><Link2 size={17}/>Import from URL</Link></>}/>
     <div className="recipe-search"><Search size={22}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search recipes, ingredients or cuisine…" aria-label="Search recipes"/><button className={filtersOpen ? 'active' : undefined} aria-label="Recipe filters" aria-expanded={filtersOpen} aria-controls="recipe-filter-panel" onClick={() => setFiltersOpen(open => !open)}><Filter size={19}/><span>Filters{activeFilterCount ? ` (${activeFilterCount})` : ''}</span></button></div>
     {filtersOpen && <Card className="recipe-filter-panel" id="recipe-filter-panel">
-      <div className="recipe-filter-heading"><div><strong>Search filters</strong><span>Categories match any selection and search every chosen website.</span></div>{activeFilterCount > 0 && <Button variant="ghost" onClick={() => { setSelectedCategories([]); setSelectedSources(ALL_SOURCES) }}>Clear filters</Button>}</div>
-      <fieldset className="recipe-filter-group"><legend>Categories <span>{selectedCategories.length}/{maximumCategories}</span></legend><p id="category-filter-help">Choose up to {maximumCategories}. You can browse a category without typing a search.</p><div className="category-filter-options" aria-describedby="category-filter-help">{categoryOptions.map(option => { const selected = selectedCategories.includes(option.key); const atLimit = !selected && selectedCategories.length >= maximumCategories; return <label className={`category-filter-option${selected ? ' selected' : ''}${atLimit ? ' disabled' : ''}`} key={option.key}><input type="checkbox" checked={selected} disabled={atLimit} onChange={() => toggleCategory(option.key)}/><span>{option.label}</span></label> })}</div>{selectedCategories.length > 0 && <Button variant="ghost" onClick={() => setSelectedCategories([])}>Clear categories</Button>}</fieldset>
-      <fieldset className="recipe-filter-group recipe-filter-group--sources"><legend>Recipe websites</legend><p>Choose which supported websites to search.</p><div className="filter-options">{SOURCE_OPTIONS.map(option => <label className="check-label" key={option.value}><input type="checkbox" checked={selectedSources.includes(option.value)} onChange={() => toggleSource(option.value)}/>{option.label}</label>)}</div>{selectedSources.length < ALL_SOURCES.length && <Button variant="ghost" onClick={() => setSelectedSources(ALL_SOURCES)}>Select all</Button>}</fieldset>
+      <div className="recipe-filter-heading"><div><strong>Search filters</strong><span>Categories match {categoryMatch === 'all' ? 'every' : 'any'} selection across every chosen website.</span></div>{activeFilterCount > 0 && <Button variant="ghost" onClick={() => { setSelectedCategories([]); setSelectedSources(ALL_SOURCES); setCategoryMatch('any') }}>Clear filters</Button>}</div>
+      <fieldset className="recipe-filter-group"><legend>Categories <span>{selectedCategories.length}/{maximumCategories}</span></legend><p id="category-filter-help">Choose up to {maximumCategories}. You can browse a category without typing a search.</p><div className="category-match-control"><span>Match selected tags</span><button type="button" className={`category-match-toggle category-match-toggle--${categoryMatch}`} role="switch" aria-checked={categoryMatch === 'all'} aria-label="Require all selected categories" onClick={() => setCategoryMatch(current => current === 'any' ? 'all' : 'any')}><span>Any</span><span>All</span></button><small>{categoryMatch === 'all' ? 'Recipes must have every selected tag.' : 'Recipes can have any selected tag.'}</small></div><div className="category-filter-options" aria-describedby="category-filter-help">{categoryOptions.map(option => { const selected = selectedCategories.includes(option.key); const atLimit = !selected && selectedCategories.length >= maximumCategories; return <label className={`category-filter-option${selected ? ' selected' : ''}${atLimit ? ' disabled' : ''}`} key={option.key}><input type="checkbox" checked={selected} disabled={atLimit} onChange={() => toggleCategory(option.key)}/><span>{option.label}</span></label> })}</div>{selectedCategories.length > 0 && <Button variant="ghost" onClick={() => setSelectedCategories([])}>Clear categories</Button>}</fieldset>
+      {scope === 'discover' && <fieldset className="recipe-filter-group recipe-filter-group--sources"><legend>Recipe websites</legend><p>Choose which supported websites to search.</p><div className="filter-options">{SOURCE_OPTIONS.map(option => <label className="check-label" key={option.value}><input type="checkbox" checked={selectedSources.includes(option.value)} onChange={() => toggleSource(option.value)}/>{option.label}</label>)}</div>{selectedSources.length < ALL_SOURCES.length && <Button variant="ghost" onClick={() => setSelectedSources(ALL_SOURCES)}>Select all</Button>}</fieldset>}
     </Card>}
-    <div className="search-controls"><Segmented value={scope} onChange={setScope} label="Recipe source" options={[{ value: 'all', label: 'Everywhere' }, { value: 'saved', label: 'My recipes' }]}/><div className="source-pills"><span>Searching:</span>{SOURCE_OPTIONS.filter(option => selectedSources.includes(option.value)).map(option => <Badge key={option.value}>{option.label}</Badge>)}{selectedCategories.map(category => <Badge key={category} tone="green">{categoryLabels.get(category) ?? category}</Badge>)}{selectedSources.length === 0 && <Badge tone="warning">No websites selected</Badge>}</div></div>
-    {remoteSearch.isFetching && <div className="search-status"><Loading label="Searching recipe websites…"/><span>Saved recipes are already shown below</span></div>}
+    <div className="search-controls"><Segmented value={scope} onChange={setScope} label="Recipe source" options={[{ value: 'discover', label: 'Discover' }, { value: 'saved', label: 'My recipes' }]}/><div className="source-pills"><span>Searching:</span>{scope === 'saved' ? <Badge>My saved recipes</Badge> : <>{SOURCE_OPTIONS.filter(option => selectedSources.includes(option.value)).map(option => <Badge key={option.value}>{option.label}</Badge>)}{selectedSources.length === 0 && <Badge tone="warning">No websites selected</Badge>}</>}{selectedCategories.length > 1 && <Badge tone={categoryMatch === 'all' ? 'warning' : 'green'}>{categoryMatch === 'all' ? 'Match all' : 'Match any'}</Badge>}{selectedCategories.map(category => <Badge key={category} tone="green">{categoryLabels.get(category) ?? category}</Badge>)}</div></div>
+    {remoteSearch.isFetching && <div className="search-status"><Loading label="Searching recipe websites…"/><span>Looking for new recipes from your selected websites</span></div>}
     {error && <Notice tone="warning" title="Recipe could not be saved">{error}</Notice>}
     {message && <Notice tone="success" title="Recipe saved">{message}</Notice>}
     {results.length
       ? <div className="recipe-grid">{results.map(recipe => <RecipeCard key={recipe.id} recipe={recipe} saving={finishing && pendingRecipe?.id === recipe.id} onSave={() => openSave(recipe)}/>)}</div>
-      : <EmptyState icon={<ChefHat size={40}/>} title="No recipes found" description="Try fewer categories, a broader search, or import a recipe by URL." action={<Link className="button button--primary" to="/recipes/import">Import recipe</Link>}/>
+      : <EmptyState icon={<ChefHat size={40}/>} title={scope === 'saved' ? 'No saved recipes found' : 'No new recipes found'} description={scope === 'saved' ? 'Try fewer categories, or switch to Discover to find something new.' : 'Try fewer categories, a broader search, or another recipe website.'} action={<Link className="button button--primary" to="/recipes/import">Import recipe</Link>}/>
     }
     {pendingRecipe && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !finishing) setPendingRecipe(null) }}><Card className="recipe-save-modal" role="dialog" aria-modal="true" aria-labelledby="recipe-save-title"><button type="button" className="modal-close" aria-label="Close meal type selection" disabled={finishing} onClick={() => setPendingRecipe(null)}><X/></button><p className="eyebrow">Save recipe</p><h2 id="recipe-save-title">Where should {pendingRecipe.title} be used?</h2><p className="muted">Choose every meal this recipe suits. The ingredient review will only open if something needs your input.</p><MealTypePicker value={pendingMealTypes} onChange={setPendingMealTypes}/>{finishing && <Loading label="Importing and checking ingredients…"/>}<div className="button-row"><Button variant="ghost" disabled={finishing} onClick={() => setPendingRecipe(null)}>Cancel</Button><Button disabled={finishing || !pendingMealTypes.length} onClick={finishSave}>{finishing ? 'Checking recipe…' : 'Finish saving'}</Button></div></Card></div>}
   </div>

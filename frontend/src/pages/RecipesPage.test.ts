@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BackendRecipeDetail } from '../api/client'
-import { importedRecipeNeedsReview, nextCategorySelection, savedRecipePlanningBadge } from './RecipesPage'
+import { importedRecipeNeedsReview, matchesSelectedCategories, nextCategorySelection, savedRecipePlanningBadge } from './RecipesPage'
 
 describe('saved recipe planning status', () => {
   it('does not claim a tagged recipe is usable until its recipe data is ready', () => {
@@ -56,10 +56,16 @@ describe('import review routing', () => {
 })
 
 describe('publisher category selection', () => {
-  it('allows up to three match-any filters and toggles a selected filter off', () => {
+  it('allows up to three category filters and toggles a selected filter off', () => {
     const selected = nextCategorySelection(['healthy', 'soups'], 'salads')
     expect(selected).toEqual(['healthy', 'soups', 'salads'])
     expect(nextCategorySelection(selected, 'pasta')).toEqual(selected)
     expect(nextCategorySelection(selected, 'soups')).toEqual(['healthy', 'salads'])
+  })
+
+  it('supports matching any or all selected categories', () => {
+    expect(matchesSelectedCategories(['vegetarian'], ['vegetarian', 'lunch'], 'any')).toBe(true)
+    expect(matchesSelectedCategories(['vegetarian'], ['vegetarian', 'lunch'], 'all')).toBe(false)
+    expect(matchesSelectedCategories(['vegetarian', 'lunch'], ['vegetarian', 'lunch'], 'all')).toBe(true)
   })
 })

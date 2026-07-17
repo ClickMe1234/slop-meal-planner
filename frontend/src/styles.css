@@ -283,6 +283,14 @@ button.tag { cursor: pointer; font: inherit; }
 .recipe-filter-group legend span { color:var(--primary); float:right; font-size:.68rem; }
 .recipe-filter-group>p { clear:both; color:var(--muted); font-size:.7rem; margin:6px 0 12px; }
 .recipe-filter-group>.button { margin-top:10px; }
+.category-match-control { align-items:center;clear:both;display:grid;gap:10px;grid-template-columns:auto auto minmax(0,1fr);margin:0 0 13px; }
+.category-match-control>span { color:var(--text);font-size:.69rem;font-weight:800; }
+.category-match-control>small { color:var(--muted);font-size:.64rem;line-height:1.35; }
+.category-match-toggle { background:var(--surface-2);border:1px solid var(--border);border-radius:999px;display:grid;grid-template-columns:1fr 1fr;min-height:34px;padding:3px;width:104px; }
+.category-match-toggle span { align-items:center;border-radius:999px;color:var(--muted);display:flex;font-size:.65rem;font-weight:800;justify-content:center;transition:background .18s,box-shadow .18s,color .18s; }
+.category-match-toggle--any span:first-child,.category-match-toggle--all span:last-child { background:var(--surface);box-shadow:0 2px 7px rgba(22,42,30,.12);color:var(--primary); }
+.category-match-toggle--all { background:color-mix(in srgb,var(--warning-soft) 70%,var(--surface-2));border-color:color-mix(in srgb,var(--warning) 32%,var(--border)); }
+.category-match-toggle--all span:last-child { color:var(--warning); }
 .category-filter-options { clear:both; display:flex; flex-wrap:wrap; gap:8px; }
 .category-filter-option { border:1px solid var(--border); border-radius:999px; color:var(--muted); cursor:pointer; font-size:.72rem; font-weight:700; padding:8px 11px; transition:border-color .15s,background .15s,color .15s; }
 .category-filter-option input { height:1px; opacity:0; position:absolute; width:1px; }
@@ -676,6 +684,8 @@ button.tag { cursor: pointer; font: inherit; }
 }
 
 @media (max-width: 600px) {
+  .category-match-control { align-items:start;grid-template-columns:1fr auto; }
+  .category-match-control>small { grid-column:1/-1; }
   .ingredient-guidance-tools { align-items:stretch;grid-template-columns:1fr; }
   .ingredient-guidance-tool-buttons { justify-content:flex-start; }
   .ingredient-guidance-tool-buttons>.button { flex:1; }

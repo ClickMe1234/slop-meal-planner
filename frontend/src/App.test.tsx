@@ -26,6 +26,20 @@ describe('App', () => {
     expect(goodFood).not.toBeChecked()
   })
 
+  it('keeps discovery and saved recipes in separate views', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes']}><App/></MemoryRouter></QueryClientProvider>)
+
+    expect(screen.getByRole('radio', { name: 'Discover' })).toBeChecked()
+    expect(screen.getByRole('heading', { name: 'Berry overnight oats' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Wild mushroom risotto' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: 'My recipes' }))
+
+    expect(screen.getByRole('heading', { name: 'Wild mushroom risotto' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Harissa chicken with chickpeas' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Berry overnight oats' })).not.toBeInTheDocument()
+  })
+
   it('filters by categories without a text query and enforces the three-category limit', async () => {
     const user = userEvent.setup()
     render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes']}><App/></MemoryRouter></QueryClientProvider>)
@@ -33,12 +47,29 @@ describe('App', () => {
 
     await user.click(screen.getByRole('checkbox', { name: 'Healthy' }))
     expect(screen.queryByRole('heading', { name: 'Wild mushroom risotto' })).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Harissa chicken with chickpeas' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Berry overnight oats' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('checkbox', { name: 'Soups' }))
     await user.click(screen.getByRole('checkbox', { name: 'Salads' }))
     expect(screen.getByText('3/3')).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: 'Pasta' })).toBeDisabled()
+  })
+
+  it('switches selected categories between matching any and matching all', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes']}><App/></MemoryRouter></QueryClientProvider>)
+    await user.click(screen.getByRole('button', { name: /recipe filters/i }))
+    await user.click(screen.getByRole('checkbox', { name: 'Healthy' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Dinner / Main dishes' }))
+
+    expect(screen.getByRole('heading', { name: 'Berry overnight oats' })).toBeInTheDocument()
+    const matchMode = screen.getByRole('switch', { name: 'Require all selected categories' })
+    expect(matchMode).not.toBeChecked()
+    await user.click(matchMode)
+
+    expect(matchMode).toBeChecked()
+    expect(screen.queryByRole('heading', { name: 'Berry overnight oats' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Fragrant green vegetable curry' })).toBeInTheDocument()
   })
 
   it('parks food matching in the import review', () => {

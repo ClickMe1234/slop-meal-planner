@@ -134,6 +134,25 @@ def test_multiple_categories_are_match_any_and_merge_duplicate_urls():
     asyncio.run(run())
 
 
+def test_multiple_categories_can_require_every_category():
+    async def run():
+        fetcher = FakeFetcher()
+        service = LiveSearchService(fetcher, policy=SearchPolicy(debounce_ms=0))
+
+        response = await service.search_remote(
+            "", categories=("soups", "healthy"), category_match="all"
+        )
+
+        assert response.results
+        assert all(
+            set(result.matched_categories) == {"soups", "healthy"}
+            for result in response.results
+        )
+        assert len(response.results) < 3
+
+    asyncio.run(run())
+
+
 def test_default_registry_only_enables_current_publishers():
     assert {adapter.key for adapter in default_registry.adapters} == {"good_food", "allrecipes"}
 
