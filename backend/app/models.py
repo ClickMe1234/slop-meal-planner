@@ -387,6 +387,7 @@ class MealBatch(IdMixin, Base):
     servings: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     planned_cook_date: Mapped[date] = mapped_column(Date, nullable=False)
     cooked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cooked_weight_grams: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     parent_batch_id: Mapped[str | None] = mapped_column(
         ForeignKey("meal_batch.id", ondelete="CASCADE"), nullable=True, index=True
     )

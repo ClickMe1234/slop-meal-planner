@@ -1,4 +1,4 @@
-import { Check, ChefHat, ChevronLeft, ChevronRight, Clock3, ExternalLink, RefreshCw } from 'lucide-react'
+import { Check, ChefHat, ChevronLeft, ChevronRight, Clock3, ExternalLink, RefreshCw, Scale } from 'lucide-react'
 import { useMemo, useState, type CSSProperties } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NutritionRings } from '../components/Nutrition'
@@ -56,6 +56,35 @@ function CookControl({ cooked, pending = false, onClick }: { cooked: boolean; pe
   </button>
 }
 
+export function BatchWeightControl({ servings, portions, savedWeight, draft, pending = false, onDraftChange, onSave, onClear }: {
+  servings: number
+  portions: Array<{ memberId: string; name: string; servings: number }>
+  savedWeight?: number
+  draft: string
+  pending?: boolean
+  onDraftChange: (value: string) => void
+  onSave: () => void
+  onClear: () => void
+}) {
+  const numericWeight = Number(draft)
+  const validWeight = draft.trim() !== '' && Number.isFinite(numericWeight) && numericWeight > 0
+  const gramsPerServing = validWeight && servings > 0 ? numericWeight / servings : undefined
+
+  return <form className="batch-weight" aria-label="Cooked batch weight" onSubmit={event => { event.preventDefault(); onSave() }}>
+    <div className="batch-weight__heading"><span><Scale/></span><div><strong>Portion by weight</strong><small>Optional · weigh the finished batch</small></div></div>
+    <label className="batch-weight__input"><span className="sr-only">Total cooked batch weight</span><span className="input-suffix"><input type="number" min="1" step="1" inputMode="numeric" placeholder="Total weight" aria-label="Total cooked batch weight" value={draft} onChange={event => onDraftChange(event.target.value)}/><span>g</span></span></label>
+    <output className="batch-weight__result" aria-live="polite">
+      <span>Portion guide</span>
+      <div className="batch-weight__portions">{portions.map(portion => <div className="batch-weight__portion" key={portion.memberId}>
+        <div><b>{portion.name}</b><small>{portion.servings} {portion.servings === 1 ? 'serving' : 'servings'}</small></div>
+        <strong>{gramsPerServing === undefined ? '—' : `${Math.round(gramsPerServing * portion.servings)} g`}</strong>
+      </div>)}</div>
+      <small>{servings} {servings === 1 ? 'serving' : 'servings'} in the batch</small>
+    </output>
+    <div className="batch-weight__actions"><Button type="submit" disabled={!validWeight || pending}>{pending ? 'Saving…' : savedWeight === undefined ? 'Save weight' : 'Update'}</Button>{savedWeight !== undefined && <Button type="button" variant="ghost" disabled={pending} onClick={onClear}>Clear</Button>}</div>
+  </form>
+}
+
 function NutritionCard({ totals, calorieTarget, macroTargets }: {
   totals: NutritionTotals
   calorieTarget: number
@@ -81,6 +110,8 @@ function NutritionCard({ totals, calorieTarget, macroTargets }: {
 function DemoWeekPage() {
   const [selected, setSelected] = useState(0)
   const [cooked, setCooked] = useState<string[]>([])
+  const [batchWeights, setBatchWeights] = useState<Record<string, number>>({})
+  const [weightDrafts, setWeightDrafts] = useState<Record<string, string>>({})
   const day = demoWeek[selected]
   const mealGroups = groupByMealType(day.meals, meal => meal.kind)
   const totals = useMemo(() => day.meals.filter(item => cooked.includes(item.id)).reduce((sum, item) => ({
@@ -106,7 +137,28 @@ function DemoWeekPage() {
               <RecipePreview imageUrl={recipe?.imageUrl}/>
               <MealBatchInfo label={meal.batchLabel ? 'Batch plan' : 'Portion'} servings={meal.batchLabel ?? `${meal.portions} serving`}/>
               <div className="meal-body"><div><RecipeTitle title={meal.title} sourceUrl={recipe?.sourceUrl}/><p>{meal.portions} serving · {meal.nutrition.calories} kcal</p></div><div className="meal-macros"><span>P <strong>{meal.nutrition.protein}g</strong></span><span>C <strong>{meal.nutrition.carbs}g</strong></span><span>F <strong>{meal.nutrition.fat}g</strong></span></div></div>
-              <div className="meal-actions"><CookControl cooked={isCooked} onClick={() => setCooked(items => isCooked ? items.filter(id => id !== meal.id) : [...items, meal.id])}/></div>
+              <div className="meal-actions"><CookControl cooked={isCooked} onClick={() => {
+                setCooked(items => isCooked ? items.filter(id => id !== meal.id) : [...items, meal.id])
+                if (isCooked) {
+                  setBatchWeights(items => { const next = { ...items }; delete next[meal.id]; return next })
+                  setWeightDrafts(items => { const next = { ...items }; delete next[meal.id]; return next })
+                }
+              }}/></div>
+              {isCooked && <BatchWeightControl
+                servings={meal.portions}
+                portions={[{ memberId: 'demo', name: 'You', servings: meal.portions }]}
+                savedWeight={batchWeights[meal.id]}
+                draft={weightDrafts[meal.id] ?? String(batchWeights[meal.id] ?? '')}
+                onDraftChange={value => setWeightDrafts(items => ({ ...items, [meal.id]: value }))}
+                onSave={() => {
+                setBatchWeights(items => ({ ...items, [meal.id]: Number(weightDrafts[meal.id] ?? batchWeights[meal.id]) }))
+                setWeightDrafts(items => { const next = { ...items }; delete next[meal.id]; return next })
+                }}
+                onClear={() => {
+                setBatchWeights(items => { const next = { ...items }; delete next[meal.id]; return next })
+                setWeightDrafts(items => ({ ...items, [meal.id]: '' }))
+                }}
+              />}
             </Card>
           })}</div>
         </section>)}</div>
@@ -132,8 +184,11 @@ function LiveWeekPage() {
   const [selected, setSelected] = useState(0)
   const [cookedOverrides, setCookedOverrides] = useState<Record<string, boolean>>({})
   const [pendingBatches, setPendingBatches] = useState<string[]>([])
+  const [pendingWeights, setPendingWeights] = useState<string[]>([])
+  const [weightDrafts, setWeightDrafts] = useState<Record<string, string>>({})
   const [cookError, setCookError] = useState<string>()
   const session = useQuery({ queryKey: ['session'], queryFn: api.me, retry: false })
+  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers })
   const plans = useQuery({ queryKey: ['plans'], queryFn: api.listPlans, refetchOnMount: 'always' })
   const current = plans.data?.find(plan => plan.status === 'accepted') ?? plans.data?.find(plan => plan.status === 'ready')
   const detail = useQuery({ queryKey: ['plan', current?.id], queryFn: () => api.getPlan(current!.id), enabled: Boolean(current) })
@@ -194,6 +249,24 @@ function LiveWeekPage() {
     }
   }
 
+  const saveCookedWeight = async (batchId: string, cookedWeightGrams: number | null) => {
+    setCookError(undefined)
+    setPendingWeights(items => [...items, batchId])
+    try {
+      await api.updateBatchCookedWeight(current.id, batchId, cookedWeightGrams)
+      await queryClient.invalidateQueries({ queryKey: ['plan', current.id] })
+      setWeightDrafts(items => {
+        const next = { ...items }
+        delete next[batchId]
+        return next
+      })
+    } catch (error) {
+      setCookError(error instanceof Error ? error.message : 'Could not save this batch weight.')
+    } finally {
+      setPendingWeights(items => items.filter(id => id !== batchId))
+    }
+  }
+
   return <div className="page">
     <PageHeader eyebrow={`${current.start_date} – ${current.end_date}`} title="This week" description="Accepted batches reserve pantry stock and consume it only when you mark them cooked." actions={<Button>Plan next week</Button>}/>
     {current.status === 'ready' && <Notice tone="warning" title="Draft plan">Accept this plan from the Plan page before pantry stock is reserved.</Notice>}
@@ -212,6 +285,20 @@ function LiveWeekPage() {
               <MealBatchInfo label={meal.component_slot > 0 ? `Side ${meal.component_slot}` : 'Batch'} servings={`${meal.batch_servings} servings`}/>
               <div className="meal-body"><div><RecipeTitle title={meal.recipe_title} sourceUrl={meal.source_url}/><p>{Number(meal.portions.find(portion => portion.member_id === memberId)?.servings ?? 0)} serving · {Math.round(nutrition.calories)} kcal</p></div><div className="meal-macros"><span>P <strong>{Math.round(nutrition.protein)}g</strong></span><span>C <strong>{Math.round(nutrition.carbs)}g</strong></span><span>F <strong>{Math.round(nutrition.fat)}g</strong></span></div></div>
               <div className="meal-actions"><CookControl cooked={cooked} pending={pendingBatches.includes(meal.batch_id)} onClick={() => toggleCooked(meal.batch_id, cooked)}/></div>
+              {cooked && <BatchWeightControl
+                servings={Number(meal.batch_servings)}
+                portions={meal.portions.map((portion, index) => ({
+                  memberId: portion.member_id,
+                  name: members.data?.find(member => member.id === portion.member_id)?.name ?? (portion.member_id === memberId ? 'You' : `Person ${index + 1}`),
+                  servings: Number(portion.servings),
+                }))}
+                savedWeight={meal.cooked_weight_grams == null ? undefined : Number(meal.cooked_weight_grams)}
+                draft={weightDrafts[meal.batch_id] ?? String(meal.cooked_weight_grams ?? '')}
+                pending={pendingWeights.includes(meal.batch_id)}
+                onDraftChange={value => setWeightDrafts(items => ({ ...items, [meal.batch_id]: value }))}
+                onSave={() => saveCookedWeight(meal.batch_id, Number(weightDrafts[meal.batch_id] ?? meal.cooked_weight_grams))}
+                onClear={() => saveCookedWeight(meal.batch_id, null)}
+              />}
             </Card>
           })}</div>
         </section>)}</div>

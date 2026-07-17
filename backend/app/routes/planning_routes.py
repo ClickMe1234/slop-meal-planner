@@ -1,6 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import re
 
 from fastapi import APIRouter, Depends
@@ -31,6 +31,7 @@ from ..models import (
     TargetProfile,
 )
 from ..schemas import (
+    BatchCookedWeightUpdate,
     PlanGenerateRequest,
     PlanOut,
     PlanRecipeReplaceRequest,
@@ -927,6 +928,16 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
                     else None
                 ),
                 "cooked_at": batch.cooked_at,
+                "cooked_weight_grams": batch.cooked_weight_grams,
+                "serving_weight_grams": (
+                    int(
+                        (Decimal(batch.cooked_weight_grams) / Decimal(batch.servings)).quantize(
+                            Decimal("1"), rounding=ROUND_HALF_UP
+                        )
+                    )
+                    if batch.cooked_weight_grams is not None and batch.servings > 0
+                    else None
+                ),
                 "portions": [
                     {"member_id": portion.member_id, "servings": portion.servings}
                     for portion in portions
@@ -1346,6 +1357,32 @@ def mark_batch_cooked(
     db.commit()
 
 
+@router.patch("/{plan_id}/batches/{batch_id}/cooked-weight", status_code=204)
+def update_batch_cooked_weight(
+    plan_id: str,
+    batch_id: str,
+    payload: BatchCookedWeightUpdate,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    plan = db.get(MealPlan, plan_id)
+    batch = db.get(MealBatch, batch_id)
+    if (
+        plan is None
+        or plan.household_id != context.user.household_id
+        or batch is None
+        or batch.meal_plan_id != plan.id
+    ):
+        raise NotFoundError("Meal batch")
+    if batch.cooked_at is None:
+        raise DomainError(
+            "BATCH_NOT_COOKED",
+            "Mark this batch cooked before recording its finished weight",
+        )
+    batch.cooked_weight_grams = payload.cooked_weight_grams
+    db.commit()
+
+
 @router.delete("/{plan_id}/batches/{batch_id}/cooked", status_code=204)
 def unmark_batch_cooked(
     plan_id: str,
@@ -1418,4 +1455,5 @@ def unmark_batch_cooked(
             else:
                 reservation.quantity = Decimal(reservation.quantity) + restore_quantity
         cooking_batch.cooked_at = None
+        cooking_batch.cooked_weight_grams = None
     db.commit()

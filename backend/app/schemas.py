@@ -375,6 +375,10 @@ class PlanSideRemoveRequest(APIModel):
     ignore_nutrition_tolerances: bool = False
 
 
+class BatchCookedWeightUpdate(APIModel):
+    cooked_weight_grams: Decimal | None = Field(default=None, gt=0)
+
+
 class PantryLotCreate(APIModel):
     display_name: str = Field(min_length=1, max_length=240)
     quantity: Decimal = Field(gt=0)

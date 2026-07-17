@@ -155,6 +155,7 @@ export const api = {
   acceptPlan: (id: string) => request<BackendPlan>(`/meal-plans/${id}/accept`, { method: 'POST' }),
   markBatchCooked: (planId: string, batchId: string) => request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, { method: 'POST' }),
   unmarkBatchCooked: (planId: string, batchId: string) => request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, { method: 'DELETE' }),
+  updateBatchCookedWeight: (planId: string, batchId: string, cookedWeightGrams: number | null) => request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked-weight`, { method: 'PATCH', body: JSON.stringify({ cooked_weight_grams: cookedWeightGrams }) }),
   buildShoppingList: (planId: string) => request<BackendShoppingList>('/shopping-lists/build', { method: 'POST', body: JSON.stringify({ meal_plan_id: planId, name: 'Current shopping list' }) }),
   backupStatus: () => request<BackendBackupStatus>('/system/backups'),
   createBackup: () => request<BackendBackupStatus>('/system/backups', { method: 'POST' })
@@ -401,6 +402,8 @@ export interface BackendPlanDetail {
     planned_cook_date?: string
     nutrition_per_serving?: Record<string, number>
     cooked_at?: string
+    cooked_weight_grams?: number | null
+    serving_weight_grams?: number | null
     portions: Array<{ member_id: string; servings: number }>
   }>
   daily_nutrition?: Array<{
