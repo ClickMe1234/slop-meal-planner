@@ -154,6 +154,7 @@ export const api = {
   removePlanSide: (planId: string, sideBatchId: string, expectedPlanVersion: number, ignoreNutritionTolerances = false) => request<BackendPlanDetail>(`/meal-plans/${planId}/batches/${sideBatchId}/sides`, { method: 'DELETE', body: JSON.stringify({ expected_plan_version: expectedPlanVersion, ignore_nutrition_tolerances: ignoreNutritionTolerances }) }),
   acceptPlan: (id: string) => request<BackendPlan>(`/meal-plans/${id}/accept`, { method: 'POST' }),
   markBatchCooked: (planId: string, batchId: string) => request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, { method: 'POST' }),
+  unmarkBatchCooked: (planId: string, batchId: string) => request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, { method: 'DELETE' }),
   buildShoppingList: (planId: string) => request<BackendShoppingList>('/shopping-lists/build', { method: 'POST', body: JSON.stringify({ meal_plan_id: planId, name: 'Current shopping list' }) }),
   backupStatus: () => request<BackendBackupStatus>('/system/backups'),
   createBackup: () => request<BackendBackupStatus>('/system/backups', { method: 'POST' })
@@ -395,6 +396,7 @@ export interface BackendPlanDetail {
     recipe_id: string
     recipe_title: string
     source_url?: string
+    image_url?: string
     batch_servings: number
     planned_cook_date?: string
     nutrition_per_serving?: Record<string, number>

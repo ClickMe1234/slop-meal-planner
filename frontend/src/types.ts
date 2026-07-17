@@ -40,6 +40,8 @@ export interface PlannedMeal {
   portions: number
   nutrition: Nutrition
   batchLabel?: string
+  sourceUrl?: string
+  imageUrl?: string
   locked?: boolean
 }
 

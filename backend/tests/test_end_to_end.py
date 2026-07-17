@@ -211,3 +211,21 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     assert pantry["on_hand_quantity"] == "0"
     assert pantry["on_hand_quantity_display"] == "0 g"
     assert Decimal(pantry["reserved_quantity"]) == 0
+
+    uncooked = client.delete(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked", headers=headers
+    )
+    assert uncooked.status_code == 204
+    pantry = client.get("/api/v1/pantry-items").json()[0]
+    assert pantry["on_hand_quantity"] == "100"
+    assert pantry["reserved_quantity"] == "100"
+    assert pantry["usable_quantity"] == "0"
+    assert client.get(f"/api/v1/meal-plans/{plan_id}").json()["occurrences"][0]["cooked_at"] is None
+
+    cooked_again = client.post(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked", headers=headers
+    )
+    assert cooked_again.status_code == 204
+    pantry = client.get("/api/v1/pantry-items").json()[0]
+    assert pantry["on_hand_quantity"] == "0"
+    assert Decimal(pantry["reserved_quantity"]) == 0

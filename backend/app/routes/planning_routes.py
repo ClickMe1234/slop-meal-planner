@@ -18,6 +18,7 @@ from ..models import (
     MealBatch,
     MealOccurrence,
     MealPlan,
+    PantryLot,
     PantryReservation,
     PantryTransaction,
     PlanStatus,
@@ -917,6 +918,7 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
                 "recipe_id": recipe.id,
                 "recipe_title": recipe.title,
                 "source_url": recipe.source_url,
+                "image_url": recipe.image_url,
                 "batch_servings": batch.servings,
                 "planned_cook_date": batch.planned_cook_date,
                 "nutrition_per_serving": (
@@ -1341,4 +1343,79 @@ def mark_batch_cooked(
             )
             db.delete(reservation)
         cooking_batch.cooked_at = cooked_at
+    db.commit()
+
+
+@router.delete("/{plan_id}/batches/{batch_id}/cooked", status_code=204)
+def unmark_batch_cooked(
+    plan_id: str,
+    batch_id: str,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    plan = db.get(MealPlan, plan_id)
+    batch = db.get(MealBatch, batch_id)
+    if (
+        plan is None
+        or plan.household_id != context.user.household_id
+        or batch is None
+        or batch.meal_plan_id != plan.id
+    ):
+        raise NotFoundError("Meal batch")
+    root_batch_id = batch.parent_batch_id or batch.id
+    cooking_batches = db.scalars(
+        select(MealBatch).where(
+            (MealBatch.id == root_batch_id)
+            | (MealBatch.parent_batch_id == root_batch_id)
+        )
+    ).all()
+    for cooking_batch in cooking_batches:
+        if not cooking_batch.cooked_at:
+            continue
+        transactions = db.scalars(
+            select(PantryTransaction).where(
+                PantryTransaction.reference_type == "meal_batch",
+                PantryTransaction.reference_id == cooking_batch.id,
+                PantryTransaction.reason.in_(
+                    ("meal_batch_cooked", "meal_batch_uncooked")
+                ),
+            )
+        ).all()
+        net_by_lot: dict[str, Decimal] = defaultdict(Decimal)
+        for transaction in transactions:
+            net_by_lot[transaction.pantry_lot_id] += Decimal(transaction.quantity_delta)
+        for pantry_lot_id, net_quantity in net_by_lot.items():
+            restore_quantity = max(-net_quantity, Decimal("0"))
+            if restore_quantity <= 0:
+                continue
+            lot = db.get(PantryLot, pantry_lot_id)
+            if lot is None:
+                continue
+            db.add(
+                PantryTransaction(
+                    pantry_lot_id=pantry_lot_id,
+                    quantity_delta=restore_quantity,
+                    reason="meal_batch_uncooked",
+                    reference_type="meal_batch",
+                    reference_id=cooking_batch.id,
+                )
+            )
+            reservation = db.scalar(
+                select(PantryReservation).where(
+                    PantryReservation.pantry_lot_id == pantry_lot_id,
+                    PantryReservation.meal_batch_id == cooking_batch.id,
+                )
+            )
+            if reservation is None:
+                db.add(
+                    PantryReservation(
+                        pantry_lot_id=pantry_lot_id,
+                        meal_batch_id=cooking_batch.id,
+                        quantity=restore_quantity,
+                        unit=lot.unit,
+                    )
+                )
+            else:
+                reservation.quantity = Decimal(reservation.quantity) + restore_quantity
+        cooking_batch.cooked_at = None
     db.commit()
