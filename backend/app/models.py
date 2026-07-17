@@ -69,6 +69,14 @@ class RecipeEligibility(str, enum.Enum):
     ARCHIVED = "archived"
 
 
+class PublisherMetadataStatus(str, enum.Enum):
+    NOT_APPLICABLE = "not_applicable"
+    PENDING = "pending"
+    REFRESHING = "refreshing"
+    READY = "ready"
+    FAILED = "failed"
+
+
 class JobStatus(str, enum.Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -201,9 +209,18 @@ class Recipe(IdMixin, AuditMixin, Base):
     publisher: Mapped[str | None] = mapped_column(String(160))
     image_url: Mapped[str | None] = mapped_column(Text)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    publisher_metadata_status: Mapped[str] = mapped_column(
+        String(30), default=PublisherMetadataStatus.NOT_APPLICABLE.value, index=True
+    )
+    publisher_metadata_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    publisher_metadata_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    publisher_metadata_error: Mapped[str | None] = mapped_column(String(500))
 
     meal_type_tags: Mapped[list[RecipeMealType]] = relationship(
         back_populates="recipe", cascade="all, delete-orphan", order_by="RecipeMealType.meal_type"
+    )
+    publisher_tags: Mapped[list[RecipePublisherTag]] = relationship(
+        back_populates="recipe", cascade="all, delete-orphan", order_by="RecipePublisherTag.label"
     )
 
 
@@ -221,6 +238,21 @@ class RecipeMealType(IdMixin, Base):
     meal_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
 
     recipe: Mapped[Recipe] = relationship(back_populates="meal_type_tags")
+
+
+class RecipePublisherTag(IdMixin, Base):
+    __tablename__ = "recipe_publisher_tag"
+    __table_args__ = (
+        UniqueConstraint("recipe_id", "kind", "normalised_value"),
+        Index("ix_recipe_publisher_tag_normalised_value", "normalised_value"),
+    )
+
+    recipe_id: Mapped[str] = mapped_column(ForeignKey("recipe.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    label: Mapped[str] = mapped_column(String(160), nullable=False)
+    normalised_value: Mapped[str] = mapped_column(String(160), nullable=False)
+
+    recipe: Mapped[Recipe] = relationship(back_populates="publisher_tags")
 
 
 class RecipeVersion(IdMixin, Base):

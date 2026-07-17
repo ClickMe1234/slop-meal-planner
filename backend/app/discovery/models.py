@@ -53,6 +53,7 @@ class SearchResult:
     already_saved: bool = False
     star_rating: Decimal | None = None
     rating_count: int | None = None
+    matched_categories: tuple[str, ...] = ()
 
     @property
     def rating_rank(self) -> Decimal | None:
@@ -73,6 +74,14 @@ class ExtractedRecipe:
     extraction_method: str
     review_required: bool
     review_reasons: tuple[str, ...]
+    publisher_tags: tuple[PublisherTag, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PublisherTag:
+    kind: str
+    label: str
+    normalised_value: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +90,7 @@ class SourceSearchResponse:
     results: tuple[SearchResult, ...] = ()
     error_code: str | None = None
     error_message: str | None = None
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

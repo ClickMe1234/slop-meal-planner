@@ -6,7 +6,9 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from dataclasses import replace
 
+from .categories import CATEGORY_BY_KEY, RecipeCategory
 from .errors import DiscoveryError
 from .extraction import extract_recipe
 from .models import CombinedSearchResponse, ExtractedRecipe, SearchResult, SourceSearchResponse
@@ -53,6 +55,7 @@ class LiveSearchService:
         self.policy = policy
         self.saved_url_lookup = saved_url_lookup
         self._cache: dict[str, tuple[float, tuple[SourceSearchResponse, ...]]] = {}
+        self._category_cache: dict[tuple[str, str], tuple[float, SourceSearchResponse]] = {}
         self._preview_cache: dict[str, tuple[float, ExtractedRecipe]] = {}
         self._preview_locks: dict[str, asyncio.Lock] = {}
         self._generations: dict[str, int] = {}
@@ -69,9 +72,10 @@ class LiveSearchService:
         request_key: str | None = None,
         sources: tuple[str, ...] | None = None,
         source_queries: dict[str, str] | None = None,
+        categories: tuple[str, ...] = (),
     ) -> CombinedSearchResponse:
         normalised = self.normalise_query(query)
-        if len(normalised) < self.policy.minimum_query_length:
+        if len(normalised) < self.policy.minimum_query_length and not categories:
             return CombinedSearchResponse(normalised, (), self.policy.debounce_ms)
 
         selected = set(sources) if sources is not None else None
@@ -88,7 +92,8 @@ class LiveSearchService:
             f"{adapter.key}={normalised_source_queries.get(adapter.key, normalised)}"
             for adapter in adapters
         )
-        cache_key = f"{source_key}:{query_key}"
+        category_key = ",".join(categories)
+        cache_key = f"{source_key}:{query_key}:{category_key}"
 
         generation = None
         if request_key:
@@ -100,9 +105,31 @@ class LiveSearchService:
             return CombinedSearchResponse(normalised, (), self.policy.debounce_ms, superseded=True)
 
         now = time.monotonic()
-        cached = self._cache.get(cache_key)
+        cached = self._cache.get(cache_key) if not categories else None
         cache_hit = cached is not None and now <= cached[0]
-        if not cache_hit:
+        if categories:
+            before = {
+                (adapter.key, category): self._category_cache.get((adapter.key, category))
+                for adapter in adapters
+                for category in categories
+            }
+            source_results = tuple(
+                await asyncio.gather(
+                    *(
+                        self._search_source_categories(
+                            adapter,
+                            tuple(CATEGORY_BY_KEY[key] for key in categories),
+                            normalised_source_queries.get(adapter.key, normalised),
+                        )
+                        for adapter in adapters
+                    )
+                )
+            )
+            cache_hit = all(
+                cached_category is not None and now <= cached_category[0]
+                for cached_category in before.values()
+            )
+        elif not cache_hit:
             source_results = tuple(
                 await asyncio.gather(
                     *(
@@ -124,7 +151,7 @@ class LiveSearchService:
                 self._cache.pop(next(iter(self._cache)))
             self._cache[cache_key] = (now + ttl, source_results)
 
-        if cache_hit:
+        if cache_hit and cached is not None:
             source_results = cached[1]
 
         if self.saved_url_lookup:
@@ -145,11 +172,13 @@ class LiveSearchService:
                             already_saved=result.url in saved,
                             star_rating=result.star_rating,
                             rating_count=result.rating_count,
+                            matched_categories=result.matched_categories,
                         )
                         for result in source.results
                     ),
                     error_code=source.error_code,
                     error_message=source.error_message,
+                    warnings=source.warnings,
                 )
                 for source in source_results
             )
@@ -162,12 +191,14 @@ class LiveSearchService:
         request_key: str | None = None,
         sources: tuple[str, ...] | None = None,
         source_queries: dict[str, str] | None = None,
+        categories: tuple[str, ...] = (),
     ) -> CombinedSearchResponse:
         return await self.search_remote(
             query,
             request_key=request_key,
             sources=sources,
             source_queries=source_queries,
+            categories=categories,
         )
 
     async def nutrition_preview(self, url: str) -> ExtractedRecipe:
@@ -238,6 +269,126 @@ class LiveSearchService:
                 error_code="SOURCE_PARSE_FAILED",
                 error_message=f"{adapter.display_name} results could not be read. {adapter.limitation()}",
             )
+
+    async def _search_source_categories(
+        self,
+        adapter,
+        categories: tuple[RecipeCategory, ...],
+        query: str,
+    ) -> SourceSearchResponse:
+        responses = await asyncio.gather(
+            *(self._search_category(adapter, category) for category in categories)
+        )
+        merged: dict[str, SearchResult] = {}
+        warnings: list[str] = []
+        for category, response in zip(categories, responses, strict=True):
+            if response.error_code:
+                warnings.append(f"{category.label}: {response.error_message}")
+            for result in response.results:
+                existing = merged.get(result.url)
+                if existing is None:
+                    merged[result.url] = result
+                    continue
+                merged[result.url] = replace(
+                    existing,
+                    image_url=existing.image_url or result.image_url,
+                    publisher_nutrition=existing.publisher_nutrition or result.publisher_nutrition,
+                    star_rating=existing.star_rating or result.star_rating,
+                    rating_count=(
+                        existing.rating_count
+                        if existing.rating_count is not None
+                        else result.rating_count
+                    ),
+                    matched_categories=tuple(dict.fromkeys(
+                        (*existing.matched_categories, *result.matched_categories)
+                    )),
+                )
+
+        ranked = []
+        for result in merged.values():
+            relevance = self._relevance_score(result, query) if query else 1
+            if relevance > 0:
+                ranked.append((relevance, result))
+        ranked.sort(key=lambda item: (
+            item[1].rating_rank is None,
+            -(item[1].rating_rank or 0),
+            -(item[1].rating_count or 0),
+            -item[0],
+            item[1].title.casefold(),
+        ))
+        results = tuple(result for _, result in ranked)[: self.policy.maximum_results_per_source]
+        if results or not warnings:
+            return SourceSearchResponse(adapter.key, results, warnings=tuple(warnings))
+        return SourceSearchResponse(
+            adapter.key,
+            error_code="CATEGORY_SEARCH_FAILED",
+            error_message=f"{adapter.display_name} category results could not be loaded.",
+            warnings=tuple(warnings),
+        )
+
+    async def _search_category(
+        self,
+        adapter,
+        category: RecipeCategory,
+    ) -> SourceSearchResponse:
+        cache_key = (adapter.key, category.key)
+        now = time.monotonic()
+        cached = self._category_cache.get(cache_key)
+        if cached is not None and now <= cached[0]:
+            return cached[1]
+
+        target = category.target_for(adapter.key)
+        try:
+            if target.url:
+                url = target.url
+                html = await self.fetcher.fetch_text(url, allowed_hosts=set(adapter.hosts))
+                parsed = adapter.parse_search_results(html, search_url=url)
+                ordered = sorted(
+                    parsed,
+                    key=lambda result: (
+                        result.rating_rank is None,
+                        -(result.rating_rank or 0),
+                        -(result.rating_count or 0),
+                        result.title.casefold(),
+                    ),
+                )
+                results = tuple(
+                    replace(result, matched_categories=(category.key,))
+                    for result in ordered[: self.policy.maximum_results_per_source]
+                )
+                response = SourceSearchResponse(adapter.key, results)
+            else:
+                response = await self._search_source(adapter, target.query or category.label)
+                response = replace(
+                    response,
+                    results=tuple(
+                        replace(result, matched_categories=(category.key,))
+                        for result in response.results
+                    ),
+                )
+        except DiscoveryError as exc:
+            response = SourceSearchResponse(
+                adapter.key, error_code=exc.code, error_message=str(exc)
+            )
+        except Exception:
+            response = SourceSearchResponse(
+                adapter.key,
+                error_code="SOURCE_PARSE_FAILED",
+                error_message=f"{adapter.display_name} results could not be read. {adapter.limitation()}",
+            )
+
+        ttl = (
+            self.policy.error_cache_ttl_seconds
+            if response.error_code
+            else self.policy.cache_ttl_seconds
+        )
+        self._category_cache = {
+            key: value for key, value in self._category_cache.items() if now <= value[0]
+        }
+        if len(self._category_cache) >= self.policy.maximum_cache_entries:
+            self._category_cache.pop(next(iter(self._category_cache)))
+        self._category_cache[cache_key] = (now + ttl, response)
+        return response
 
     @staticmethod
     def _relevance_score(result: SearchResult, query: str) -> int:

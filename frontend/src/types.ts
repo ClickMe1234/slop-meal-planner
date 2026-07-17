@@ -28,6 +28,8 @@ export interface Recipe {
   starRating?: number
   ratingCount?: number
   ingredients?: string[]
+  publisherTags?: string[]
+  matchedCategories?: string[]
 }
 
 export interface PlannedMeal {

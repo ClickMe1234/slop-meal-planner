@@ -1,49 +1,107 @@
 # Savour Meal Planner
 
-Savour is a private, self-hosted household meal planner. It imports recipes,
-uses complete publisher-reported per-serving nutrition for planning, builds
-plans against per-person targets, reserves pantry stock, and produces an
-offline-capable shopping list.
+Savour is a private, self-hosted household meal planner. It imports real
+recipes, plans meals against per-person nutrition targets, reserves pantry
+stock, and produces an offline-capable shopping list.
 
 The production target is an Unraid server on a trusted LAN. The repository also
-contains a demo mode so the complete responsive light/dark interface can be
-evaluated without first loading a nutrition dataset.
+includes a demo mode so the complete responsive light/dark interface can be
+evaluated without accounts, a database, or publisher access.
 
-## What is implemented
+Current release: **0.5.0**. See [CHANGELOG.md](CHANGELOG.md) for the complete
+release history.
 
-- Owner/collaborator accounts, Argon2 passwords, server-side sessions and CSRF.
-- Calorie **or** macro target modes with user-set hard tolerance and 4/4/9
-  feasibility validation.
-- Versioned custom and URL-imported recipes; publisher instructions are not
-  copied.
-- Good Food and Allrecipes search adapters with website filters, stable search
-  thumbnails, publisher nutrition and saved-URL deduplication. Great British
-  Chefs is currently disabled.
+## Implemented features
+
+### Household and targets
+
+- Owner and collaborator accounts with Argon2 password hashing, server-side
+  sessions, CSRF protection, password changes, and account management.
+- Multiple household member profiles with attendance recorded per person,
+  date, and meal.
+- Per-person calorie or macro targets with a user-defined hard tolerance.
+  Calorie feasibility uses the 4/4/9 rule, and calorie mode can also enforce
+  hard protein, carbohydrate, and fat minimums.
+- Configurable meal-level target allocation across breakfast, lunch, dinner,
+  and snacks.
+- Saved allergies, exclusions, dislikes, and preferences that are applied to
+  planning as household rules.
+- British or American ingredient vocabulary, with equivalent names accepted in
+  searches and the selected vocabulary used in recipes, pantry, and shopping.
+
+### Recipes and discovery
+
+- Versioned custom recipes and URL-imported recipes with source provenance.
+  Publisher instructions are not copied into the application.
+- Recipe review for serving yield, ingredient quantities, units, ambiguous
+  parsing, and planner readiness. User corrections are preserved across later
+  processing.
+- Active Good Food and Allrecipes search adapters with source filters, stable
+  thumbnails, publisher nutrition, publisher ratings/counts, relevance
+  ranking, and saved-URL deduplication.
 - Safe generic URL imports using JSON-LD first and a review-required semantic
   fallback.
-- CoFID CSV ingestion plus USDA FoodData Central and Open Food Facts provider
-  boundaries, retaining dataset version and provenance.
-- Publisher per-serving nutrition is used when all four planning nutrients are
-  present. Ingredient-to-food matching and calculated nutrition are parked and
-  are not used by automatic planning.
-- Automatic shared-recipe planning with individual quarter-serving portions,
-  hard exclusions, must/prefer/exclude ingredient guidance and explicit
-  infeasibility errors.
-- Multi-occurrence cooked batches and acknowledgement for allocations beyond
-  the 48-hour leftover window.
-- Pantry reservations on plan acceptance and consumption when a batch is marked
-  cooked.
-- Exact shopping requirements, practical rounding for countable items, pantry
-  subtraction, manual-item/check-state preservation and explicit
-  purchased-to-pantry confirmation.
-- Responsive installable PWA, system/light/dark themes, local offline shopping
-  storage, device sharing, clipboard and text export.
-- Docker Compose stack for web, worker, scheduler, PostgreSQL and Redis, plus
-  verified backup/restore scripts and an Unraid reference template.
+- Meal tags for breakfast, lunch, dinner, snack, and side recipes. Untagged or
+  unreviewed recipes remain saved but are excluded from automatic planning.
+- Ingredient parsing that retains preparation descriptors, understands
+  descriptive measures such as handfuls and sprigs, and routes low-confidence
+  results to review.
+- Explicit ingredient arithmetic, including package expressions such as
+  `2 x 55 g`, nested item counts, and unambiguous fractional item descriptions.
 
-The full product reasoning, scraper constraints, data-source research and
+### Nutrition and planning
+
+- Automatic planning from recipes with complete publisher-reported per-serving
+  calories, protein, carbohydrate, and fat. Nutrition provenance is retained.
+- CoFID CSV ingestion plus USDA FoodData Central and Open Food Facts provider
+  boundaries, with dataset version and source provenance retained for future
+  catalogue and calculation work.
+- Multi-day plans with per-person portions from 0.5 to 2.0 servings in
+  quarter-serving increments.
+- Shared cooked batches that can cover multiple meal occurrences, with an
+  acknowledgement when an allocation extends beyond the 48-hour leftover
+  window.
+- Hard exclusions, must-use, preferred, and excluded ingredient guidance, plus
+  explicit infeasibility errors and actionable review links.
+- Plan review with daily per-person nutrition, collapsible days, whole-batch
+  recipe replacement, and re-quantification before acceptance.
+- Up to two batch-wide side or snack selections. Attached components flow
+  through plan summaries, shopping, pantry reservations, and cooking.
+- Atomic plan acceptance, pantry reservations, and separate consumption when a
+  batch is marked cooked.
+
+### Pantry and shopping
+
+- Pantry inventory, adjustments, reservations, cooking deductions, and pantry
+  subtraction from generated shopping requirements.
+- Exact calculated requirements alongside practical unit-aware purchase
+  quantities: whole countable items, culinary fractions, whole metric amounts,
+  and two-decimal litre values are handled consistently in shopping and pantry
+  balances.
+- Manual shopping items, checked-state preservation, rebuild-safe active lists,
+  and explicit confirmation when checked purchases are added to the pantry.
+- Inline ingredient-name editing. Generated-name corrections are remembered
+  for the household; manual items remain manual.
+- Offline shopping storage with device sharing, queued offline name edits, and
+  explicit conflict resolution when another device changed the same name.
+- Platform share sheet, clipboard copy, and `.txt` export.
+
+### Interface and operations
+
+- Responsive installable React PWA with touch-friendly navigation, safe-area
+  support, mobile planning cards, and system/light/dark themes.
+- Demo mode for UI evaluation and a live API mode for the self-hosted service.
+- Docker Compose deployment for the web app, worker, scheduler, PostgreSQL,
+  and Redis.
+- Alembic migrations, verified backup/restore scripts, an Unraid reference
+  template, and GitHub Actions checks for backend tests, frontend tests, and
+  the production build.
+
+The full product reasoning, scraper constraints, data-source research, and
 decision record live in
 [docs/product-discovery-and-research.md](docs/product-discovery-and-research.md).
+The end-to-end implementation checklist is in
+[docs/implementation-status.md](docs/implementation-status.md).
 
 ## Recommended: run on Unraid
 
@@ -93,14 +151,14 @@ npm.cmd run dev
 ```
 
 For UI-only evaluation, omit `VITE_DEMO_MODE=false`; demo mode requires no
-accounts, database or publisher access.
+accounts, database, or publisher access.
 
 ## Load nutrition data
 
-Ingredient matching and calculated nutrition are currently parked, so nutrition
-datasets are not required for automatic planning. CoFID can still be loaded for
-future catalogue work. Download it from the official UK government source,
-retain its licence/version notes, then run:
+Ingredient-to-food matching and calculated nutrition are currently parked, so
+nutrition datasets are not required for automatic planning. CoFID can still be
+loaded for future catalogue work. Download it from the official UK government
+source, retain its licence/version notes, then run:
 
 ```powershell
 Set-Location backend
@@ -113,7 +171,7 @@ Set-Location backend
 ```
 
 See [backend/app/data_import/README.md](backend/app/data_import/README.md) for
-column handling, reproducibility and update behaviour.
+column handling, reproducibility, and update behaviour.
 
 ## Validation
 
@@ -127,29 +185,42 @@ npm.cmd run build
 
 The current repository passes 51 backend tests, 22 frontend tests, TypeScript
 compilation, the production PWA build, the initial and incremental Alembic
-upgrades, and Compose YAML parsing. A Docker Desktop smoke test also passed: the
-PostgreSQL, Redis, web, worker and scheduler services started; migrations ran;
-the health endpoints returned 200; the PWA served its HTML and manifest; and a
-live owner setup plus a database-backed household member query completed
-successfully.
+upgrades, and Compose YAML parsing. A Docker Desktop smoke test also passed:
+PostgreSQL, Redis, web, worker, and scheduler started; migrations ran; health
+endpoints returned 200; the PWA served its HTML and manifest; and live owner
+setup plus a database-backed household member query completed successfully.
 
 ## Repository map
 
-- `backend/app/models.py` — relational domain model.
-- `backend/app/routes/` — versioned HTTP API.
-- `backend/app/services/` — nutrition, planner, pantry and shopping rules.
-- `backend/app/discovery/` — publisher adapters, safe fetch and extraction.
-- `backend/app/data_import/` — normalized food-data pipelines.
-- `frontend/src/` — responsive React PWA and live API client.
-- `deploy/` — Compose, Unraid, backup and restore operations.
-- `docs/` — research, decisions and UI concept images.
+- `backend/app/models.py` - relational domain model.
+- `backend/app/routes/` - versioned HTTP API.
+- `backend/app/services/` - nutrition, planner, pantry, shopping, quantity,
+  and ingredient-name rules.
+- `backend/app/discovery/` - publisher adapters, safe fetch, search, and
+  extraction.
+- `backend/app/data_import/` - normalized food-data pipelines.
+- `frontend/src/` - responsive React PWA and live API client.
+- `deploy/` - Compose, Unraid, backup, and restore operations.
+- `docs/` - research, decisions, testing notes, and UI concept images.
 
-## Deliberate boundaries
+## Deliberate boundaries and deferred work
 
-- No recipe or ingredient generation by an LLM.
-- No specialist medical-user logic yet.
-- No budget, equipment or active-time optimisation yet.
-- No public internet exposure or native mobile application yet.
-- No direct Google Keep integration; shopping uses the platform share sheet.
-- Publisher access controls are never bypassed. A source can fail independently
-  and remains an adapter-maintenance concern.
+- No recipe, ingredient, missing-quantity, or nutrition generation by an LLM.
+- Ingredient-to-food matching and calculated nutrition are parked; automatic
+  planning uses complete publisher per-serving nutrition only.
+- Great British Chefs discovery is disabled. Publisher access controls are
+  never bypassed, and a source can fail independently.
+- No specialist medical-user logic or medical, paediatric, pregnancy, or
+  therapeutic-diet recommendations.
+- No budget optimisation, equipment constraints, active-cooking-time
+  optimisation, or freezing workflows.
+- No public internet exposure, hosted multi-tenant service, or native mobile
+  application.
+- No direct Google Keep integration; shopping uses the platform share sheet,
+  clipboard, or text export.
+- One-way Mealie export and the optional tool-restricted OpenClaw extraction
+  bridge remain intentionally excluded.
+
+These boundaries are part of the current product decision record. Add deferred
+capabilities as separate migrations/features so they do not weaken provenance,
+nutrition, privacy, or shopping consistency.

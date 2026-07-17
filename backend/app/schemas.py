@@ -216,6 +216,11 @@ class RecipeReviewUpdate(VersionedUpdate):
         return self
 
 
+class PublisherTagOut(APIModel):
+    kind: str
+    label: str
+
+
 class RecipeSummary(APIModel):
     id: str
     title: str
@@ -233,6 +238,9 @@ class RecipeSummary(APIModel):
     meal_types: list[RecipeTag] = Field(default_factory=list)
     planner_eligible: bool = False
     planner_warnings: list[str] = Field(default_factory=list)
+    publisher_tags: list[PublisherTagOut] = Field(default_factory=list)
+    publisher_categories: list[str] = Field(default_factory=list)
+    publisher_metadata_status: str = "not_applicable"
 
 
 class RecipeDetail(RecipeSummary):

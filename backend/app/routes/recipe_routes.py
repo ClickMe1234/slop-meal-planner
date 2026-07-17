@@ -8,6 +8,11 @@ from ..db import get_db
 from ..config import get_settings
 from ..errors import DomainError, NotFoundError
 from ..discovery import canonicalize_url
+from ..discovery.categories import (
+    CATEGORY_BY_KEY,
+    categories_for_normalised_tags,
+    validate_category_keys,
+)
 from ..discovery.errors import DiscoveryError
 from ..models import (
     FoodNutrient,
@@ -23,7 +28,9 @@ from ..models import (
     RecipeEligibility,
     RecipeIngredient,
     RecipeMealType,
+    RecipePublisherTag,
     RecipeVersion,
+    PublisherMetadataStatus,
     ShoppingList,
 )
 from ..schemas import (
@@ -76,6 +83,17 @@ def _replace_meal_types(db: Session, recipe: Recipe, meal_types: list[RecipeTag]
     db.execute(delete(RecipeMealType).where(RecipeMealType.recipe_id == recipe.id))
     for meal_type in meal_types:
         db.add(RecipeMealType(recipe_id=recipe.id, meal_type=meal_type.value))
+
+
+def _publisher_tag_data(db: Session, recipe: Recipe) -> tuple[list[dict[str, str]], list[str]]:
+    rows = db.scalars(
+        select(RecipePublisherTag)
+        .where(RecipePublisherTag.recipe_id == recipe.id)
+        .order_by(RecipePublisherTag.kind, RecipePublisherTag.label)
+    ).all()
+    tags = [{"kind": row.kind, "label": row.label} for row in rows]
+    categories = list(categories_for_normalised_tags({row.normalised_value for row in rows}))
+    return tags, categories
 
 
 def _normalised_name(value: str | None) -> str:
@@ -255,6 +273,7 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
             f"Confirm {review_count} uncertain ingredient name"
             f"{'s' if review_count != 1 else ''} before creating the shopping list."
         )
+    publisher_tags, publisher_categories = _publisher_tag_data(db, recipe)
     summary = RecipeSummary(
         id=recipe.id,
         title=recipe.title,
@@ -277,6 +296,9 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
             and bool(meal_types)
         ),
         planner_warnings=planner_warnings,
+        publisher_tags=publisher_tags,
+        publisher_categories=publisher_categories,
+        publisher_metadata_status=recipe.publisher_metadata_status,
     )
     return RecipeDetail(
         **summary.model_dump(),
@@ -291,11 +313,18 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
 def list_recipes(
     q: str = Query(default="", max_length=200),
     meal_type: list[RecipeTag] = Query(default=[]),
+    publisher_category: list[str] = Query(default=[]),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=24, ge=1, le=100),
     context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
+    try:
+        selected_categories = validate_category_keys(publisher_category)
+    except ValueError as exc:
+        raise DomainError("TOO_MANY_RECIPE_CATEGORIES", str(exc), 422) from exc
+    except KeyError as exc:
+        raise DomainError("UNKNOWN_RECIPE_CATEGORY", f"Unknown recipe category: {exc.args[0]}", 422) from exc
     conditions = [Recipe.household_id == context.user.household_id, Recipe.archived_at.is_(None)]
     if q.strip():
         search_terms = equivalent_terms(db, q.strip())
@@ -319,12 +348,32 @@ def list_recipes(
             or_(
                 *(func.lower(Recipe.title).contains(term) for term in search_terms),
                 ingredient_match,
+                exists(
+                    select(RecipePublisherTag.id).where(
+                        RecipePublisherTag.recipe_id == Recipe.id,
+                        or_(
+                            *(RecipePublisherTag.normalised_value.contains(term) for term in search_terms)
+                        ),
+                    )
+                ),
             )
         )
     if meal_type:
         conditions.append(
             Recipe.meal_type_tags.any(
                 RecipeMealType.meal_type.in_([item.value for item in meal_type])
+            )
+        )
+    if selected_categories:
+        aliases = set().union(
+            *(CATEGORY_BY_KEY[key].normalised_aliases for key in selected_categories)
+        )
+        conditions.append(
+            exists(
+                select(RecipePublisherTag.id).where(
+                    RecipePublisherTag.recipe_id == Recipe.id,
+                    RecipePublisherTag.normalised_value.in_(aliases),
+                )
             )
         )
     total = db.scalar(select(func.count(Recipe.id)).where(*conditions)) or 0
@@ -430,6 +479,11 @@ def create_recipe(
         publisher=payload.publisher,
         image_url=payload.image_url,
         eligibility=RecipeEligibility.DRAFT.value,
+        publisher_metadata_status=(
+            PublisherMetadataStatus.PENDING.value
+            if payload.source_type == "url"
+            else PublisherMetadataStatus.NOT_APPLICABLE.value
+        ),
     )
     db.add(recipe)
     db.flush()

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BackendRecipeDetail } from '../api/client'
-import { importedRecipeNeedsReview, savedRecipePlanningBadge } from './RecipesPage'
+import { importedRecipeNeedsReview, nextCategorySelection, savedRecipePlanningBadge } from './RecipesPage'
 
 describe('saved recipe planning status', () => {
   it('does not claim a tagged recipe is usable until its recipe data is ready', () => {
@@ -52,5 +52,14 @@ describe('import review routing', () => {
   it('opens review for missing quantities unless the ingredient is excluded from shopping', () => {
     expect(importedRecipeNeedsReview(recipe({ quantity: undefined, unit: undefined }))).toBe(true)
     expect(importedRecipeNeedsReview(recipe({ quantity: undefined, unit: undefined, shopping_excluded: true }))).toBe(false)
+  })
+})
+
+describe('publisher category selection', () => {
+  it('allows up to three match-any filters and toggles a selected filter off', () => {
+    const selected = nextCategorySelection(['healthy', 'soups'], 'salads')
+    expect(selected).toEqual(['healthy', 'soups', 'salads'])
+    expect(nextCategorySelection(selected, 'pasta')).toEqual(selected)
+    expect(nextCategorySelection(selected, 'soups')).toEqual(['healthy', 'salads'])
   })
 })

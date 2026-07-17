@@ -8,13 +8,23 @@ import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader, Segmented
 import { MealTypePicker, mealKindLabels, type RecipeMealType } from '../components/MealTypePicker'
 import { demoRecipes } from '../data/demo'
 import type { Nutrition, Recipe } from '../types'
-import { api, ApiError, isDemoMode, type BackendRecipe, type BackendRecipeDetail, type DiscoveryResult, type RecipeSourceKey } from '../api/client'
+import { api, ApiError, isDemoMode, type BackendRecipe, type BackendRecipeDetail, type DiscoveryResult, type RecipeCategoryOption, type RecipeSourceKey } from '../api/client'
 
 const SOURCE_OPTIONS: Array<{ value: RecipeSourceKey; label: string }> = [
   { value: 'good_food', label: 'Good Food' },
   { value: 'allrecipes', label: 'Allrecipes' },
 ]
 const ALL_SOURCES = SOURCE_OPTIONS.map(option => option.value)
+const CATEGORY_KEYS = ['healthy', 'dinner_main', 'quick_easy', 'breakfast_brunch', 'vegetarian', 'soups', 'salads', 'desserts', 'snacks_appetizers', 'pasta', 'side_dishes', 'budget', 'seafood_fish', 'lunch', 'stews_chilli', 'slow_cooker', 'one_pot', 'high_protein']
+const DEFAULT_CATEGORY_OPTIONS: RecipeCategoryOption[] = [
+  'Healthy', 'Dinner / Main dishes', 'Quick & Easy', 'Breakfast & Brunch', 'Vegetarian', 'Soups', 'Salads', 'Desserts',
+  'Snacks / Appetizers', 'Pasta', 'Side dishes', 'Budget', 'Seafood / Fish', 'Lunch', 'Stews & Chilli', 'Slow cooker',
+  'One-pot / One-pan', 'High-protein',
+].map((label, index) => ({
+  key: CATEGORY_KEYS[index], label, rank: index + 1, confidence: 'high',
+  providers: { good_food: 'category_page', allrecipes: 'category_page' },
+}))
+const MAX_SELECTED_CATEGORIES = 3
 
 export function savedRecipePlanningBadge(recipe: Pick<Recipe, 'state' | 'mealKinds'>): { tone: 'green' | 'warning'; label: string } {
   if (!recipe.mealKinds.length) return { tone: 'warning', label: 'Needs meal types' }
@@ -32,6 +42,11 @@ export function importedRecipeNeedsReview(recipe: BackendRecipeDetail): boolean 
       || (!ingredient.shopping_excluded && (ingredient.quantity == null || !ingredient.unit))
     )
   )
+}
+
+export function nextCategorySelection(current: string[], category: string, maximum = MAX_SELECTED_CATEGORIES): string[] {
+  if (current.includes(category)) return current.filter(item => item !== category)
+  return current.length < maximum ? [...current, category] : current
 }
 
 function reviewPayload(recipe: BackendRecipeDetail, mealTypes: RecipeMealType[]) {
@@ -68,36 +83,55 @@ export function RecipesPage() {
   const [message, setMessage] = useState('')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [selectedSources, setSelectedSources] = useState<RecipeSourceKey[]>(ALL_SOURCES)
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([])
+
+  const categoryQuery = useQuery({
+    queryKey: ['recipe-categories'],
+    queryFn: api.recipeCategories,
+    enabled: !isDemoMode,
+    staleTime: 24 * 60 * 60 * 1000,
+  })
+  const categoryOptions = categoryQuery.data?.items ?? DEFAULT_CATEGORY_OPTIONS
+  const maximumCategories = categoryQuery.data?.maximum_selected ?? MAX_SELECTED_CATEGORIES
+  const categoryLabels = useMemo(
+    () => new Map(categoryOptions.map(option => [option.key, option.label])),
+    [categoryOptions],
+  )
 
   const localSearch = useQuery({
-    queryKey: ['recipes', query],
-    queryFn: () => api.listRecipes(query),
+    queryKey: ['recipes', query, selectedCategories.join(',')],
+    queryFn: () => api.listRecipes(query, undefined, selectedCategories),
     enabled: !isDemoMode,
   })
   const remoteSearch = useQuery({
-    queryKey: ['recipe-discovery', query.trim(), selectedSources.join(',')],
-    queryFn: () => api.searchRemote(query.trim(), 'recipe-page', selectedSources),
-    enabled: !isDemoMode && scope === 'all' && query.trim().length >= 2 && selectedSources.length > 0,
+    queryKey: ['recipe-discovery', query.trim(), selectedSources.join(','), selectedCategories.join(',')],
+    queryFn: () => api.searchRemote(query.trim(), 'recipe-page', selectedSources, selectedCategories),
+    enabled: !isDemoMode && scope === 'all' && (query.trim().length >= 2 || selectedCategories.length > 0) && selectedSources.length > 0,
   })
 
   const results = useMemo(() => {
     if (isDemoMode) return demoRecipes.filter(recipe => {
       const matches = recipe.title.toLowerCase().includes(query.toLowerCase()) || recipe.source.toLowerCase().includes(query.toLowerCase())
       const sourceKey = SOURCE_OPTIONS.find(option => option.label === recipe.source)?.value
-      return matches && (!sourceKey || selectedSources.includes(sourceKey)) && (scope === 'all' || recipe.source === 'Saved recipe' || recipe.state === 'ready')
+      const matchesCategory = !selectedCategories.length || selectedCategories.some(category => recipe.matchedCategories?.includes(category))
+      return matches && matchesCategory && (!sourceKey || selectedSources.includes(sourceKey)) && (scope === 'all' || recipe.source === 'Saved recipe' || recipe.state === 'ready')
     })
-    const local = (localSearch.data?.items ?? []).map(mapSavedRecipe)
+    const local = (localSearch.data?.items ?? []).map(recipe => mapSavedRecipe(recipe, categoryLabels))
     if (scope === 'saved') return local
     const localUrls = new Set(local.map(item => item.sourceUrl).filter(Boolean))
     const remote = (remoteSearch.data?.results ?? [])
       .filter(item => !localUrls.has(item.url))
-      .map(mapDiscoveryResult)
+      .map(recipe => mapDiscoveryResult(recipe, categoryLabels))
     return [...local, ...remote]
-  }, [query, scope, selectedSources, localSearch.data, remoteSearch.data])
+  }, [query, scope, selectedSources, selectedCategories, categoryLabels, localSearch.data, remoteSearch.data])
 
   const toggleSource = (source: RecipeSourceKey) => {
     setSelectedSources(current => current.includes(source) ? current.filter(item => item !== source) : [...current, source])
   }
+  const toggleCategory = (category: string) => {
+    setSelectedCategories(current => nextCategorySelection(current, category, maximumCategories))
+  }
+  const activeFilterCount = selectedCategories.length + (selectedSources.length === ALL_SOURCES.length ? 0 : 1)
   const openSave = (recipe: Recipe) => {
     setPendingRecipe(recipe)
     setPendingMealTypes([])
@@ -146,15 +180,19 @@ export function RecipesPage() {
 
   return <div className="page">
     <PageHeader eyebrow="Recipe catalogue" title="Find something delicious" description="Search your collection and trusted recipe websites in one place." actions={<><Link className="button button--secondary" to="/recipes/new"><ChefHat size={17}/>Custom recipe</Link><Link className="button button--secondary" to="/recipes/import"><Link2 size={17}/>Import from URL</Link></>}/>
-    <div className="recipe-search"><Search size={22}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search recipes, ingredients or cuisine…" aria-label="Search recipes"/><button className={filtersOpen ? 'active' : undefined} aria-label="Recipe filters" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(open => !open)}><Filter size={19}/><span>Filters{selectedSources.length < ALL_SOURCES.length ? ` (${selectedSources.length})` : ''}</span></button></div>
-    {filtersOpen && <Card className="recipe-filter-panel"><div><strong>Recipe websites</strong><span>Choose which supported websites to search.</span></div><div className="filter-options">{SOURCE_OPTIONS.map(option => <label className="check-label" key={option.value}><input type="checkbox" checked={selectedSources.includes(option.value)} onChange={() => toggleSource(option.value)}/>{option.label}</label>)}</div><Button variant="ghost" onClick={() => setSelectedSources(ALL_SOURCES)}>Select all</Button></Card>}
-    <div className="search-controls"><Segmented value={scope} onChange={setScope} label="Recipe source" options={[{ value: 'all', label: 'Everywhere' }, { value: 'saved', label: 'My recipes' }]}/><div className="source-pills"><span>Searching:</span>{SOURCE_OPTIONS.filter(option => selectedSources.includes(option.value)).map(option => <Badge key={option.value}>{option.label}</Badge>)}{selectedSources.length === 0 && <Badge tone="warning">No websites selected</Badge>}</div></div>
+    <div className="recipe-search"><Search size={22}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search recipes, ingredients or cuisine…" aria-label="Search recipes"/><button className={filtersOpen ? 'active' : undefined} aria-label="Recipe filters" aria-expanded={filtersOpen} aria-controls="recipe-filter-panel" onClick={() => setFiltersOpen(open => !open)}><Filter size={19}/><span>Filters{activeFilterCount ? ` (${activeFilterCount})` : ''}</span></button></div>
+    {filtersOpen && <Card className="recipe-filter-panel" id="recipe-filter-panel">
+      <div className="recipe-filter-heading"><div><strong>Search filters</strong><span>Categories match any selection and search every chosen website.</span></div>{activeFilterCount > 0 && <Button variant="ghost" onClick={() => { setSelectedCategories([]); setSelectedSources(ALL_SOURCES) }}>Clear filters</Button>}</div>
+      <fieldset className="recipe-filter-group"><legend>Categories <span>{selectedCategories.length}/{maximumCategories}</span></legend><p id="category-filter-help">Choose up to {maximumCategories}. You can browse a category without typing a search.</p><div className="category-filter-options" aria-describedby="category-filter-help">{categoryOptions.map(option => { const selected = selectedCategories.includes(option.key); const atLimit = !selected && selectedCategories.length >= maximumCategories; return <label className={`category-filter-option${selected ? ' selected' : ''}${atLimit ? ' disabled' : ''}`} key={option.key}><input type="checkbox" checked={selected} disabled={atLimit} onChange={() => toggleCategory(option.key)}/><span>{option.label}</span></label> })}</div>{selectedCategories.length > 0 && <Button variant="ghost" onClick={() => setSelectedCategories([])}>Clear categories</Button>}</fieldset>
+      <fieldset className="recipe-filter-group recipe-filter-group--sources"><legend>Recipe websites</legend><p>Choose which supported websites to search.</p><div className="filter-options">{SOURCE_OPTIONS.map(option => <label className="check-label" key={option.value}><input type="checkbox" checked={selectedSources.includes(option.value)} onChange={() => toggleSource(option.value)}/>{option.label}</label>)}</div>{selectedSources.length < ALL_SOURCES.length && <Button variant="ghost" onClick={() => setSelectedSources(ALL_SOURCES)}>Select all</Button>}</fieldset>
+    </Card>}
+    <div className="search-controls"><Segmented value={scope} onChange={setScope} label="Recipe source" options={[{ value: 'all', label: 'Everywhere' }, { value: 'saved', label: 'My recipes' }]}/><div className="source-pills"><span>Searching:</span>{SOURCE_OPTIONS.filter(option => selectedSources.includes(option.value)).map(option => <Badge key={option.value}>{option.label}</Badge>)}{selectedCategories.map(category => <Badge key={category} tone="green">{categoryLabels.get(category) ?? category}</Badge>)}{selectedSources.length === 0 && <Badge tone="warning">No websites selected</Badge>}</div></div>
     {remoteSearch.isFetching && <div className="search-status"><Loading label="Searching recipe websites…"/><span>Saved recipes are already shown below</span></div>}
     {error && <Notice tone="warning" title="Recipe could not be saved">{error}</Notice>}
     {message && <Notice tone="success" title="Recipe saved">{message}</Notice>}
     {results.length
       ? <div className="recipe-grid">{results.map(recipe => <RecipeCard key={recipe.id} recipe={recipe} saving={finishing && pendingRecipe?.id === recipe.id} onSave={() => openSave(recipe)}/>)}</div>
-      : <EmptyState icon={<ChefHat size={40}/>} title="No recipes found" description="Try a broader search, or import a recipe by URL." action={<Link className="button button--primary" to="/recipes/import">Import recipe</Link>}/>
+      : <EmptyState icon={<ChefHat size={40}/>} title="No recipes found" description="Try fewer categories, a broader search, or import a recipe by URL." action={<Link className="button button--primary" to="/recipes/import">Import recipe</Link>}/>
     }
     {pendingRecipe && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !finishing) setPendingRecipe(null) }}><Card className="recipe-save-modal" role="dialog" aria-modal="true" aria-labelledby="recipe-save-title"><button type="button" className="modal-close" aria-label="Close meal type selection" disabled={finishing} onClick={() => setPendingRecipe(null)}><X/></button><p className="eyebrow">Save recipe</p><h2 id="recipe-save-title">Where should {pendingRecipe.title} be used?</h2><p className="muted">Choose every meal this recipe suits. The ingredient review will only open if something needs your input.</p><MealTypePicker value={pendingMealTypes} onChange={setPendingMealTypes}/>{finishing && <Loading label="Importing and checking ingredients…"/>}<div className="button-row"><Button variant="ghost" disabled={finishing} onClick={() => setPendingRecipe(null)}>Cancel</Button><Button disabled={finishing || !pendingMealTypes.length} onClick={finishSave}>{finishing ? 'Checking recipe…' : 'Finish saving'}</Button></div></Card></div>}
   </div>
@@ -208,6 +246,7 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
       <div className="recipe-title"><h2>{recipe.title}</h2>{recipe.sourceUrl && <a href={recipe.sourceUrl} target="_blank" rel="noreferrer" aria-label={`Open ${recipe.title} source`}><ExternalLink size={17}/></a>}</div>
       <RecipeRating rating={recipe.starRating} count={recipe.ratingCount}/>
       <p className="recipe-meta">{yieldServings ? `Serves ${yieldServings}` : 'Yield not reported'}{recipe.mealKinds.length ? ` · ${recipe.mealKinds.join(' · ')}` : ''}</p>
+      {Boolean(recipe.publisherTags?.length) && <div className="recipe-publisher-tags" aria-label="Publisher categories">{recipe.publisherTags?.map(tag => <span key={tag}>{tag}</span>)}</div>}
       {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>Nutrition from {nutritionSource} · per serving</span><Badge tone={planningBadge?.tone ?? 'green'}>{planningBadge?.label ?? 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
       {missingMealTypes && <div className="recipe-planning-note recipe-planning-note--warning" role="status"><strong>Not used for meal planning</strong><span>Add breakfast, lunch, dinner, snack or side so the planner knows where this recipe belongs.</span></div>}
       <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{recipe.reviewCount ? 'Review ingredients' : missingMealTypes ? 'Add meal types' : 'Edit meal types'}</Link> : <Button disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}</div>
@@ -247,8 +286,12 @@ function sourceName(recipe: BackendRecipe): string {
   }
 }
 
-function mapSavedRecipe(recipe: BackendRecipe): Recipe {
+function mapSavedRecipe(recipe: BackendRecipe, categoryLabels: Map<string, string>): Recipe {
   const reported = completeNutrition(recipe.publisher_nutrition) ? mapNutrition(recipe.publisher_nutrition) : undefined
+  const categoryTags = (recipe.publisher_categories ?? []).map(category => categoryLabels.get(category) ?? category)
+  const rawTags = (recipe.publisher_tags ?? [])
+    .filter(tag => ['category', 'cuisine', 'diet'].includes(tag.kind))
+    .map(tag => tag.label)
   return {
     id: recipe.id,
     title: recipe.title,
@@ -262,10 +305,12 @@ function mapSavedRecipe(recipe: BackendRecipe): Recipe {
     state: recipe.review_count ? 'needs_review' : reported && recipe.yield_servings ? 'ready' : 'no_nutrition',
     reviewCount: recipe.review_count ?? 0,
     mealKinds: mealKindLabels(recipe.meal_types),
+    publisherTags: [...new Set([...categoryTags, ...rawTags])].slice(0, 4),
+    matchedCategories: recipe.publisher_categories,
   }
 }
 
-function mapDiscoveryResult(recipe: DiscoveryResult): Recipe {
+function mapDiscoveryResult(recipe: DiscoveryResult, categoryLabels: Map<string, string>): Recipe {
   const source = ({ good_food: 'Good Food', allrecipes: 'Allrecipes' } as Record<string, string>)[recipe.source] ?? recipe.source
   const preview = completeNutrition(recipe.publisher_nutrition) ? mapNutrition(recipe.publisher_nutrition) : undefined
   return {
@@ -280,5 +325,7 @@ function mapDiscoveryResult(recipe: DiscoveryResult): Recipe {
     starRating: recipe.star_rating,
     ratingCount: recipe.rating_count,
     mealKinds: [],
+    publisherTags: (recipe.matched_categories ?? []).map(category => categoryLabels.get(category) ?? category),
+    matchedCategories: recipe.matched_categories,
   }
 }
