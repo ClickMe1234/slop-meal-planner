@@ -80,13 +80,14 @@ async function listAllRecipes(
   query = '',
   mealType?: BackendMealType | BackendMealType[],
   publisherCategories: string[] = [],
+  publisherCategoryMatch: RecipeCategoryMatchMode = 'any',
 ): Promise<{ items: BackendRecipe[]; total: number }> {
   const items: BackendRecipe[] = []
   let page = 1
   let total = 0
   do {
     const result = await request<{ items: BackendRecipe[]; total: number }>(
-      `/recipes?q=${encodeURIComponent(query)}&page=${page}&page_size=100${(Array.isArray(mealType) ? mealType : mealType ? [mealType] : []).map(value => `&meal_type=${encodeURIComponent(value)}`).join('')}${publisherCategories.map(value => `&publisher_category=${encodeURIComponent(value)}`).join('')}`,
+      `/recipes?q=${encodeURIComponent(query)}&page=${page}&page_size=100&publisher_category_match=${publisherCategoryMatch}${(Array.isArray(mealType) ? mealType : mealType ? [mealType] : []).map(value => `&meal_type=${encodeURIComponent(value)}`).join('')}${publisherCategories.map(value => `&publisher_category=${encodeURIComponent(value)}`).join('')}`,
     )
     total = result.total
     if (!result.items.length) break
@@ -133,7 +134,7 @@ export const api = {
   saveRecipeReview: (id: string, payload: { expected_version: number; title: string; yield_servings: number; meal_types?: BackendMealType[]; ingredients: Array<Record<string, unknown>> }) => request<BackendRecipeDetail>(`/recipes/${id}/review`, { method: 'PUT', body: JSON.stringify(payload) }),
   searchRecipeIngredients: (query = '') => request<{ items: BackendRecipeIngredientChoice[]; total: number }>(`/recipe-ingredients?q=${encodeURIComponent(query)}`),
   recipeCategories: () => request<RecipeCategoryResponse>('/recipe-discovery/categories'),
-  searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[], publisherCategories: string[] = []) => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}${publisherCategories.map(value => `&publisher_category=${encodeURIComponent(value)}`).join('')}`),
+  searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[], publisherCategories: string[] = [], publisherCategoryMatch: RecipeCategoryMatchMode = 'any') => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}&publisher_category_match=${publisherCategoryMatch}${publisherCategories.map(value => `&publisher_category=${encodeURIComponent(value)}`).join('')}`),
   nutritionPreview: (url: string) => request<DiscoveryNutritionPreview>(`/recipe-discovery/nutrition-preview?url=${encodeURIComponent(url)}`),
   startImport: (url: string) => request<JobStatus>('/recipe-imports', { method: 'POST', body: JSON.stringify({ url }) }),
   calculateRecipe: (id: string) => request<{ per_serving_values: Record<string, number> }>(`/recipes/${id}/calculate`, { method: 'POST' }),
@@ -304,6 +305,7 @@ export interface DiscoveryNutritionPreview {
 }
 
 export type RecipeSourceKey = 'good_food' | 'allrecipes'
+export type RecipeCategoryMatchMode = 'any' | 'all'
 
 export interface RecipeCategoryOption {
   key: string
@@ -315,7 +317,7 @@ export interface RecipeCategoryOption {
 
 export interface RecipeCategoryResponse {
   maximum_selected: number
-  match: 'any'
+  match: RecipeCategoryMatchMode
   items: RecipeCategoryOption[]
 }
 

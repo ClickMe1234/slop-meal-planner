@@ -7,6 +7,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from dataclasses import replace
+from typing import Literal
 
 from .categories import CATEGORY_BY_KEY, RecipeCategory
 from .errors import DiscoveryError
@@ -73,6 +74,7 @@ class LiveSearchService:
         sources: tuple[str, ...] | None = None,
         source_queries: dict[str, str] | None = None,
         categories: tuple[str, ...] = (),
+        category_match: Literal["any", "all"] = "any",
     ) -> CombinedSearchResponse:
         normalised = self.normalise_query(query)
         if len(normalised) < self.policy.minimum_query_length and not categories:
@@ -120,6 +122,7 @@ class LiveSearchService:
                             adapter,
                             tuple(CATEGORY_BY_KEY[key] for key in categories),
                             normalised_source_queries.get(adapter.key, normalised),
+                            category_match,
                         )
                         for adapter in adapters
                     )
@@ -192,6 +195,7 @@ class LiveSearchService:
         sources: tuple[str, ...] | None = None,
         source_queries: dict[str, str] | None = None,
         categories: tuple[str, ...] = (),
+        category_match: Literal["any", "all"] = "any",
     ) -> CombinedSearchResponse:
         return await self.search_remote(
             query,
@@ -199,6 +203,7 @@ class LiveSearchService:
             sources=sources,
             source_queries=source_queries,
             categories=categories,
+            category_match=category_match,
         )
 
     async def nutrition_preview(self, url: str) -> ExtractedRecipe:
@@ -275,6 +280,7 @@ class LiveSearchService:
         adapter,
         categories: tuple[RecipeCategory, ...],
         query: str,
+        category_match: Literal["any", "all"],
     ) -> SourceSearchResponse:
         responses = await asyncio.gather(
             *(self._search_category(adapter, category) for category in categories)
@@ -304,8 +310,11 @@ class LiveSearchService:
                     )),
                 )
 
+        required_categories = {category.key for category in categories}
         ranked = []
         for result in merged.values():
+            if category_match == "all" and not required_categories.issubset(result.matched_categories):
+                continue
             relevance = self._relevance_score(result, query) if query else 1
             if relevance > 0:
                 ranked.append((relevance, result))
