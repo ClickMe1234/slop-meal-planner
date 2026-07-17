@@ -3,6 +3,13 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.6.0 - 2026-07-17
+
+- Add a unified recipe-category catalogue for BBC Good Food and Allrecipes, with match-any filtering for up to three categories across discovery and saved recipes.
+- Preserve and display publisher recipe tags, and safely backfill metadata for existing URL imports without changing reviewed recipe content.
+- Keep category labels, aliases, rankings, and provider mappings in one registry so the taxonomy can be revised without redesigning search or storage.
+- Harden the Alembic migration history for PostgreSQL and SQLite, including immutable historical schemas and automated upgrade, downgrade, replay, and model-parity checks.
+
 ## 0.5.0 - 2026-07-16
 
 - Combine mass and volumetric recipe requirements using reviewed ingredient densities while keeping shopping-list and pantry calculations stable.
