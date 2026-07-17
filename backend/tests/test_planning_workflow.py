@@ -474,6 +474,7 @@ def test_grouped_batch_supports_per_date_attendance_preferences_and_replacement(
     assert detail["plan"]["start_date"] == "2026-07-19"
     assert detail["plan"]["end_date"] == "2026-07-22"
     assert {item["recipe_id"] for item in detail["occurrences"]} == {spinach["id"]}
+    assert "image_url" in detail["occurrences"][0]
     assert [len(item["portions"]) for item in detail["occurrences"]] == [2, 1]
     assert float(detail["occurrences"][0]["batch_servings"]) == 2.5
     assert detail["daily_nutrition"][0]["totals"]["energy_kcal"] == 750
