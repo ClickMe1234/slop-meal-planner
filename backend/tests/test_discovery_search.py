@@ -94,6 +94,46 @@ def test_remote_search_can_use_a_regional_query_for_each_publisher():
     asyncio.run(run())
 
 
+def test_category_only_search_uses_provider_pages_and_independent_cache():
+    async def run():
+        fetcher = FakeFetcher()
+        service = LiveSearchService(
+            fetcher,
+            policy=SearchPolicy(debounce_ms=0, cache_ttl_seconds=30),
+        )
+
+        first = await service.search_remote("", categories=("soups",))
+        second = await service.search_remote("", categories=("soups",))
+
+        assert len(first.results) == 2
+        assert all(result.matched_categories == ("soups",) for result in first.results)
+        assert all("/search?" not in url for url in fetcher.calls)
+        assert second.cache_hit is True
+        assert len(fetcher.calls) == 2
+
+    asyncio.run(run())
+
+
+def test_multiple_categories_are_match_any_and_merge_duplicate_urls():
+    async def run():
+        fetcher = FakeFetcher()
+        service = LiveSearchService(fetcher, policy=SearchPolicy(debounce_ms=0))
+
+        response = await service.search_remote("", categories=("soups", "healthy"))
+
+        assert len(response.results) == 3
+        assert any(
+            result.matched_categories == ("soups", "healthy")
+            for result in response.results
+        )
+        assert {category for result in response.results for category in result.matched_categories} == {
+            "soups", "healthy"
+        }
+        assert len(fetcher.calls) == 4
+
+    asyncio.run(run())
+
+
 def test_default_registry_only_enables_current_publishers():
     assert {adapter.key for adapter in default_registry.adapters} == {"good_food", "allrecipes"}
 

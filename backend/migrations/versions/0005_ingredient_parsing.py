@@ -27,7 +27,7 @@ def upgrade() -> None:
         sa.Column(
             "parser_name_keys",
             sa.JSON(),
-            server_default=sa.text("'[]'::json"),
+            server_default=sa.text("'[]'"),
             nullable=False,
         ),
     )
@@ -40,7 +40,7 @@ def upgrade() -> None:
         sa.Column(
             "source_name_keys",
             sa.JSON(),
-            server_default=sa.text("'[]'::json"),
+            server_default=sa.text("'[]'"),
             nullable=False,
         ),
     )

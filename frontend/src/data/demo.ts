@@ -13,6 +13,8 @@ export const demoRecipes: Recipe[] = [
     nutritionSource: 'publisher',
     nutritionSourceName: 'Good Food',
     mealKinds: ['Lunch', 'Dinner'],
+    publisherTags: ['Dinner / Main dishes', 'Healthy'],
+    matchedCategories: ['dinner_main', 'healthy', 'high_protein'],
     ingredients: ['600g chicken thighs', '2 × 400g tins chickpeas', '2 tbsp harissa', '1 lemon']
   },
   {
@@ -23,7 +25,9 @@ export const demoRecipes: Recipe[] = [
     imageUrl: 'https://images.unsplash.com/photo-1476124369491-e7addf5db371?auto=format&fit=crop&w=900&q=75',
     yield: 4,
     state: 'no_nutrition',
-    mealKinds: ['Dinner']
+    mealKinds: ['Dinner'],
+    publisherTags: ['Pasta', 'Vegetarian'],
+    matchedCategories: ['pasta', 'vegetarian', 'dinner_main']
   },
   {
     id: 'overnight-oats',
@@ -35,7 +39,9 @@ export const demoRecipes: Recipe[] = [
     state: 'source_estimate',
     publisherNutrition: { calories: 386, protein: 17, carbs: 56, fat: 10, basis: 'per_serving' },
     nutritionSourceName: 'Allrecipes',
-    mealKinds: ['Breakfast']
+    mealKinds: ['Breakfast'],
+    publisherTags: ['Breakfast & Brunch', 'Healthy'],
+    matchedCategories: ['breakfast_brunch', 'healthy', 'quick_easy']
   },
   {
     id: 'green-curry',
@@ -49,7 +55,9 @@ export const demoRecipes: Recipe[] = [
     nutritionSource: 'publisher',
     nutritionSourceName: 'Good Food',
     reviewCount: 2,
-    mealKinds: ['Dinner']
+    mealKinds: ['Dinner'],
+    publisherTags: ['Vegetarian', 'Dinner / Main dishes'],
+    matchedCategories: ['vegetarian', 'dinner_main', 'healthy']
   },
   {
     id: 'shakshuka',
@@ -59,7 +67,9 @@ export const demoRecipes: Recipe[] = [
     imageUrl: 'https://images.unsplash.com/photo-1590412200988-a436970781fa?auto=format&fit=crop&w=900&q=75',
     yield: 2,
     state: 'no_nutrition',
-    mealKinds: ['Breakfast', 'Lunch', 'Dinner']
+    mealKinds: ['Breakfast', 'Lunch', 'Dinner'],
+    publisherTags: ['Breakfast & Brunch', 'Vegetarian'],
+    matchedCategories: ['breakfast_brunch', 'vegetarian', 'one_pot']
   },
   {
     id: 'lemon-greens',
@@ -69,7 +79,9 @@ export const demoRecipes: Recipe[] = [
     yield: 4,
     state: 'ready',
     nutrition: { calories: 96, protein: 4, carbs: 9, fat: 6, basis: 'per_serving' },
-    mealKinds: ['Side']
+    mealKinds: ['Side'],
+    publisherTags: ['Side dishes', 'Vegetarian'],
+    matchedCategories: ['side_dishes', 'vegetarian', 'quick_easy']
   },
   {
     id: 'apple-peanut-snack',
@@ -79,7 +91,9 @@ export const demoRecipes: Recipe[] = [
     yield: 1,
     state: 'ready',
     nutrition: { calories: 248, protein: 8, carbs: 29, fat: 12, basis: 'per_serving' },
-    mealKinds: ['Snack']
+    mealKinds: ['Snack'],
+    publisherTags: ['Snacks / Appetizers', 'Quick & Easy'],
+    matchedCategories: ['snacks_appetizers', 'quick_easy', 'healthy']
   }
 ]
 

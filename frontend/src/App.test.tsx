@@ -26,6 +26,21 @@ describe('App', () => {
     expect(goodFood).not.toBeChecked()
   })
 
+  it('filters by categories without a text query and enforces the three-category limit', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes']}><App/></MemoryRouter></QueryClientProvider>)
+    await user.click(screen.getByRole('button', { name: /recipe filters/i }))
+
+    await user.click(screen.getByRole('checkbox', { name: 'Healthy' }))
+    expect(screen.queryByRole('heading', { name: 'Wild mushroom risotto' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Harissa chicken with chickpeas' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Soups' }))
+    await user.click(screen.getByRole('checkbox', { name: 'Salads' }))
+    expect(screen.getByText('3/3')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Pasta' })).toBeDisabled()
+  })
+
   it('parks food matching in the import review', () => {
     render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/imports/demo/review']}><App/></MemoryRouter></QueryClientProvider>)
     expect(screen.getByRole('heading', { name: /harissa chicken with chickpeas/i })).toBeInTheDocument()

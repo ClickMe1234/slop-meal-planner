@@ -22,7 +22,9 @@ from .models import (
     Recipe,
     RecipeEligibility,
     RecipeIngredient,
+    RecipePublisherTag,
     RecipeVersion,
+    PublisherMetadataStatus,
     UserSession,
 )
 from .services.ingredient_names import ingredient_name_keys, preferred_ingredient_name
@@ -44,7 +46,11 @@ celery_app.conf.update(
         "cleanup-expired-state-nightly": {
             "task": "app.worker.cleanup_expired_state",
             "schedule": 24 * 60 * 60,
-        }
+        },
+        "backfill-recipe-publisher-metadata": {
+            "task": "app.worker.backfill_recipe_publisher_metadata",
+            "schedule": 10 * 60,
+        },
     },
 )
 
@@ -77,6 +83,23 @@ def _json_safe(value):
     return value
 
 
+def _replace_publisher_tags(db, recipe: Recipe, extracted) -> None:
+    db.execute(delete(RecipePublisherTag).where(RecipePublisherTag.recipe_id == recipe.id))
+    for tag in extracted.publisher_tags:
+        db.add(
+            RecipePublisherTag(
+                recipe_id=recipe.id,
+                kind=tag.kind,
+                label=tag.label,
+                normalised_value=tag.normalised_value,
+            )
+        )
+    recipe.publisher_metadata_status = PublisherMetadataStatus.READY.value
+    recipe.publisher_metadata_attempts = 0
+    recipe.publisher_metadata_refreshed_at = datetime.now(timezone.utc)
+    recipe.publisher_metadata_error = None
+
+
 @celery_app.task
 def cleanup_expired_state() -> dict[str, int]:
     now = datetime.now(timezone.utc)
@@ -97,6 +120,72 @@ def cleanup_expired_state() -> dict[str, int]:
         ).rowcount or 0
         db.commit()
     return {"sessions_deleted": sessions, "jobs_deleted": jobs}
+
+
+@celery_app.task
+def backfill_recipe_publisher_metadata(batch_size: int = 10) -> dict[str, int]:
+    """Refresh supported publisher tags without changing saved recipe content."""
+
+    stale_before = datetime.now(timezone.utc) - timedelta(minutes=30)
+    with SessionLocal() as db:
+        recipes = db.scalars(
+            select(Recipe)
+            .where(
+                Recipe.source_type == "url",
+                Recipe.source_url.is_not(None),
+                Recipe.publisher_metadata_attempts < 3,
+                (
+                    (Recipe.publisher_metadata_status == PublisherMetadataStatus.PENDING.value)
+                    | (
+                        (Recipe.publisher_metadata_status == PublisherMetadataStatus.REFRESHING.value)
+                        & (Recipe.updated_at < stale_before)
+                    )
+                ),
+            )
+            .order_by(Recipe.updated_at, Recipe.id)
+            .limit(max(1, min(batch_size, 50)))
+            .with_for_update(skip_locked=True)
+        ).all()
+        recipe_ids = [recipe.id for recipe in recipes]
+        for recipe in recipes:
+            recipe.publisher_metadata_status = PublisherMetadataStatus.REFRESHING.value
+            recipe.publisher_metadata_attempts += 1
+            recipe.publisher_metadata_error = None
+        db.commit()
+
+        refreshed = failed = skipped = 0
+        for recipe_id in recipe_ids:
+            recipe = db.get(Recipe, recipe_id)
+            if recipe is None or not recipe.source_url:
+                skipped += 1
+                continue
+            try:
+                default_registry.for_url(recipe.source_url)
+            except UnsupportedSourceError:
+                recipe.publisher_metadata_status = PublisherMetadataStatus.NOT_APPLICABLE.value
+                recipe.publisher_metadata_error = "Publisher tags are not supported for this website"
+                skipped += 1
+                db.commit()
+                continue
+            try:
+                extracted = asyncio.run(_fetch_and_extract(recipe.source_url))
+                _replace_publisher_tags(db, recipe, extracted)
+                refreshed += 1
+            except Exception as exc:
+                recipe.publisher_metadata_status = (
+                    PublisherMetadataStatus.FAILED.value
+                    if recipe.publisher_metadata_attempts >= 3
+                    else PublisherMetadataStatus.PENDING.value
+                )
+                recipe.publisher_metadata_error = str(exc)[:500]
+                failed += 1
+            db.commit()
+    return {
+        "selected": len(recipe_ids),
+        "refreshed": refreshed,
+        "failed": failed,
+        "skipped": skipped,
+    }
 
 
 @celery_app.task(bind=True, autoretry_for=(httpx.TransportError,), retry_backoff=True, max_retries=3)
@@ -124,6 +213,7 @@ def process_recipe_import(self, job_id: str) -> dict:
                 )
             )
             if existing is not None:
+                _replace_publisher_tags(db, existing, extracted)
                 job.status = JobStatus.AWAITING_REVIEW.value
                 job.stage = "recipe_review"
                 job.progress = 100
@@ -139,9 +229,12 @@ def process_recipe_import(self, job_id: str) -> dict:
                 source_url=extracted.canonical_url,
                 publisher=extracted.publisher or urlparse(extracted.canonical_url).hostname,
                 image_url=extracted.image_url,
+                publisher_metadata_status=PublisherMetadataStatus.READY.value,
+                publisher_metadata_refreshed_at=datetime.now(timezone.utc),
             )
             db.add(recipe)
             db.flush()
+            _replace_publisher_tags(db, recipe, extracted)
             version = RecipeVersion(
                 recipe_id=recipe.id,
                 version_number=1,

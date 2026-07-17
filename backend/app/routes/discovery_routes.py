@@ -10,6 +10,11 @@ from sqlalchemy.orm import Session
 from ..auth import AuthContext, get_auth_context
 from ..db import get_db
 from ..discovery import LiveSearchService
+from ..discovery.categories import (
+    MAX_SELECTED_CATEGORIES,
+    RECIPE_CATEGORIES,
+    validate_category_keys,
+)
 from ..discovery.errors import DiscoveryError, FetchError
 from ..discovery.http import PoliteHttpFetcher
 from ..discovery.urls import canonicalize_url
@@ -42,6 +47,32 @@ def _json_safe(value):
     return value
 
 
+@router.get("/categories")
+def list_recipe_categories(
+    context: AuthContext = Depends(get_auth_context),
+):
+    """Return the reviewed cross-publisher category vocabulary in display order."""
+
+    del context
+    return {
+        "maximum_selected": MAX_SELECTED_CATEGORIES,
+        "match": "any",
+        "items": [
+            {
+                "key": category.key,
+                "label": category.label,
+                "rank": rank,
+                "confidence": category.confidence,
+                "providers": {
+                    "good_food": category.good_food.mode,
+                    "allrecipes": category.allrecipes.mode,
+                },
+            }
+            for rank, category in enumerate(RECIPE_CATEGORIES, start=1)
+        ],
+    }
+
+
 @router.get("/nutrition-preview")
 async def preview_recipe_nutrition(
     url: str = Query(max_length=4096),
@@ -72,6 +103,7 @@ async def discover_recipes(
     q: str = Query(default="", max_length=200),
     request_key: str | None = Query(default=None, max_length=100),
     sources: str | None = Query(default=None, max_length=200),
+    publisher_category: list[str] = Query(default=[]),
     context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
@@ -87,6 +119,12 @@ async def discover_recipes(
         unknown = set(selected_sources) - supported
         if unknown:
             raise DomainError("UNSUPPORTED_RECIPE_SOURCE", f"Unsupported recipe source: {', '.join(sorted(unknown))}", 422)
+    try:
+        selected_categories = validate_category_keys(publisher_category)
+    except ValueError as exc:
+        raise DomainError("TOO_MANY_RECIPE_CATEGORIES", str(exc), 422) from exc
+    except KeyError as exc:
+        raise DomainError("UNKNOWN_RECIPE_CATEGORY", f"Unknown recipe category: {exc.args[0]}", 422) from exc
     response = await _live_service().search(
         q,
         request_key=scoped_request_key,
@@ -95,6 +133,7 @@ async def discover_recipes(
             "good_food": query_for_locale(db, q, IngredientLocale.UK),
             "allrecipes": query_for_locale(db, q, IngredientLocale.US),
         },
+        categories=selected_categories,
     )
     saved_rows = db.scalars(
         select(Recipe.source_url).where(

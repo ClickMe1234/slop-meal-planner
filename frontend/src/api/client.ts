@@ -76,13 +76,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.status === 204 ? undefined as T : response.json() as Promise<T>
 }
 
-async function listAllRecipes(query = '', mealType?: BackendMealType | BackendMealType[]): Promise<{ items: BackendRecipe[]; total: number }> {
+async function listAllRecipes(
+  query = '',
+  mealType?: BackendMealType | BackendMealType[],
+  publisherCategories: string[] = [],
+): Promise<{ items: BackendRecipe[]; total: number }> {
   const items: BackendRecipe[] = []
   let page = 1
   let total = 0
   do {
     const result = await request<{ items: BackendRecipe[]; total: number }>(
-      `/recipes?q=${encodeURIComponent(query)}&page=${page}&page_size=100${(Array.isArray(mealType) ? mealType : mealType ? [mealType] : []).map(value => `&meal_type=${encodeURIComponent(value)}`).join('')}`,
+      `/recipes?q=${encodeURIComponent(query)}&page=${page}&page_size=100${(Array.isArray(mealType) ? mealType : mealType ? [mealType] : []).map(value => `&meal_type=${encodeURIComponent(value)}`).join('')}${publisherCategories.map(value => `&publisher_category=${encodeURIComponent(value)}`).join('')}`,
     )
     total = result.total
     if (!result.items.length) break
@@ -128,7 +132,8 @@ export const api = {
   getRecipe: (id: string) => request<BackendRecipeDetail>(`/recipes/${id}`),
   saveRecipeReview: (id: string, payload: { expected_version: number; title: string; yield_servings: number; meal_types?: BackendMealType[]; ingredients: Array<Record<string, unknown>> }) => request<BackendRecipeDetail>(`/recipes/${id}/review`, { method: 'PUT', body: JSON.stringify(payload) }),
   searchRecipeIngredients: (query = '') => request<{ items: BackendRecipeIngredientChoice[]; total: number }>(`/recipe-ingredients?q=${encodeURIComponent(query)}`),
-  searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[]) => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}`),
+  recipeCategories: () => request<RecipeCategoryResponse>('/recipe-discovery/categories'),
+  searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[], publisherCategories: string[] = []) => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}${publisherCategories.map(value => `&publisher_category=${encodeURIComponent(value)}`).join('')}`),
   nutritionPreview: (url: string) => request<DiscoveryNutritionPreview>(`/recipe-discovery/nutrition-preview?url=${encodeURIComponent(url)}`),
   startImport: (url: string) => request<JobStatus>('/recipe-imports', { method: 'POST', body: JSON.stringify({ url }) }),
   calculateRecipe: (id: string) => request<{ per_serving_values: Record<string, number> }>(`/recipes/${id}/calculate`, { method: 'POST' }),
@@ -188,6 +193,9 @@ export interface BackendRecipe {
   meal_types: BackendMealType[]
   planner_eligible: boolean
   planner_warnings: string[]
+  publisher_tags?: Array<{ kind: string; label: string }>
+  publisher_categories?: string[]
+  publisher_metadata_status?: 'not_applicable' | 'pending' | 'refreshing' | 'ready' | 'failed'
 }
 
 export interface BackendRecipeDetail extends BackendRecipe {
@@ -277,11 +285,12 @@ export interface DiscoveryResult {
   already_saved: boolean
   star_rating?: number
   rating_count?: number
+  matched_categories?: string[]
 }
 
 export interface DiscoveryResponse {
   results: DiscoveryResult[]
-  sources: Array<{ source: string; error_code?: string; error_message?: string }>
+  sources: Array<{ source: string; error_code?: string; error_message?: string; warnings?: string[] }>
   superseded: boolean
   cache_hit: boolean
   debounce_ms: number
@@ -295,6 +304,20 @@ export interface DiscoveryNutritionPreview {
 }
 
 export type RecipeSourceKey = 'good_food' | 'allrecipes'
+
+export interface RecipeCategoryOption {
+  key: string
+  label: string
+  rank: number
+  confidence: 'high' | 'medium'
+  providers: Record<RecipeSourceKey, 'category_page' | 'search_fallback'>
+}
+
+export interface RecipeCategoryResponse {
+  maximum_selected: number
+  match: 'any'
+  items: RecipeCategoryOption[]
+}
 
 export interface BackendPantryItem {
   id: string

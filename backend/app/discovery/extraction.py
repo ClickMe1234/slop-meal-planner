@@ -7,7 +7,8 @@ from html import unescape
 from typing import Any
 
 from .html import RecipeHtmlParser
-from .models import ExtractedRecipe, PublisherNutritionPreview
+from .categories import normalise_publisher_tag
+from .models import ExtractedRecipe, PublisherNutritionPreview, PublisherTag
 from .urls import canonicalize_url
 
 # Recipe quantities are non-negative. Treating the separator in ``4-6`` as a
@@ -32,7 +33,7 @@ def _walk_json_ld(value: object):
         graph = value.get("@graph")
         if graph is not None:
             yield from _walk_json_ld(graph)
-        for key in ("itemListElement", "mainEntity", "item"):
+        for key in ("itemListElement", "mainEntity", "mainEntityOfPage", "breadcrumb", "item"):
             nested = value.get(key)
             if isinstance(nested, (dict, list)):
                 yield from _walk_json_ld(nested)
@@ -121,6 +122,75 @@ def _normalise_ingredients(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(unescape(" ".join(item.split())) for item in values if item.strip()))
 
 
+def _tag_values(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = re.split(r"[,;|]", value)
+    elif isinstance(value, list):
+        values = [str(item) for item in value if isinstance(item, (str, int, float))]
+    else:
+        return ()
+    return tuple(
+        label
+        for item in values
+        if (label := unescape(" ".join(item.strip().split())))
+    )
+
+
+def _diet_label(value: str) -> str:
+    token = value.rstrip("/").rsplit("/", 1)[-1]
+    token = re.sub(r"Diet$", "", token)
+    return " ".join(re.sub(r"(?<!^)([A-Z])", r" \1", token).split()) or value
+
+
+def _publisher_tags(
+    recipe_node: dict[str, Any] | None,
+    nodes: list[dict[str, Any]],
+    parser: RecipeHtmlParser,
+    title: str,
+) -> tuple[PublisherTag, ...]:
+    candidates: list[tuple[str, str]] = []
+    if recipe_node is not None:
+        for field_name, kind in (
+            ("recipeCategory", "category"),
+            ("recipeCuisine", "cuisine"),
+            ("keywords", "keyword"),
+        ):
+            candidates.extend((kind, value) for value in _tag_values(recipe_node.get(field_name)))
+        candidates.extend(
+            ("diet", _diet_label(value))
+            for value in _tag_values(recipe_node.get("suitableForDiet"))
+        )
+    candidates.extend(("keyword", value) for value in _tag_values(parser.meta.get("parsely-tags")))
+
+    generic_breadcrumbs = {"home", "recipes", normalise_publisher_tag(title)}
+    for node in nodes:
+        if "breadcrumblist" not in _types(node.get("@type")):
+            continue
+        for item in node.get("itemListElement", ()) if isinstance(node.get("itemListElement"), list) else ():
+            if not isinstance(item, dict):
+                continue
+            value = item.get("name")
+            if not value and isinstance(item.get("item"), dict):
+                value = item["item"].get("name")
+            label = unescape(" ".join(str(value or "").split()))
+            if label and normalise_publisher_tag(label) not in generic_breadcrumbs:
+                candidates.append(("breadcrumb", label))
+
+    tags: list[PublisherTag] = []
+    seen: set[tuple[str, str]] = set()
+    for kind, label in candidates:
+        label = label[:160]
+        normalised = normalise_publisher_tag(label)
+        identity = (kind, normalised)
+        if not normalised or identity in seen:
+            continue
+        seen.add(identity)
+        tags.append(PublisherTag(kind=kind, label=label, normalised_value=normalised))
+        if len(tags) >= 100:
+            break
+    return tuple(tags)
+
+
 def extract_recipe(html: str, page_url: str) -> ExtractedRecipe:
     """Extract fields present in HTML and flag anything requiring human review.
 
@@ -132,7 +202,8 @@ def extract_recipe(html: str, page_url: str) -> ExtractedRecipe:
     canonical_url = canonicalize_url(page_url)
     parser = RecipeHtmlParser()
     parser.feed(html)
-    recipe_node = next((node for node in _parse_json_documents(parser) if "recipe" in _types(node.get("@type"))), None)
+    nodes = _parse_json_documents(parser)
+    recipe_node = next((node for node in nodes if "recipe" in _types(node.get("@type"))), None)
 
     reasons: list[str] = []
     if recipe_node is not None:
@@ -187,4 +258,5 @@ def extract_recipe(html: str, page_url: str) -> ExtractedRecipe:
         extraction_method=method,
         review_required=bool(reasons),
         review_reasons=tuple(dict.fromkeys(reasons)),
+        publisher_tags=_publisher_tags(recipe_node, nodes, parser, title),
     )

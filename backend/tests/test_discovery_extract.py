@@ -46,6 +46,48 @@ def test_semantic_fallback_is_explicit_and_incomplete():
     assert any("Schema.org" in reason for reason in result.review_reasons)
 
 
+def test_publisher_taxonomy_is_extracted_without_changing_meal_types():
+    html = '''
+      <meta name="parsely-tags" content="Quick & Easy, Weeknight">
+      <script type="application/ld+json">{
+        "@graph": [
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              {"@type": "ListItem", "position": 1, "name": "Recipes"},
+              {"@type": "ListItem", "position": 2, "name": "Soups"}
+            ]
+          },
+          {
+            "@type": "Recipe", "name": "Tomato soup", "recipeYield": "4",
+            "recipeIngredient": ["1 tomato"],
+            "recipeCategory": ["Soup", "Lunch"],
+            "recipeCuisine": "Italian",
+            "keywords": "Vegetarian, Budget",
+            "suitableForDiet": "https://schema.org/VegetarianDiet",
+            "mainEntityOfPage": {"breadcrumb": {
+              "@type": "BreadcrumbList",
+              "itemListElement": [
+                {"@type": "ListItem", "position": 1, "name": "Recipes"},
+                {"@type": "ListItem", "position": 2, "name": "Weeknight meals"}
+              ]
+            }}
+          }
+        ]
+      }</script>
+    '''
+
+    result = extract_recipe(html, "https://www.allrecipes.com/recipe/123/tomato-soup/")
+    values = {(tag.kind, tag.label, tag.normalised_value) for tag in result.publisher_tags}
+
+    assert ("category", "Soup", "soup") in values
+    assert ("cuisine", "Italian", "italian") in values
+    assert ("keyword", "Quick & Easy", "quick and easy") in values
+    assert ("diet", "Vegetarian", "vegetarian") in values
+    assert ("breadcrumb", "Soups", "soups") in values
+    assert ("breadcrumb", "Weeknight meals", "weeknight meals") in values
+
+
 def test_supported_adapter_urls_and_good_food_result_parsing():
     good_food = GoodFoodAdapter()
     assert good_food.search_url("lentil soup") == "https://www.bbcgoodfood.com/search?q=lentil+soup"
