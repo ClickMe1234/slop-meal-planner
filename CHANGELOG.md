@@ -3,6 +3,12 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.7.0 - 2026-07-17
+
+- Record and edit the finished weight of a cooked meal batch from the week screen.
+- Calculate rounded gram portions from each household member's planned fractional serving allocation.
+- Show member-specific portion guidance when household calorie requirements differ.
+
 ## 0.6.0 - 2026-07-17
 
 - Add a unified recipe-category catalogue for BBC Good Food and Allrecipes, with match-any filtering for up to three categories across discovery and saved recipes.

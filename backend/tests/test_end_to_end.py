@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models import Household, Recipe, RecipeVersion
+from app.models import Household, MealBatch, Recipe, RecipeVersion
 
 
 def test_existing_import_drafts_are_enriched_with_detected_units(client, owner):
@@ -68,7 +68,7 @@ def test_existing_publisher_import_is_derived_as_planner_ready(client, owner, se
     assert listed["calculated_nutrition"]["energy_kcal"] == 400
 
 
-def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
+def test_household_recipe_plan_pantry_and_shopping_loop(client, owner, session_factory):
     csrf = owner["csrf_token"]
     headers = {"X-CSRF-Token": csrf}
     member_id = client.get("/api/v1/auth/me").json()["member_id"]
@@ -212,6 +212,28 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     assert pantry["on_hand_quantity_display"] == "0 g"
     assert Decimal(pantry["reserved_quantity"]) == 0
 
+    with session_factory() as db:
+        db.get(MealBatch, batch_id).servings = Decimal("4")
+        db.commit()
+    weighed = client.patch(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked-weight",
+        headers=headers,
+        json={"cooked_weight_grams": 1003},
+    )
+    assert weighed.status_code == 204, weighed.text
+    occurrence = client.get(f"/api/v1/meal-plans/{plan_id}").json()["occurrences"][0]
+    assert Decimal(str(occurrence["cooked_weight_grams"])) == Decimal("1003")
+    assert occurrence["serving_weight_grams"] == 251
+
+    edited_weight = client.patch(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked-weight",
+        headers=headers,
+        json={"cooked_weight_grams": 1200},
+    )
+    assert edited_weight.status_code == 204, edited_weight.text
+    occurrence = client.get(f"/api/v1/meal-plans/{plan_id}").json()["occurrences"][0]
+    assert occurrence["serving_weight_grams"] == 300
+
     uncooked = client.delete(
         f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked", headers=headers
     )
@@ -220,7 +242,16 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner):
     assert pantry["on_hand_quantity"] == "100"
     assert pantry["reserved_quantity"] == "100"
     assert pantry["usable_quantity"] == "0"
-    assert client.get(f"/api/v1/meal-plans/{plan_id}").json()["occurrences"][0]["cooked_at"] is None
+    occurrence = client.get(f"/api/v1/meal-plans/{plan_id}").json()["occurrences"][0]
+    assert occurrence["cooked_at"] is None
+    assert occurrence["cooked_weight_grams"] is None
+    cannot_weigh = client.patch(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked-weight",
+        headers=headers,
+        json={"cooked_weight_grams": 1000},
+    )
+    assert cannot_weigh.status_code == 422
+    assert cannot_weigh.json()["code"] == "BATCH_NOT_COOKED"
 
     cooked_again = client.post(
         f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked", headers=headers

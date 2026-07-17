@@ -267,6 +267,25 @@ button.tag { cursor: pointer; font: inherit; }
 .cook-control__icon { align-items:center;background:color-mix(in srgb,currentColor 12%,transparent);border-radius:9px;display:flex;height:30px;justify-content:center;width:30px; }
 .cook-control__icon svg { height:17px;width:17px; }
 .cook-control strong { font-size:.69rem;letter-spacing:.01em; }
+.batch-weight { align-items:center;background:linear-gradient(100deg,color-mix(in srgb,var(--primary-soft) 68%,var(--surface)),var(--surface));border-top:1px solid color-mix(in srgb,var(--primary) 22%,var(--border));display:grid;gap:14px;grid-column:1/-1;grid-template-columns:minmax(175px,1fr) minmax(145px,180px) minmax(180px,.9fr) auto;padding:12px 14px 12px 16px; }
+.batch-weight__heading { align-items:center;display:flex;gap:10px;min-width:0; }
+.batch-weight__heading>span { align-items:center;background:var(--primary);border-radius:10px;color:var(--surface);display:flex;height:34px;justify-content:center;width:34px; }
+:root[data-theme='dark'] .batch-weight__heading>span { color:#101713; }
+.batch-weight__heading svg { height:17px;width:17px; }
+.batch-weight__heading div,.batch-weight__result { display:grid;gap:2px; }
+.batch-weight__heading strong { font-family:'Fraunces',Georgia,serif;font-size:.83rem; }
+.batch-weight__heading small,.batch-weight__result span,.batch-weight__result small { color:var(--muted);font-size:.59rem;line-height:1.3; }
+.batch-weight__input input { background:var(--surface);min-height:38px; }
+.batch-weight__input .input-suffix span { top:11px; }
+.batch-weight__result { border-left:1px solid var(--border);padding-left:14px; }
+.batch-weight__result>span { font-weight:700;letter-spacing:.06em;text-transform:uppercase; }
+.batch-weight__portions { display:grid;gap:5px;margin:3px 0; }
+.batch-weight__portion { align-items:center;display:grid;gap:10px;grid-template-columns:minmax(0,1fr) auto; }
+.batch-weight__portion>div { display:grid;min-width:0; }
+.batch-weight__portion b { font-size:.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.batch-weight__portion strong { color:var(--primary);font-family:'Fraunces',Georgia,serif;font-size:1.15rem;line-height:1;white-space:nowrap; }
+.batch-weight__actions { align-items:center;display:flex;gap:3px;justify-content:flex-end; }
+.batch-weight__actions .button { font-size:.68rem;min-height:36px;padding-inline:11px; }
 .day-summary { display:grid; gap:16px; position:sticky; top:25px; }
 .day-summary>.card { padding:22px; }
 .nutrition-card { overflow:hidden;position:relative; }
@@ -819,6 +838,10 @@ button.tag { cursor: pointer; font: inherit; }
   .meal-actions .cook-control { height:100%;min-height:100%;padding:8px;width:100%; }
   .cook-control strong { border:0;clip:rect(0 0 0 0);height:1px;margin:-1px;overflow:hidden;padding:0;position:absolute;white-space:nowrap;width:1px; }
   .meal-actions .icon-action { display:none; }
+  .batch-weight { gap:10px;grid-column:1/-1;grid-row:3;grid-template-columns:minmax(0,1fr) minmax(125px,.7fr);padding:13px; }
+  .batch-weight__input { grid-column:1;grid-row:2; }
+  .batch-weight__result { grid-column:2;grid-row:1/3; }
+  .batch-weight__actions { grid-column:1/-1;justify-content:flex-start; }
   .day-summary { display:grid;grid-template-columns:1fr; }
   .nutrition-summary { align-items:center;display:grid;gap:22px;grid-template-columns:125px 1fr; }
   .calorie-ring { height:125px;margin:0;width:125px; }
