@@ -393,6 +393,18 @@ class PantryAdjustment(APIModel):
     reason: str = Field(min_length=1, max_length=60)
 
 
+class PantryLotPatch(VersionedUpdate):
+    display_name: str = Field(min_length=1, max_length=240)
+    quantity: Decimal = Field(ge=0)
+
+    @model_validator(mode="after")
+    def strip_display_name(self):
+        self.display_name = self.display_name.strip()
+        if not self.display_name:
+            raise ValueError("pantry item name cannot be blank")
+        return self
+
+
 class PantryLotOut(APIModel):
     id: str
     display_name: str

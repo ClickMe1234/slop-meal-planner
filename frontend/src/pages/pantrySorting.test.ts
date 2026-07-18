@@ -4,6 +4,7 @@ import { sortPantryItems, stockLevel } from './PantryPage'
 
 const pantry = (name: string, initialQuantity: number, quantity: number, reserved = 0): PantryItem => ({
   id: name,
+  version: 1,
   name,
   initialQuantity,
   quantity,

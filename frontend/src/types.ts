@@ -55,6 +55,7 @@ export interface DayPlan {
 
 export interface PantryItem {
   id: string
+  version: number
   name: string
   initialQuantity: number
   quantity: number

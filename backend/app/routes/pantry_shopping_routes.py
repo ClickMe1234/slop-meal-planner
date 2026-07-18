@@ -12,6 +12,7 @@ from ..schemas import (
     PantryAdjustment,
     PantryLotCreate,
     PantryLotOut,
+    PantryLotPatch,
     ShoppingBuildRequest,
     ShoppingItemCreate,
     ShoppingItemNameUpdate,
@@ -104,6 +105,53 @@ def adjust_pantry_lot(
     db.commit()
     db.refresh(lot)
     return _pantry_out(db, lot, context.user.ingredient_locale)
+
+
+@router.patch("/pantry-items/{lot_id}", response_model=PantryLotOut)
+def patch_pantry_lot(
+    lot_id: str,
+    payload: PantryLotPatch,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    lot = db.scalar(select(PantryLot).where(PantryLot.id == lot_id).with_for_update())
+    if lot is None or lot.household_id != context.user.household_id:
+        raise NotFoundError("Pantry lot")
+    if lot.version != payload.expected_version:
+        raise ConflictError()
+
+    on_hand, _, _ = balances(db, lot)
+    desired_quantity = round_quantity(payload.quantity, lot.unit)
+    delta = desired_quantity - on_hand
+    changed_name = lot.display_name != payload.display_name
+    if changed_name:
+        lot.display_name = payload.display_name
+    if delta:
+        adjust_lot(db, lot.id, delta, "pantry_item_edited")
+    elif changed_name:
+        lot.version += 1
+    db.commit()
+    db.refresh(lot)
+    return _pantry_out(db, lot, context.user.ingredient_locale)
+
+
+@router.delete("/pantry-items/{lot_id}", status_code=204)
+def delete_pantry_lot(
+    lot_id: str,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    lot = db.scalar(select(PantryLot).where(PantryLot.id == lot_id).with_for_update())
+    if lot is None or lot.household_id != context.user.household_id:
+        raise NotFoundError("Pantry lot")
+    _, reserved, _ = balances(db, lot)
+    if reserved > 0:
+        raise DomainError(
+            "PANTRY_ITEM_RESERVED",
+            "This item is reserved by an accepted plan and cannot be deleted",
+        )
+    db.delete(lot)
+    db.commit()
 
 
 def _shopping_out(db: Session, shopping_list: ShoppingList, ingredient_locale: str = "uk") -> ShoppingListOut:
