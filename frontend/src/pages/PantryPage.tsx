@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUpDown, Flag, PackageOpen, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowUpDown, CheckSquare, Flag, PackageOpen, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react'
 import { FormEvent, useMemo, useState } from 'react'
 import { api, isDemoMode, type BackendPantryItem, type BackendPantryMatchCandidate, type BackendPantryMatchSuggestion } from '../api/client'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
@@ -22,6 +22,8 @@ export function PantryPage() {
   const [saving, setSaving] = useState(false)
   const [actionError, setActionError] = useState('')
   const [dismissedMatches, setDismissedMatches] = useState<string[]>([])
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const pantryQuery = useQuery({ queryKey: ['pantry'], queryFn: api.listPantry, enabled: !isDemoMode })
   const matchesQuery = useQuery({ queryKey: ['pantry-match-suggestions'], queryFn: api.pantryMatchSuggestions, enabled: !isDemoMode })
   const pantry: PantryItem[] = isDemoMode ? demoItems : (pantryQuery.data ?? []).map(mapPantryItem)
@@ -128,27 +130,74 @@ export function PantryPage() {
       setSaving(false)
     }
   }
+  const toggleSelectionMode = () => {
+    setSelectionMode(current => !current)
+    setSelectedIds([])
+    setEditingId(null)
+    setActionError('')
+  }
+  const toggleSelected = (itemId: string) => {
+    setSelectedIds(current => current.includes(itemId) ? current.filter(id => id !== itemId) : [...current, itemId])
+  }
+  const selectableVisibleIds = items.filter(item => item.reserved <= 0).map(item => item.id)
+  const allVisibleSelected = selectableVisibleIds.length > 0 && selectableVisibleIds.every(id => selectedIds.includes(id))
+  const toggleVisibleSelection = () => {
+    setSelectedIds(current => {
+      if (allVisibleSelected) return current.filter(id => !selectableVisibleIds.includes(id))
+      return [...new Set([...current, ...selectableVisibleIds])]
+    })
+  }
+  const deleteSelected = async () => {
+    if (!selectedIds.length || !window.confirm(`Delete ${selectedIds.length} selected pantry item${selectedIds.length === 1 ? '' : 's'}? This cannot be undone.`)) return
+    setSaving(true)
+    setActionError('')
+    try {
+      if (isDemoMode) {
+        const deletableIds = pantry.filter(item => selectedIds.includes(item.id) && item.reserved <= 0).map(item => item.id)
+        const blockedCount = selectedIds.length - deletableIds.length
+        setDemoItems(current => current.filter(item => !deletableIds.includes(item.id)))
+        if (blockedCount) setActionError(`${blockedCount} selected item${blockedCount === 1 ? ' is' : 's are'} reserved by a plan and could not be deleted.`)
+      } else {
+        const result = await api.batchDeletePantry(selectedIds)
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['pantry'] }),
+          queryClient.invalidateQueries({ queryKey: ['pantry-match-suggestions'] }),
+        ])
+        if (result.blocked.length) setActionError(`${result.blocked.length} selected item${result.blocked.length === 1 ? ' was' : 's were'} not deleted because it is reserved or no longer exists.`)
+      }
+      setSelectedIds([])
+      setSelectionMode(false)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'The selected pantry items could not be deleted.')
+    } finally {
+      setSaving(false)
+    }
+  }
   const reservedCount = pantry.filter(item => item.reserved > 0).length
   return <div className="page">
-    <PageHeader eyebrow="Household stock" title="Pantry" description="Available stock is reserved when you accept a plan and consumed only when you cook." actions={<Button onClick={() => setAdding(value => !value)}><Plus/>Add item</Button>}/>
+    <PageHeader eyebrow="Household stock" title="Pantry" description="Available stock is reserved when you accept a plan and consumed only when you cook." actions={<><Button variant="secondary" onClick={toggleSelectionMode}>{selectionMode ? <X/> : <CheckSquare/>}{selectionMode ? 'Cancel selection' : 'Select items'}</Button><Button onClick={() => setAdding(value => !value)}><Plus/>Add item</Button></>}/>
     {adding && <Card><form className="form-grid" onSubmit={submit}><label>Ingredient<input required value={name} onChange={event => setName(event.target.value)}/></label><label>Quantity<input required min="0.01" step="any" type="number" value={quantity} onChange={event => setQuantity(event.target.value)}/></label><label>Unit<input required value={unit} onChange={event => setUnit(event.target.value)}/></label><Button>Add to pantry</Button></form></Card>}
     {pantryQuery.isLoading && <Loading label="Loading pantry…"/>}
     {pantryQuery.isError && <Notice tone="warning" title="Pantry unavailable">The server pantry could not be loaded.</Notice>}
     {actionError && <Notice tone="warning" title="Pantry not updated">{actionError}</Notice>}
     <div className="summary-cards"><Card><span className="summary-icon"><PackageOpen/></span><div><strong>{pantry.length}</strong><span>ingredients tracked</span></div></Card><Card><span className="summary-icon summary-icon--warm"><AlertTriangle/></span><div><strong>{pantry.filter(item => item.useSoon).length}</strong><span>flagged use soon</span></div></Card><Card><span className="summary-icon summary-icon--blue"><ArrowUpDown/></span><div><strong>{reservedCount}</strong><span>reserved by plan</span></div></Card></div>
+    {selectionMode && <Card className="pantry-batch-bar"><label><input type="checkbox" checked={allVisibleSelected} disabled={!selectableVisibleIds.length} onChange={toggleVisibleSelection}/><span>Select all available shown</span></label><span>{selectedIds.length} selected</span><small>Items reserved by an accepted plan cannot be selected.</small><Button variant="danger" disabled={saving || !selectedIds.length} onClick={deleteSelected}><Trash2/>Delete selected</Button></Card>}
     <div className="table-toolbar"><div className="small-search"><Search/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search pantry…"/></div><Segmented value={filter} onChange={setFilter} label="Pantry filter" options={[{value:'all',label:'All'},{value:'soon',label:'Use soon'},{value:'low',label:'Low stock'}]}/><label className="pantry-sort"><SlidersHorizontal aria-hidden="true"/><span>Sort</span><select aria-label="Sort pantry" value={sort} onChange={event => setSort(event.target.value as PantrySort)}><option value="alphabetical">Alphabetical</option><option value="stock-low">Lowest stock</option><option value="stock-high">Highest stock</option></select></label></div>
     {filter === 'low' && <p className="pantry-filter-help"><AlertTriangle/>Low stock is automatic when usable stock is 35% or less of the starting quantity. Accepted-plan reservations reduce the usable amount.</p>}
-    <div className="pantry-list">{items.map(item => <PantryRow key={item.id} item={item} match={item.foodRecordId || dismissedMatches.includes(item.id) ? undefined : matchSuggestions.find(suggestion => suggestion.pantry_lot_id === item.id)?.candidates[0]} editing={editingId === item.id} editingName={editingName} editingQuantity={editingQuantity} saving={saving} onEditingName={setEditingName} onEditingQuantity={setEditingQuantity} onStartEditing={startEditing} onCancelEditing={() => setEditingId(null)} onSave={saveEdit} onDelete={deleteItem} onToggleUseSoon={toggleUseSoon} onConfirmMatch={confirmMatch} onDismissMatch={itemId => setDismissedMatches(current => [...current, itemId])}/>)}</div>
+    <div className="pantry-list">{items.map(item => <PantryRow key={item.id} item={item} match={item.foodRecordId || dismissedMatches.includes(item.id) ? undefined : matchSuggestions.find(suggestion => suggestion.pantry_lot_id === item.id)?.candidates[0]} editing={editingId === item.id} editingName={editingName} editingQuantity={editingQuantity} saving={saving} selectionMode={selectionMode} selected={selectedIds.includes(item.id)} onSelected={() => toggleSelected(item.id)} onEditingName={setEditingName} onEditingQuantity={setEditingQuantity} onStartEditing={startEditing} onCancelEditing={() => setEditingId(null)} onSave={saveEdit} onDelete={deleteItem} onToggleUseSoon={toggleUseSoon} onConfirmMatch={confirmMatch} onDismissMatch={itemId => setDismissedMatches(current => [...current, itemId])}/>)}</div>
   </div>
 }
 
-function PantryRow({ item, match, editing, editingName, editingQuantity, saving, onEditingName, onEditingQuantity, onStartEditing, onCancelEditing, onSave, onDelete, onToggleUseSoon, onConfirmMatch, onDismissMatch }: {
+function PantryRow({ item, match, editing, editingName, editingQuantity, saving, selectionMode, selected, onSelected, onEditingName, onEditingQuantity, onStartEditing, onCancelEditing, onSave, onDelete, onToggleUseSoon, onConfirmMatch, onDismissMatch }: {
   item: PantryItem
   match?: BackendPantryMatchCandidate
   editing: boolean
   editingName: string
   editingQuantity: string
   saving: boolean
+  selectionMode: boolean
+  selected: boolean
+  onSelected: () => void
   onEditingName: (value: string) => void
   onEditingQuantity: (value: string) => void
   onStartEditing: (item: PantryItem) => void
@@ -162,7 +211,7 @@ function PantryRow({ item, match, editing, editingName, editingQuantity, saving,
   const usable = item.quantity - item.reserved
   const width = Math.min(100, stockLevel(item) * 100)
   return <Card className={`pantry-item${editing ? ' pantry-item--editing' : ''}`}>
-    <div className="pantry-icon">{item.name.slice(0, 1)}</div>
+    <div className="pantry-leading">{selectionMode && <input type="checkbox" checked={selected} disabled={item.reserved > 0 || saving} aria-label={item.reserved > 0 ? `${item.name} cannot be selected because it is reserved by a plan` : `Select ${item.name}`} onChange={onSelected}/>}<div className="pantry-icon">{item.name.slice(0, 1)}</div></div>
     {editing ? <>
       <div className="pantry-edit-fields">
         <label>Name<input autoFocus required value={editingName} onChange={event => onEditingName(event.target.value)}/></label>
@@ -174,7 +223,7 @@ function PantryRow({ item, match, editing, editingName, editingQuantity, saving,
       <div className="pantry-name"><strong>{item.name}</strong><span>{item.foodRecordId ? 'Linked to saved recipes' : item.category}</span>{match && <div className="pantry-match"><span>Recipe match: <strong>{match.display_name}</strong></span><button type="button" disabled={saving} onClick={() => onConfirmMatch(item, match)}>Use as {match.display_name}</button><button type="button" disabled={saving} onClick={() => onDismissMatch(item.id)}>Not now</button></div>}</div>
       <div className="stock-meter"><div><span>Usable</span><strong>{item.usableDisplay ?? `${usable} ${item.unit}`}</strong></div><div className="macro-track"><span className="macro-fill macro-fill--green" style={{ width: `${width}%` }}/></div><small>{item.reservedDisplay ?? `${item.reserved} ${item.unit}`} reserved</small></div>
       <div className="pantry-tags">{item.useSoon && <Badge tone="warning">Use soon</Badge>}{isLowStock(item) && <Badge tone="warm">Low stock</Badge>}{item.expires && <Badge>Use by {item.expires}</Badge>}{item.staple && <Badge>Staple</Badge>}</div>
-      <div className="pantry-row-actions"><Button variant="ghost" disabled={saving} onClick={() => onToggleUseSoon(item)}><Flag fill={item.useSoon ? 'currentColor' : 'none'}/>{item.useSoon ? 'Unflag' : 'Use soon'}</Button><Button variant="ghost" onClick={() => onStartEditing(item)}>Edit</Button></div>
+      {!selectionMode && <div className="pantry-row-actions"><Button variant="ghost" disabled={saving} onClick={() => onToggleUseSoon(item)}><Flag fill={item.useSoon ? 'currentColor' : 'none'}/>{item.useSoon ? 'Unflag' : 'Use soon'}</Button><Button variant="ghost" onClick={() => onStartEditing(item)}>Edit</Button></div>}
     </>}
   </Card>
 }

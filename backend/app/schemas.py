@@ -441,6 +441,21 @@ class PantryMatchConfirmation(VersionedUpdate):
     food_record_id: str
 
 
+class PantryBatchDeleteRequest(APIModel):
+    item_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class PantryBatchDeleteBlocked(APIModel):
+    id: str
+    display_name: str
+    reason: str
+
+
+class PantryBatchDeleteOut(APIModel):
+    deleted_ids: list[str]
+    blocked: list[PantryBatchDeleteBlocked]
+
+
 class ShoppingBuildRequest(APIModel):
     meal_plan_id: str
     name: str = "Current shopping list"

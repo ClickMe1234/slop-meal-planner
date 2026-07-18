@@ -64,6 +64,32 @@ def test_unreserved_pantry_item_can_be_deleted(client, owner):
     assert client.get("/api/v1/pantry-items").json() == []
 
 
+def test_multiple_pantry_items_can_be_deleted_in_one_request(client, owner):
+    headers = {"X-CSRF-Token": owner["csrf_token"]}
+    created = [
+        client.post(
+            "/api/v1/pantry-items",
+            headers=headers,
+            json={"display_name": name, "quantity": "1", "unit": "count"},
+        ).json()
+        for name in ("Rice", "Beans", "Pasta")
+    ]
+
+    response = client.post(
+        "/api/v1/pantry-items/batch-delete",
+        headers=headers,
+        json={"item_ids": [created[0]["id"], created[2]["id"]]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "deleted_ids": [created[0]["id"], created[2]["id"]],
+        "blocked": [],
+    }
+    remaining = client.get("/api/v1/pantry-items").json()
+    assert [item["display_name"] for item in remaining] == ["Beans"]
+
+
 def test_pantry_item_can_be_flagged_for_use_soon(client, owner):
     headers = {"X-CSRF-Token": owner["csrf_token"]}
     created = client.post(

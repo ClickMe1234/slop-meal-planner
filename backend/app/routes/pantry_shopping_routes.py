@@ -10,6 +10,8 @@ from ..errors import ConflictError, DomainError, NotFoundError
 from ..models import Household, MealBatch, MealPlan, PantryLot, PlanStatus, ShoppingItem, ShoppingList
 from ..schemas import (
     PantryAdjustment,
+    PantryBatchDeleteOut,
+    PantryBatchDeleteRequest,
     PantryLotCreate,
     PantryLotOut,
     PantryLotPatch,
@@ -237,6 +239,47 @@ def delete_pantry_lot(
         )
     db.delete(lot)
     db.commit()
+
+
+@router.post("/pantry-items/batch-delete", response_model=PantryBatchDeleteOut)
+def batch_delete_pantry_lots(
+    payload: PantryBatchDeleteRequest,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    requested_ids = list(dict.fromkeys(payload.item_ids))
+    lots = db.scalars(
+        select(PantryLot)
+        .where(
+            PantryLot.household_id == context.user.household_id,
+            PantryLot.id.in_(requested_ids),
+        )
+        .with_for_update()
+    ).all()
+    lots_by_id = {lot.id: lot for lot in lots}
+    deleted_ids: list[str] = []
+    blocked: list[dict[str, str]] = []
+    for lot_id in requested_ids:
+        lot = lots_by_id.get(lot_id)
+        if lot is None:
+            blocked.append(
+                {"id": lot_id, "display_name": "Pantry item", "reason": "not_found"}
+            )
+            continue
+        _, reserved, _ = balances(db, lot)
+        if reserved > 0:
+            blocked.append(
+                {
+                    "id": lot.id,
+                    "display_name": lot.display_name,
+                    "reason": "reserved_by_plan",
+                }
+            )
+            continue
+        db.delete(lot)
+        deleted_ids.append(lot.id)
+    db.commit()
+    return PantryBatchDeleteOut(deleted_ids=deleted_ids, blocked=blocked)
 
 
 def _shopping_out(db: Session, shopping_list: ShoppingList, ingredient_locale: str = "uk") -> ShoppingListOut:
