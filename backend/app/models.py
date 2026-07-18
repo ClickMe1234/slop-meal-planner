@@ -429,6 +429,9 @@ class PantryLot(IdMixin, AuditMixin, Base):
     expires_on: Mapped[date | None] = mapped_column(Date)
     always_have: Mapped[bool] = mapped_column(Boolean, default=False)
     use_soon: Mapped[bool] = mapped_column(Boolean, default=False)
+    shopping_name_keys: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
 
 
 class PantryTransaction(IdMixin, Base):

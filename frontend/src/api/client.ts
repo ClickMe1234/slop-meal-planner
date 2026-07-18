@@ -148,6 +148,7 @@ export const api = {
   confirmPantryMatch: (itemId: string, payload: { expected_version: number; food_record_id: string }) => request<BackendPantryItem>(`/pantry-items/${itemId}/food-match`, { method: 'PUT', body: JSON.stringify(payload) }),
   activeShoppingList: () => request<BackendShoppingList>('/shopping-lists/active'),
   patchShoppingItem: (listId: string, itemId: string, payload: { expected_version: number; checked?: boolean; display_unit?: string }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  confirmShoppingPantryMatch: (listId: string, itemId: string, payload: { expected_version: number; pantry_lot_id: string }) => request<BackendShoppingPantryMatchResult>(`/shopping-lists/${listId}/items/${itemId}/pantry-match`, { method: 'POST', body: JSON.stringify(payload) }),
   resolveShoppingPantryReview: (listId: string, itemId: string, payload: { expected_version: number; decision: 'buy' | 'use'; pantry_lot_id?: string; pantry_quantity?: number; requirement_quantity?: number; requirement_unit?: string }) => request<BackendShoppingPantryReviewResult>(`/shopping-lists/${listId}/items/${itemId}/pantry-review`, { method: 'POST', body: JSON.stringify(payload) }),
   renameShoppingItem: (listId: string, itemId: string, payload: { display_name: string; expected_display_name: string }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items/${itemId}/name`, { method: 'PUT', body: JSON.stringify(payload) }),
   addShoppingItem: (listId: string, payload: { display_name: string; exact_quantity: number; purchase_quantity: number; unit: string; category: string }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items`, { method: 'POST', body: JSON.stringify(payload) }),
@@ -378,6 +379,7 @@ export interface BackendShoppingItem {
   checked: boolean
   manual: boolean
   pantry_unit_conflicts?: BackendShoppingPantryUnitConflict[]
+  pantry_match_suggestions?: BackendShoppingPantryMatchSuggestion[]
   version: number
 }
 
@@ -389,10 +391,20 @@ export interface BackendShoppingPantryUnitConflict {
   usable_quantity_display: string
 }
 
+export interface BackendShoppingPantryMatchSuggestion extends BackendShoppingPantryUnitConflict {
+  confidence: number
+}
+
 export interface BackendShoppingPantryReviewResult {
   removed: boolean
   item?: BackendShoppingItem
   pantry_item?: BackendPantryItem
+}
+
+export interface BackendShoppingPantryMatchResult {
+  removed: boolean
+  item?: BackendShoppingItem
+  pantry_item: BackendPantryItem
 }
 
 export interface BackendShoppingQuantityOption {

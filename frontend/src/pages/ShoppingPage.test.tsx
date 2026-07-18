@@ -55,4 +55,18 @@ describe('ShoppingPage controls', () => {
     expect(screen.getByText('Chickpeas')).toBeInTheDocument()
     expect(screen.queryByText('Pantry amount needs review')).not.toBeInTheDocument()
   })
+
+  it('lets the shopper confirm a readable pantry match before reviewing units', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    expect(await screen.findByText('Possible pantry match')).toBeInTheDocument()
+    expect(screen.getByText((_, node) => node?.tagName === 'P'
+      && node.textContent === 'Is your pantry item Courgette (4 items) the same ingredient as Courgette on this list?')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Yes, match these' }))
+
+    expect(screen.queryByText('Possible pantry match')).not.toBeInTheDocument()
+    expect(screen.getByText(/Courgette is now linked for this and future shopping lists/i)).toBeInTheDocument()
+    expect(screen.getByText('Decide what this pantry stock covers')).toBeInTheDocument()
+  })
 })

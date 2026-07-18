@@ -85,6 +85,7 @@ export interface ShoppingItem {
   quantityOptions?: ShoppingQuantityOption[]
   exactQuantity?: number
   pantryConflicts?: ShoppingPantryUnitConflict[]
+  pantryMatches?: ShoppingPantryMatchSuggestion[]
 }
 
 export interface ShoppingPantryUnitConflict {
@@ -93,6 +94,10 @@ export interface ShoppingPantryUnitConflict {
   usableQuantity: number
   unit: string
   usableDisplay: string
+}
+
+export interface ShoppingPantryMatchSuggestion extends ShoppingPantryUnitConflict {
+  confidence: number
 }
 
 export interface ShoppingQuantityOption {

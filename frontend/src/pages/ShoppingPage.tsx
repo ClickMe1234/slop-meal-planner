@@ -61,6 +61,7 @@ export function ShoppingPage() {
   const [pantryAmount, setPantryAmount] = useState('')
   const [coveredAmount, setCoveredAmount] = useState('')
   const [pantryReviewSaving, setPantryReviewSaving] = useState(false)
+  const [pantryMatchSavingId, setPantryMatchSavingId] = useState('')
   const syncingNames = useRef(false)
 
   const applyServerList = (
@@ -322,6 +323,56 @@ export function ShoppingPage() {
       setVersions(all => ({ ...all, [id]: result.item!.version }))
     }
     setPantryReviewId('')
+  }
+
+  const confirmPantryMatch = async (item: ShoppingItem) => {
+    const match = item.pantryMatches?.[0]
+    if (!match) return
+    setPantryMatchSavingId(item.id)
+    try {
+      if (isDemoMode) {
+        setItems(all => all.map(value => value.id === item.id ? {
+          ...value,
+          pantryMatches: [],
+          pantryConflicts: [{
+            pantryLotId: match.pantryLotId,
+            displayName: match.displayName,
+            usableQuantity: match.usableQuantity,
+            unit: match.unit,
+            usableDisplay: match.usableDisplay,
+          }],
+        } : value))
+        setPantryReviewId(item.id)
+        setPantryReviewLotId(match.pantryLotId)
+      } else if (online && listId && versions[item.id]) {
+        const result = await api.confirmShoppingPantryMatch(listId, item.id, {
+          expected_version: versions[item.id],
+          pantry_lot_id: match.pantryLotId,
+        })
+        if (result.removed || !result.item) {
+          setItems(all => all.filter(value => value.id !== item.id))
+          setVersions(all => {
+            const next = { ...all }
+            delete next[item.id]
+            return next
+          })
+          setNotice(`${match.displayName} matched; your pantry stock covers this shopping line.`)
+          return
+        }
+        const mapped = mapShoppingItem(result.item)
+        setItems(all => all.map(value => value.id === item.id ? mapped : value))
+        setVersions(all => ({ ...all, [item.id]: result.item!.version }))
+        if (mapped.pantryConflicts?.some(conflict => conflict.pantryLotId === match.pantryLotId)) {
+          setPantryReviewId(item.id)
+          setPantryReviewLotId(match.pantryLotId)
+        }
+      }
+      setNotice(`${match.displayName} is now linked for this and future shopping lists.`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'The pantry match could not be confirmed.')
+    } finally {
+      setPantryMatchSavingId('')
+    }
   }
 
   const keepFullPurchase = async (item: ShoppingItem) => {
@@ -600,6 +651,7 @@ export function ShoppingPage() {
           <Card className="shopping-list">{group.map(item => {
             const mutation = mutationsByItem.get(item.id)
             const pantryConflict = item.pantryConflicts?.find(conflict => conflict.pantryLotId === pantryReviewLotId) ?? item.pantryConflicts?.[0]
+            const pantryMatch = item.pantryMatches?.[0]
             const pantryReviewOpen = pantryReviewId === item.id && Boolean(pantryConflict)
             const canReviewPantry = isDemoMode || (online && Boolean(listId) && Boolean(versions[item.id]))
             return <div className={`shopping-item-block ${item.checked ? 'checked' : ''}`} key={item.id}>
@@ -633,6 +685,7 @@ export function ShoppingPage() {
                   onClick={() => startNameEdit(item)}
                 ><Pencil size={16}/></Button>
               </div>
+              {pantryMatch && !pantryConflict && <div className="shopping-pantry-match" role="status"><PackageOpen/><div><strong>Possible pantry match</strong><p>Is your pantry item <b>{pantryMatch.displayName}</b> ({pantryMatch.usableDisplay}) the same ingredient as <b>{item.name}</b> on this list?</p><small>Confirming remembers the match; you will still review units that cannot be converted safely.</small></div><Badge tone="green">Suggested</Badge><Button type="button" variant="secondary" disabled={!canReviewPantry || pantryMatchSavingId === item.id} onClick={() => confirmPantryMatch(item)}>{pantryMatchSavingId === item.id ? 'Matching…' : canReviewPantry ? 'Yes, match these' : 'Reconnect to match'}</Button></div>}
               {pantryConflict && <div className="shopping-pantry-warning" role="status"><AlertTriangle/><div><strong>Pantry amount needs review</strong><p>You have {pantryConflict.usableDisplay} of {pantryConflict.displayName}, but this list needs {item.exact || item.buy}. Savour cannot safely compare {unitLabel(pantryConflict.unit)} with {unitLabel(item.unit ?? '')}.</p></div><Badge tone="warning">Unit check</Badge><Button type="button" variant="secondary" disabled={!canReviewPantry} onClick={() => pantryReviewOpen ? setPantryReviewId('') : startPantryReview(item)}>{pantryReviewOpen ? 'Close' : canReviewPantry ? 'Review pantry' : 'Reconnect to review'}</Button></div>}
               {pantryReviewOpen && pantryConflict && <form className="shopping-pantry-review" onSubmit={event => usePantryAmount(event, item)}><div className="shopping-pantry-review-heading"><PackageOpen/><div><strong>Decide what this pantry stock covers</strong><p>No conversion will be remembered or assumed. This decision only adjusts this pantry lot and shopping line.</p></div></div>{(item.pantryConflicts?.length ?? 0) > 1 && <label>Pantry item<select value={pantryReviewLotId} onChange={event => { setPantryReviewLotId(event.target.value); setPantryAmount('') }}>{item.pantryConflicts?.map(conflict => <option key={conflict.pantryLotId} value={conflict.pantryLotId}>{conflict.displayName} · {conflict.usableDisplay}</option>)}</select></label>}<div className="shopping-pantry-review-grid"><label>Remove from pantry<div className="shopping-review-quantity"><input required type="number" min="0.01" max={pantryConflict.usableQuantity} step="any" value={pantryAmount} onChange={event => setPantryAmount(event.target.value)} placeholder="0"/><span>{unitLabel(pantryConflict.unit)}</span></div><small>Up to {pantryConflict.usableDisplay} available</small></label><label>This amount covers<div className="shopping-review-quantity"><input required type="number" min="0.01" max={item.exactQuantity} step="any" value={coveredAmount} onChange={event => setCoveredAmount(event.target.value)} placeholder="0"/><span>{unitLabel(item.unit ?? '')}</span></div><small>How much to remove from the recipe requirement</small></label></div><div className="shopping-pantry-review-actions"><Button type="submit" disabled={pantryReviewSaving || !pantryAmount || !coveredAmount}>Use pantry amount</Button><Button type="button" variant="secondary" disabled={pantryReviewSaving} onClick={() => keepFullPurchase(item)}>Buy as listed</Button><Button type="button" variant="ghost" disabled={pantryReviewSaving} onClick={() => setPantryReviewId('')}>Cancel</Button></div></form>}
               {editingId === item.id && <form className="shopping-name-editor" onSubmit={event => finishNameEdit(event, item)}>
@@ -698,6 +751,14 @@ export function mapShoppingItem(item: BackendShoppingItem): ShoppingItem {
       usableQuantity: Number(conflict.usable_quantity),
       unit: conflict.unit,
       usableDisplay: conflict.usable_quantity_display,
+    })),
+    pantryMatches: (item.pantry_match_suggestions ?? []).map(match => ({
+      pantryLotId: match.pantry_lot_id,
+      displayName: match.display_name,
+      usableQuantity: Number(match.usable_quantity),
+      unit: match.unit,
+      usableDisplay: match.usable_quantity_display,
+      confidence: match.confidence,
     })),
   }
 }

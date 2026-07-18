@@ -506,6 +506,19 @@ class ShoppingPantryUnitConflict(APIModel):
     usable_quantity_display: str
 
 
+class ShoppingPantryMatchSuggestion(APIModel):
+    pantry_lot_id: str
+    display_name: str
+    usable_quantity: Decimal
+    unit: str
+    usable_quantity_display: str
+    confidence: float
+
+
+class ShoppingPantryMatchRequest(VersionedUpdate):
+    pantry_lot_id: str
+
+
 class ShoppingPantryReviewRequest(VersionedUpdate):
     decision: Literal["buy", "use"]
     pantry_lot_id: str | None = None
@@ -541,6 +554,7 @@ class ShoppingItemOut(APIModel):
     checked: bool
     manual: bool
     pantry_unit_conflicts: list[ShoppingPantryUnitConflict]
+    pantry_match_suggestions: list[ShoppingPantryMatchSuggestion]
     version: int
 
 
@@ -548,6 +562,12 @@ class ShoppingPantryReviewOut(APIModel):
     removed: bool
     item: ShoppingItemOut | None = None
     pantry_item: PantryLotOut | None = None
+
+
+class ShoppingPantryMatchOut(APIModel):
+    removed: bool
+    item: ShoppingItemOut | None = None
+    pantry_item: PantryLotOut
 
 
 class ShoppingListOut(APIModel):

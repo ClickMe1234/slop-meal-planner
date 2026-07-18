@@ -118,7 +118,8 @@ export const demoPantry: PantryItem[] = [
   { id: 'p3', version: 1, name: 'Greek yoghurt', initialQuantity: 1000, quantity: 500, unit: 'g', reserved: 350, quantityDisplay: '500 g', reservedDisplay: '350 g', usableDisplay: '150 g', category: 'Dairy & eggs', expires: '15 Jul', useSoon: true },
   { id: 'p4', version: 1, name: 'Chickpeas', initialQuantity: 4, quantity: 3, unit: 'tins', reserved: 2, quantityDisplay: '3 tins', reservedDisplay: '2 tins', usableDisplay: '1 tin', category: 'Cupboard' },
   { id: 'p5', version: 1, name: 'Olive oil', initialQuantity: 1000, quantity: 620, unit: 'ml', reserved: 90, quantityDisplay: '620 ml', reservedDisplay: '90 ml', usableDisplay: '530 ml', category: 'Cupboard', staple: true },
-  { id: 'p6', version: 1, name: 'Spinach', initialQuantity: 250, quantity: 180, unit: 'g', reserved: 150, quantityDisplay: '180 g', reservedDisplay: '150 g', usableDisplay: '30 g', category: 'Fruit & veg', expires: '14 Jul', useSoon: true }
+  { id: 'p6', version: 1, name: 'Spinach', initialQuantity: 250, quantity: 180, unit: 'g', reserved: 150, quantityDisplay: '180 g', reservedDisplay: '150 g', usableDisplay: '30 g', category: 'Fruit & veg', expires: '14 Jul', useSoon: true },
+  { id: 'p7', version: 1, name: 'Courgette', initialQuantity: 4, quantity: 4, unit: 'items', reserved: 0, quantityDisplay: '4 items', reservedDisplay: '0 items', usableDisplay: '4 items', category: 'Fruit & veg' }
 ]
 
 export const initialShopping: ShoppingItem[] = [
@@ -135,5 +136,6 @@ export const initialShopping: ShoppingItem[] = [
   { id: 's5', name: 'Red peppers', buy: '3 items', exact: '', category: 'Fruit & veg', checked: false, updatedAt: 1 },
   { id: 's6', name: 'Lemons', buy: '2 items', exact: '', category: 'Fruit & veg', checked: false, updatedAt: 1 },
   { id: 's7', name: 'Chickpeas', buy: '2 × 400 g tins', exact: '760 g required', exactQuantity: 760, pantryUsed: '1 tin already available', category: 'Cupboard', checked: false, updatedAt: 1, unit: 'g', pantryConflicts: [{ pantryLotId: 'p4', displayName: 'Chickpeas', usableQuantity: 1, unit: 'item', usableDisplay: '1 item' }] },
-  { id: 's8', name: 'Arborio rice', buy: '500 g', exact: '380 g required', category: 'Cupboard', checked: false, updatedAt: 1 }
+  { id: 's8', name: 'Arborio rice', buy: '500 g', exact: '380 g required', category: 'Cupboard', checked: false, updatedAt: 1 },
+  { id: 's9', name: 'Courgette', buy: '700 g', exact: '', exactQuantity: 700, category: 'Fruit & veg', checked: false, updatedAt: 1, unit: 'g', pantryMatches: [{ pantryLotId: 'p7', displayName: 'Courgette', usableQuantity: 4, unit: 'item', usableDisplay: '4 items', confidence: 1 }] }
 ]

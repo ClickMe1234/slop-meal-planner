@@ -23,11 +23,13 @@ from ..schemas import (
     ShoppingItemOut,
     ShoppingItemPatch,
     ShoppingListOut,
+    ShoppingPantryMatchOut,
+    ShoppingPantryMatchRequest,
     ShoppingPantryReviewOut,
     ShoppingPantryReviewRequest,
 )
 from ..services.pantry import adjust_lot, balances, reserve_plan_batches
-from ..services.pantry_matching import pantry_match_candidates
+from ..services.pantry_matching import pantry_match_candidates, pantry_name_similarity
 from ..services.ingredient_names import ingredient_name_keys, remember_ingredient_name
 from ..services.quantities import (
     canonical_quantity_unit,
@@ -348,6 +350,7 @@ def _shopping_item_data(
                 ),
             }
         )
+    match_suggestions = _shopping_pantry_match_suggestions(db, item)
     data.update(
         display_name=convert_ingredient_text(db, item.display_name, ingredient_locale),
         exact_quantity=selected["exact_quantity"],
@@ -358,8 +361,66 @@ def _shopping_item_data(
         available_units=list(units),
         quantity_options=options,
         pantry_unit_conflicts=conflicts,
+        pantry_match_suggestions=match_suggestions,
     )
     return data
+
+
+def _shopping_source_keys(db: Session, item: ShoppingItem) -> set[str]:
+    return set(item.source_name_keys or ingredient_name_keys(db, item.display_name))
+
+
+def _shopping_pantry_match_suggestions(
+    db: Session,
+    item: ShoppingItem,
+) -> list[dict[str, object]]:
+    shopping_list = db.get(ShoppingList, item.shopping_list_id)
+    if shopping_list is None:
+        return []
+    source_keys = _shopping_source_keys(db, item)
+    conflict_lot_ids = {
+        str(conflict.get("pantry_lot_id"))
+        for conflict in item.pantry_unit_conflicts or []
+    }
+    suggestions: list[dict[str, object]] = []
+    lots = db.scalars(
+        select(PantryLot).where(PantryLot.household_id == shopping_list.household_id)
+    ).all()
+    for lot in lots:
+        if lot.id in conflict_lot_ids or source_keys.intersection(
+            lot.shopping_name_keys or []
+        ):
+            continue
+        if (
+            item.food_record_id
+            and lot.food_record_id
+            and item.food_record_id != lot.food_record_id
+        ):
+            continue
+        _, _, usable = balances(db, lot)
+        if usable <= 0:
+            continue
+        confidence = pantry_name_similarity(db, lot.display_name, item.display_name)
+        if confidence < 0.72:
+            continue
+        unit = canonical_quantity_unit(lot.unit)
+        suggestions.append(
+            {
+                "pantry_lot_id": lot.id,
+                "display_name": lot.display_name,
+                "usable_quantity": round_quantity(usable, unit),
+                "unit": unit,
+                "usable_quantity_display": format_quantity(usable, unit),
+                "confidence": round(confidence, 3),
+            }
+        )
+    return sorted(
+        suggestions,
+        key=lambda suggestion: (
+            -float(suggestion["confidence"]),
+            str(suggestion["display_name"]).casefold(),
+        ),
+    )[:3]
 
 
 def _shopping_item_out(
@@ -489,6 +550,123 @@ def patch_item(
     db.commit()
     db.refresh(item)
     return _shopping_item_out(db, item, context.user.ingredient_locale)
+
+
+@router.post(
+    "/shopping-lists/{list_id}/items/{item_id}/pantry-match",
+    response_model=ShoppingPantryMatchOut,
+)
+def confirm_shopping_pantry_match(
+    list_id: str,
+    item_id: str,
+    payload: ShoppingPantryMatchRequest,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    shopping_list = db.scalar(
+        select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
+    )
+    item = db.scalar(
+        select(ShoppingItem).where(ShoppingItem.id == item_id).with_for_update()
+    )
+    if (
+        shopping_list is None
+        or shopping_list.household_id != context.user.household_id
+        or item is None
+        or item.shopping_list_id != shopping_list.id
+    ):
+        raise NotFoundError("Shopping item")
+    if item.version != payload.expected_version:
+        raise ConflictError()
+    suggestion = next(
+        (
+            value
+            for value in _shopping_pantry_match_suggestions(db, item)
+            if value["pantry_lot_id"] == payload.pantry_lot_id
+        ),
+        None,
+    )
+    if suggestion is None:
+        raise DomainError(
+            "PANTRY_MATCH_UNAVAILABLE",
+            "That pantry item is no longer a suggested match for this shopping ingredient",
+        )
+    lot = db.scalar(
+        select(PantryLot)
+        .where(PantryLot.id == payload.pantry_lot_id)
+        .with_for_update()
+    )
+    if lot is None or lot.household_id != context.user.household_id:
+        raise NotFoundError("Pantry lot")
+
+    source_keys = _shopping_source_keys(db, item)
+    lot.shopping_name_keys = sorted(
+        set(lot.shopping_name_keys or []).union(source_keys)
+    )
+    if lot.food_record_id is None and item.food_record_id is not None:
+        lot.food_record_id = item.food_record_id
+    lot.version += 1
+
+    _, _, usable = balances(db, lot)
+    density = (
+        Decimal(item.density_g_per_ml)
+        if item.density_g_per_ml is not None
+        else None
+    )
+    converted = convert_quantity_to_unit(usable, lot.unit, item.unit, density)
+    shopping_list.version += 1
+    if converted is None:
+        conflict = {
+            "pantry_lot_id": lot.id,
+            "display_name": lot.display_name,
+            "usable_quantity": str(usable),
+            "unit": canonical_quantity_unit(lot.unit),
+            "usable_quantity_display": format_quantity(usable, lot.unit),
+        }
+        item.pantry_unit_conflicts = [
+            *(
+                value
+                for value in item.pantry_unit_conflicts or []
+                if value.get("pantry_lot_id") != lot.id
+            ),
+            conflict,
+        ]
+        item.version += 1
+        db.commit()
+        db.refresh(item)
+        db.refresh(lot)
+        return ShoppingPantryMatchOut(
+            removed=False,
+            item=_shopping_item_out(db, item, context.user.ingredient_locale),
+            pantry_item=_pantry_out(db, lot, context.user.ingredient_locale),
+        )
+
+    current_exact = round_quantity(Decimal(item.exact_quantity), item.unit)
+    remaining = round_quantity(
+        max(current_exact - max(converted, Decimal("0")), Decimal("0")),
+        item.unit,
+    )
+    if remaining <= 0:
+        db.delete(item)
+        db.commit()
+        db.refresh(lot)
+        return ShoppingPantryMatchOut(
+            removed=True,
+            pantry_item=_pantry_out(db, lot, context.user.ingredient_locale),
+        )
+    item.exact_quantity = remaining
+    item.purchase_quantity = max(
+        round_purchase_quantity(remaining, item.unit), remaining
+    )
+    item.version += 1
+    db.commit()
+    db.refresh(item)
+    db.refresh(lot)
+    return ShoppingPantryMatchOut(
+        removed=False,
+        item=_shopping_item_out(db, item, context.user.ingredient_locale),
+        pantry_item=_pantry_out(db, lot, context.user.ingredient_locale),
+    )
 
 
 @router.post(

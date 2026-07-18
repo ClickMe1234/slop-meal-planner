@@ -412,6 +412,65 @@ def test_shopping_flags_linked_pantry_stock_with_incompatible_units(db):
     ]
 
 
+def test_shopping_reuses_a_confirmed_name_match_without_food_records(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    recipe = Recipe(household_id=household.id, title="Courgette pasta")
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id, version_number=1, title=recipe.title, yield_servings=1
+    )
+    db.add(version)
+    db.flush()
+    db.add(
+        RecipeIngredient(
+            recipe_version_id=version.id,
+            position=0,
+            original_text="700 g courgette",
+            quantity_grams=700,
+            food_phrase="courgette",
+        )
+    )
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+    db.add(plan)
+    db.flush()
+    pantry = PantryLot(
+        household_id=household.id,
+        display_name="courgette",
+        initial_quantity=4,
+        unit="count",
+        shopping_name_keys=["courgette", "stem:courgett"],
+    )
+    db.add_all(
+        [
+            MealBatch(
+                meal_plan_id=plan.id,
+                recipe_version_id=version.id,
+                servings=1,
+                planned_cook_date=plan.start_date,
+            ),
+            pantry,
+        ]
+    )
+    db.flush()
+
+    shopping = build_shopping_list(db, household.id, plan.id, "Week shopping")
+    item = db.scalar(
+        select(ShoppingItem).where(ShoppingItem.shopping_list_id == shopping.id)
+    )
+
+    assert item.food_record_id is None
+    assert item.exact_quantity == Decimal("700")
+    assert item.pantry_unit_conflicts[0]["pantry_lot_id"] == pantry.id
+
+
 def test_pantry_reservations_round_indivisible_recipe_units(db):
     household = Household(name="Home")
     db.add(household)
