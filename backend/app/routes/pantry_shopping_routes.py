@@ -351,6 +351,9 @@ def _shopping_item_data(
             }
         )
     match_suggestions = _shopping_pantry_match_suggestions(db, item)
+    confirmed_matches = _shopping_pantry_confirmed_matches(
+        db, item, ingredient_locale
+    )
     data.update(
         display_name=convert_ingredient_text(db, item.display_name, ingredient_locale),
         exact_quantity=selected["exact_quantity"],
@@ -362,6 +365,7 @@ def _shopping_item_data(
         quantity_options=options,
         pantry_unit_conflicts=conflicts,
         pantry_match_suggestions=match_suggestions,
+        pantry_confirmed_matches=confirmed_matches,
     )
     return data
 
@@ -423,6 +427,44 @@ def _shopping_pantry_match_suggestions(
             str(suggestion["display_name"]).casefold(),
         ),
     )[:3]
+
+
+def _shopping_pantry_confirmed_matches(
+    db: Session,
+    item: ShoppingItem,
+    ingredient_locale: str = "uk",
+) -> list[dict[str, object]]:
+    shopping_list = db.get(ShoppingList, item.shopping_list_id)
+    if shopping_list is None:
+        return []
+    source_keys = _shopping_source_keys(db, item)
+    matches: list[dict[str, object]] = []
+    lots = db.scalars(
+        select(PantryLot).where(PantryLot.household_id == shopping_list.household_id)
+    ).all()
+    for lot in lots:
+        if not source_keys.intersection(lot.shopping_name_keys or []):
+            continue
+        _, _, usable = balances(db, lot)
+        unit = canonical_quantity_unit(lot.unit)
+        confidence = pantry_name_similarity(db, lot.display_name, item.display_name)
+        matches.append(
+            {
+                "pantry_lot_id": lot.id,
+                "display_name": convert_ingredient_text(
+                    db, lot.display_name, ingredient_locale
+                ),
+                "usable_quantity": round_quantity(usable, unit),
+                "unit": unit,
+                "usable_quantity_display": format_quantity(usable, unit),
+                "confidence": round(confidence, 3),
+                "fuzzy": confidence < 0.995,
+            }
+        )
+    return sorted(
+        matches,
+        key=lambda match: str(match["display_name"]).casefold(),
+    )
 
 
 def _shopping_item_out(
@@ -580,6 +622,41 @@ def confirm_shopping_pantry_match(
         raise NotFoundError("Shopping item")
     if item.version != payload.expected_version:
         raise ConflictError()
+    lot = db.scalar(
+        select(PantryLot)
+        .where(PantryLot.id == payload.pantry_lot_id)
+        .with_for_update()
+    )
+    if lot is None or lot.household_id != context.user.household_id:
+        raise NotFoundError("Pantry lot")
+
+    source_keys = _shopping_source_keys(db, item)
+    if payload.decision == "undo":
+        if not source_keys.intersection(lot.shopping_name_keys or []):
+            raise DomainError(
+                "PANTRY_MATCH_NOT_CONFIRMED",
+                "That pantry match has already been removed",
+            )
+        lot.shopping_name_keys = sorted(
+            set(lot.shopping_name_keys or []).difference(source_keys)
+        )
+        item.pantry_unit_conflicts = [
+            value
+            for value in item.pantry_unit_conflicts or []
+            if value.get("pantry_lot_id") != lot.id
+        ]
+        lot.version += 1
+        item.version += 1
+        shopping_list.version += 1
+        db.commit()
+        db.refresh(item)
+        db.refresh(lot)
+        return ShoppingPantryMatchOut(
+            removed=False,
+            item=_shopping_item_out(db, item, context.user.ingredient_locale),
+            pantry_item=_pantry_out(db, lot, context.user.ingredient_locale),
+        )
+
     suggestion = next(
         (
             value
@@ -593,15 +670,6 @@ def confirm_shopping_pantry_match(
             "PANTRY_MATCH_UNAVAILABLE",
             "That pantry item is no longer a suggested match for this shopping ingredient",
         )
-    lot = db.scalar(
-        select(PantryLot)
-        .where(PantryLot.id == payload.pantry_lot_id)
-        .with_for_update()
-    )
-    if lot is None or lot.household_id != context.user.household_id:
-        raise NotFoundError("Pantry lot")
-
-    source_keys = _shopping_source_keys(db, item)
     if payload.decision == "reject":
         lot.rejected_shopping_name_keys = sorted(
             set(lot.rejected_shopping_name_keys or []).union(source_keys)
@@ -652,33 +720,6 @@ def confirm_shopping_pantry_match(
             ),
             conflict,
         ]
-        item.version += 1
-        db.commit()
-        db.refresh(item)
-        db.refresh(lot)
-        return ShoppingPantryMatchOut(
-            removed=False,
-            item=_shopping_item_out(db, item, context.user.ingredient_locale),
-            pantry_item=_pantry_out(db, lot, context.user.ingredient_locale),
-        )
-
-    current_exact = round_quantity(Decimal(item.exact_quantity), item.unit)
-    remaining = round_quantity(
-        max(current_exact - max(converted, Decimal("0")), Decimal("0")),
-        item.unit,
-    )
-    if remaining <= 0:
-        db.delete(item)
-        db.commit()
-        db.refresh(lot)
-        return ShoppingPantryMatchOut(
-            removed=True,
-            pantry_item=_pantry_out(db, lot, context.user.ingredient_locale),
-        )
-    item.exact_quantity = remaining
-    item.purchase_quantity = max(
-        round_purchase_quantity(remaining, item.unit), remaining
-    )
     item.version += 1
     db.commit()
     db.refresh(item)

@@ -86,6 +86,7 @@ export interface ShoppingItem {
   exactQuantity?: number
   pantryConflicts?: ShoppingPantryUnitConflict[]
   pantryMatches?: ShoppingPantryMatchSuggestion[]
+  pantryConfirmedMatches?: ShoppingPantryConfirmedMatch[]
 }
 
 export interface ShoppingPantryUnitConflict {
@@ -98,6 +99,10 @@ export interface ShoppingPantryUnitConflict {
 
 export interface ShoppingPantryMatchSuggestion extends ShoppingPantryUnitConflict {
   confidence: number
+}
+
+export interface ShoppingPantryConfirmedMatch extends ShoppingPantryMatchSuggestion {
+  fuzzy: boolean
 }
 
 export interface ShoppingQuantityOption {

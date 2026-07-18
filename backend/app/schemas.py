@@ -515,9 +515,13 @@ class ShoppingPantryMatchSuggestion(APIModel):
     confidence: float
 
 
+class ShoppingPantryConfirmedMatch(ShoppingPantryMatchSuggestion):
+    fuzzy: bool
+
+
 class ShoppingPantryMatchRequest(VersionedUpdate):
     pantry_lot_id: str
-    decision: Literal["match", "reject"]
+    decision: Literal["match", "reject", "undo"]
 
 
 class ShoppingPantryReviewRequest(VersionedUpdate):
@@ -556,6 +560,7 @@ class ShoppingItemOut(APIModel):
     manual: bool
     pantry_unit_conflicts: list[ShoppingPantryUnitConflict]
     pantry_match_suggestions: list[ShoppingPantryMatchSuggestion]
+    pantry_confirmed_matches: list[ShoppingPantryConfirmedMatch]
     version: int
 
 
