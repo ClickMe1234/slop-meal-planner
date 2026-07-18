@@ -28,13 +28,13 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
   }, [menuOpen])
   const logout = async () => {
     if (!isDemoMode) await api.logout()
-    localStorage.removeItem('savour-demo-session')
+    localStorage.removeItem('slop-demo-session')
     navigate('/login')
   }
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className={`sidebar ${menuOpen ? 'sidebar--open' : ''}`}>
-      <div className="brand"><div className="brand-mark"><Heart size={20} fill="currentColor" /></div><div><strong>Savour</strong><span>meal planner</span></div></div>
+      <div className="brand"><div className="brand-mark"><Heart size={20} fill="currentColor" /></div><div><strong>Slop</strong><span>meal planner</span></div></div>
       <button className="mobile-close" aria-label="Close navigation" onClick={() => setMenuOpen(false)}><X /></button>
       <nav aria-label="Primary navigation">{items.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} onClick={() => setMenuOpen(false)} className={({ isActive }) => isActive ? 'active' : ''}><Icon size={20} /><span>{label}</span></NavLink>)}</nav>
       <div className="sidebar-bottom">
@@ -45,7 +45,7 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
     </aside>
     {menuOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}
     <div className="app-main">
-      <div className="mobile-topbar"><button aria-label="Open account and navigation" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><Menu /></button><div className="mobile-context"><span>{currentItem?.label ?? 'Savour'}</span><strong>Savour</strong></div><NavLink to="/settings" aria-label="Settings"><Settings /></NavLink></div>
+      <div className="mobile-topbar"><button aria-label="Open account and navigation" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><Menu /></button><div className="mobile-context"><span>{currentItem?.label ?? 'Slop'}</span><strong>Slop</strong></div><NavLink to="/settings" aria-label="Settings"><Settings /></NavLink></div>
       <main id="main-content"><Outlet /></main>
     </div>
     <nav className="bottom-nav" aria-label="Mobile navigation">{items.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} className={({ isActive }) => isActive ? 'active' : ''}><Icon size={21} /><span>{label}</span></NavLink>)}</nav>

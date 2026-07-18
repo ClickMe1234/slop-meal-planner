@@ -7,12 +7,12 @@
     <link rel="icon" href="/meal-mark.svg" />
     <script>
       (() => {
-        const stored = localStorage.getItem('savour-theme') || 'system';
+        const stored = localStorage.getItem('slop-theme') || 'system';
         const dark = stored === 'dark' || (stored === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
         document.documentElement.dataset.theme = dark ? 'dark' : 'light';
       })();
     </script>
-    <title>Savour · Meal planner</title>
+    <title>Slop · Meal planner</title>
   </head>
   <body>
     <div id="root"></div>

@@ -1,11 +1,11 @@
 import type { ShoppingItem } from '../types'
 
-const dbName = 'savour-offline'
+const dbName = 'slop-offline'
 const shoppingStoreName = 'shopping'
 const mutationStoreName = 'shoppingMutations'
-const shoppingFallbackKey = 'savour-shopping-fallback'
-const mutationFallbackKey = 'savour-shopping-mutations-fallback'
-const contextFallbackKey = 'savour-shopping-context'
+const shoppingFallbackKey = 'slop-shopping-fallback'
+const mutationFallbackKey = 'slop-shopping-mutations-fallback'
+const contextFallbackKey = 'slop-shopping-context'
 
 export type ShoppingNameMutationStatus = 'pending' | 'conflict'
 
@@ -173,7 +173,7 @@ export function shoppingAsText(items: ShoppingItem[]): string {
       return result
     }, {})
   return [
-    'Savour shopping list',
+    'Slop shopping list',
     ...Object.entries(grouped).map(([category, group]) =>
       `\n${category}\n${group.map(item => `□ ${item.name} — ${item.buy}`).join('\n')}`,
     ),
