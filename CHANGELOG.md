@@ -3,6 +3,10 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.8.1 - 2026-07-18
+
+- Recover from stale browser CSRF tokens when saving recipe meal types and other protected changes.
+
 ## 0.8.0 - 2026-07-18
 
 - Add pantry sorting, item editing and deletion, and batch deletion.

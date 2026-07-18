@@ -4,6 +4,9 @@ const baseUrl = import.meta.env.VITE_API_URL ?? ''
 const csrfStorageKey = 'slop-csrf'
 
 let csrfToken = sessionStorage.getItem(csrfStorageKey)
+let csrfRefresh: Promise<string | null> | null = null
+
+const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 export interface ApiAction {
   kind?: string
@@ -44,27 +47,54 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const method = (options?.method ?? 'GET').toUpperCase()
-  if (!csrfToken && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
-    const csrfResponse = await fetch(`${baseUrl}/api/v1/auth/csrf`, { credentials: 'same-origin' })
-    if (csrfResponse.ok) {
-      const refreshed = await csrfResponse.json() as { csrf_token: string }
+async function refreshCsrfToken(): Promise<string | null> {
+  if (!csrfRefresh) {
+    csrfRefresh = (async () => {
+      const response = await fetch(`${baseUrl}/api/v1/auth/csrf`, { credentials: 'same-origin' })
+      if (!response.ok) return null
+      const refreshed = await response.json() as { csrf_token: string }
       csrfToken = refreshed.csrf_token
       sessionStorage.setItem(csrfStorageKey, csrfToken)
-    }
+      return csrfToken
+    })().finally(() => {
+      csrfRefresh = null
+    })
   }
-  const response = await fetch(`${baseUrl}/api/v1${path}`, {
+  return csrfRefresh
+}
+
+function send(path: string, options: RequestInit | undefined, method: string, token: string | null) {
+  return fetch(`${baseUrl}/api/v1${path}`, {
     credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
-      ...(csrfToken && !['GET', 'HEAD', 'OPTIONS'].includes(method) ? { 'X-CSRF-Token': csrfToken } : {}),
+      ...(token && !safeMethods.has(method) ? { 'X-CSRF-Token': token } : {}),
       ...options?.headers
     },
     ...options
   })
+}
+
+async function readProblem(response: Response) {
+  return response.json().catch(() => null) as Promise<{ detail?: string; code?: string; action?: ApiAction; actions?: ApiAction[]; issues?: ApiNutritionIssue[] } | null>
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? 'GET').toUpperCase()
+  if (!csrfToken && !safeMethods.has(method)) await refreshCsrfToken()
+  const tokenUsed = csrfToken
+  let response = await send(path, options, method, tokenUsed)
+  let problem = response.ok ? null : await readProblem(response)
+
+  // Another tab or page reload can rotate the session's CSRF token. A CSRF
+  // rejection happens before the route is executed, so it is safe to refresh
+  // and retry this request once.
+  if (!response.ok && !safeMethods.has(method) && problem?.code === 'CSRF_FAILED') {
+    if (csrfToken === tokenUsed) await refreshCsrfToken()
+    response = await send(path, options, method, csrfToken)
+    problem = response.ok ? null : await readProblem(response)
+  }
   if (!response.ok) {
-    const problem = await response.json().catch(() => null) as { detail?: string; code?: string; action?: ApiAction; actions?: ApiAction[]; issues?: ApiNutritionIssue[] } | null
     throw new ApiError(
       response.status,
       problem?.detail ?? 'The request could not be completed.',
