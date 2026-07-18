@@ -21,6 +21,7 @@
   --blue-soft: #e4f0f4;
   --danger: #a84242;
   --danger-soft: #f9e7e5;
+  --danger-contrast: #fff;
   --warning: #9a681d;
   --warning-soft: #fbf0d3;
   --shadow: 0 12px 35px rgba(39, 53, 43, .07);
@@ -58,6 +59,7 @@
   --blue-soft: #213841;
   --danger: #f08a84;
   --danger-soft: #472827;
+  --danger-contrast: #1d0d0c;
   --warning: #e6bc68;
   --warning-soft: #44371f;
   --shadow: 0 12px 35px rgba(0, 0, 0, .22);
@@ -117,6 +119,9 @@ h2 { margin-bottom: 6px; }
 .button--secondary:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
 .button--ghost { background: transparent; color: var(--muted); padding-inline: 10px; }
 .button--ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.button--danger { background:var(--danger-soft);border-color:color-mix(in srgb,var(--danger) 42%,var(--border));color:var(--danger); }
+.button--danger:hover:not(:disabled) { background:var(--danger);border-color:var(--danger);color:var(--danger-contrast);transform:translateY(-1px); }
+.button--danger:focus-visible { outline:3px solid color-mix(in srgb,var(--danger) 35%,transparent);outline-offset:2px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-soft); }
 .badge { align-items: center; background: var(--surface-2); border-radius: 99px; color: var(--muted); display: inline-flex; font-size: .7rem; font-weight: 700; gap: 5px; min-height: 24px; padding: 4px 9px; white-space: nowrap; }
 .badge--green { background: var(--primary-soft); color: var(--primary); }
