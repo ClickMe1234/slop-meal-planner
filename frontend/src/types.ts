@@ -67,6 +67,7 @@ export interface PantryItem {
   category: string
   expires?: string
   staple?: boolean
+  useSoon?: boolean
 }
 
 export interface ShoppingItem {

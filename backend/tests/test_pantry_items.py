@@ -57,3 +57,28 @@ def test_unreserved_pantry_item_can_be_deleted(client, owner):
 
     assert deleted.status_code == 204
     assert client.get("/api/v1/pantry-items").json() == []
+
+
+def test_pantry_item_can_be_flagged_for_use_soon(client, owner):
+    headers = {"X-CSRF-Token": owner["csrf_token"]}
+    created = client.post(
+        "/api/v1/pantry-items",
+        headers=headers,
+        json={"display_name": "Spinach", "quantity": "200", "unit": "g"},
+    ).json()
+    assert created["use_soon"] is False
+
+    updated = client.patch(
+        f"/api/v1/pantry-items/{created['id']}",
+        headers=headers,
+        json={
+            "expected_version": created["version"],
+            "display_name": created["display_name"],
+            "quantity": created["on_hand_quantity"],
+            "use_soon": True,
+        },
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["use_soon"] is True
+    assert updated.json()["version"] == created["version"] + 1

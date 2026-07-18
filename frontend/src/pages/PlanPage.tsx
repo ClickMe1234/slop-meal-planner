@@ -110,9 +110,9 @@ const demoIngredientCatalogue: IngredientChoice[] = [
   { id: 'peanuts', term: 'peanuts', name: 'Peanuts', recipes: [{ id: 'apple-peanut-butter', title: 'Apple and peanut butter' }] },
 ]
 const demoPantryItems: BackendPantryItem[] = [
-  { id: 'demo-spinach', display_name: 'Spinach', initial_quantity: 200, unit: 'g', always_have: false, on_hand_quantity: 200, reserved_quantity: 0, usable_quantity: 200, initial_quantity_display: '200 g', on_hand_quantity_display: '200 g', reserved_quantity_display: '0 g', usable_quantity_display: '200 g', version: 1 },
-  { id: 'demo-chickpeas', display_name: 'Chickpeas', initial_quantity: 2, unit: 'can', always_have: false, on_hand_quantity: 2, reserved_quantity: 0, usable_quantity: 2, initial_quantity_display: '2 cans', on_hand_quantity_display: '2 cans', reserved_quantity_display: '0 cans', usable_quantity_display: '2 cans', version: 1 },
-  { id: 'demo-miso', display_name: 'White miso', initial_quantity: 1, unit: 'jar', always_have: false, on_hand_quantity: 1, reserved_quantity: 0, usable_quantity: 1, initial_quantity_display: '1 jar', on_hand_quantity_display: '1 jar', reserved_quantity_display: '0 jars', usable_quantity_display: '1 jar', version: 1 },
+  { id: 'demo-spinach', display_name: 'Spinach', initial_quantity: 200, unit: 'g', always_have: false, use_soon: false, on_hand_quantity: 200, reserved_quantity: 0, usable_quantity: 200, initial_quantity_display: '200 g', on_hand_quantity_display: '200 g', reserved_quantity_display: '0 g', usable_quantity_display: '200 g', version: 1 },
+  { id: 'demo-chickpeas', display_name: 'Chickpeas', initial_quantity: 2, unit: 'can', always_have: false, use_soon: false, on_hand_quantity: 2, reserved_quantity: 0, usable_quantity: 2, initial_quantity_display: '2 cans', on_hand_quantity_display: '2 cans', reserved_quantity_display: '0 cans', usable_quantity_display: '2 cans', version: 1 },
+  { id: 'demo-miso', display_name: 'White miso', initial_quantity: 1, unit: 'jar', always_have: false, use_soon: false, on_hand_quantity: 1, reserved_quantity: 0, usable_quantity: 1, initial_quantity_display: '1 jar', on_hand_quantity_display: '1 jar', reserved_quantity_display: '0 jars', usable_quantity_display: '1 jar', version: 1 },
 ]
 
 function localToday(): string {

@@ -141,7 +141,7 @@ export const api = {
   job: (id: string) => request<JobStatus>(`/jobs/${id}`),
   listPantry: () => request<BackendPantryItem[]>('/pantry-items'),
   addPantry: (payload: { display_name: string; quantity: number; unit: string; always_have?: boolean }) => request<BackendPantryItem>('/pantry-items', { method: 'POST', body: JSON.stringify(payload) }),
-  updatePantry: (itemId: string, payload: { expected_version: number; display_name: string; quantity: number }) => request<BackendPantryItem>(`/pantry-items/${itemId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  updatePantry: (itemId: string, payload: { expected_version: number; display_name: string; quantity: number; use_soon?: boolean }) => request<BackendPantryItem>(`/pantry-items/${itemId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deletePantry: (itemId: string) => request<void>(`/pantry-items/${itemId}`, { method: 'DELETE' }),
   activeShoppingList: () => request<BackendShoppingList>('/shopping-lists/active'),
   patchShoppingItem: (listId: string, itemId: string, payload: { expected_version: number; checked?: boolean; display_unit?: string }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
@@ -332,6 +332,7 @@ export interface BackendPantryItem {
   unit: string
   expires_on?: string
   always_have: boolean
+  use_soon: boolean
   on_hand_quantity: number | string
   reserved_quantity: number | string
   usable_quantity: number | string

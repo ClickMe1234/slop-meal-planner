@@ -386,6 +386,7 @@ class PantryLotCreate(APIModel):
     food_record_id: str | None = None
     expires_on: date | None = None
     always_have: bool = False
+    use_soon: bool = False
 
 
 class PantryAdjustment(APIModel):
@@ -396,6 +397,7 @@ class PantryAdjustment(APIModel):
 class PantryLotPatch(VersionedUpdate):
     display_name: str = Field(min_length=1, max_length=240)
     quantity: Decimal = Field(ge=0)
+    use_soon: bool | None = None
 
     @model_validator(mode="after")
     def strip_display_name(self):
@@ -413,6 +415,7 @@ class PantryLotOut(APIModel):
     unit: str
     expires_on: date | None
     always_have: bool
+    use_soon: bool
     on_hand_quantity: Decimal
     reserved_quantity: Decimal
     usable_quantity: Decimal

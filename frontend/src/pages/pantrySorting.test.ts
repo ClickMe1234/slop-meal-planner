@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PantryItem } from '../types'
-import { sortPantryItems, stockLevel } from './PantryPage'
+import { isLowStock, sortPantryItems, stockLevel } from './PantryPage'
 
 const pantry = (name: string, initialQuantity: number, quantity: number, reserved = 0): PantryItem => ({
   id: name,
@@ -33,5 +33,10 @@ describe('pantry sorting', () => {
   it('does not mutate the query result', () => {
     sortPantryItems(items, 'alphabetical')
     expect(items.map(item => item.name)).toEqual(['Rice', 'Beans', 'Apples'])
+  })
+
+  it('automatically treats 35% usable stock or less as low', () => {
+    expect(isLowStock(pantry('Rice', 1000, 400, 50))).toBe(true)
+    expect(isLowStock(pantry('Rice', 1000, 401, 50))).toBe(false)
   })
 })

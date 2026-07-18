@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUpDown, PackageOpen, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowUpDown, Flag, PackageOpen, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { FormEvent, useMemo, useState } from 'react'
 import { api, isDemoMode, type BackendPantryItem } from '../api/client'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
@@ -25,7 +25,7 @@ export function PantryPage() {
   const pantry: PantryItem[] = isDemoMode ? demoItems : (pantryQuery.data ?? []).map(mapPantryItem)
   const items = useMemo(() => sortPantryItems(pantry.filter(item =>
     item.name.toLowerCase().includes(query.toLowerCase())
-    && (filter === 'all' || (filter === 'soon' && Boolean(item.expires)) || (filter === 'low' && stockLevel(item) <= .35))
+    && (filter === 'all' || (filter === 'soon' && item.useSoon) || (filter === 'low' && isLowStock(item)))
   ), sort), [pantry, query, filter, sort])
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -89,6 +89,22 @@ export function PantryPage() {
       setSaving(false)
     }
   }
+  const toggleUseSoon = async (item: PantryItem) => {
+    setSaving(true)
+    setActionError('')
+    try {
+      if (isDemoMode) {
+        setDemoItems(current => current.map(candidate => candidate.id === item.id ? { ...candidate, useSoon: !candidate.useSoon, version: candidate.version + 1 } : candidate))
+      } else {
+        await api.updatePantry(item.id, { expected_version: item.version, display_name: item.name, quantity: item.quantity, use_soon: !item.useSoon })
+        await queryClient.invalidateQueries({ queryKey: ['pantry'] })
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'The use-soon flag could not be changed.')
+    } finally {
+      setSaving(false)
+    }
+  }
   const reservedCount = pantry.filter(item => item.reserved > 0).length
   return <div className="page">
     <PageHeader eyebrow="Household stock" title="Pantry" description="Available stock is reserved when you accept a plan and consumed only when you cook." actions={<Button onClick={() => setAdding(value => !value)}><Plus/>Add item</Button>}/>
@@ -96,10 +112,45 @@ export function PantryPage() {
     {pantryQuery.isLoading && <Loading label="Loading pantry…"/>}
     {pantryQuery.isError && <Notice tone="warning" title="Pantry unavailable">The server pantry could not be loaded.</Notice>}
     {actionError && <Notice tone="warning" title="Pantry not updated">{actionError}</Notice>}
-    <div className="summary-cards"><Card><span className="summary-icon"><PackageOpen/></span><div><strong>{pantry.length}</strong><span>ingredients tracked</span></div></Card><Card><span className="summary-icon summary-icon--warm"><AlertTriangle/></span><div><strong>{pantry.filter(item => item.expires).length}</strong><span>use soon</span></div></Card><Card><span className="summary-icon summary-icon--blue"><ArrowUpDown/></span><div><strong>{reservedCount}</strong><span>reserved by plan</span></div></Card></div>
+    <div className="summary-cards"><Card><span className="summary-icon"><PackageOpen/></span><div><strong>{pantry.length}</strong><span>ingredients tracked</span></div></Card><Card><span className="summary-icon summary-icon--warm"><AlertTriangle/></span><div><strong>{pantry.filter(item => item.useSoon).length}</strong><span>flagged use soon</span></div></Card><Card><span className="summary-icon summary-icon--blue"><ArrowUpDown/></span><div><strong>{reservedCount}</strong><span>reserved by plan</span></div></Card></div>
     <div className="table-toolbar"><div className="small-search"><Search/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search pantry…"/></div><Segmented value={filter} onChange={setFilter} label="Pantry filter" options={[{value:'all',label:'All'},{value:'soon',label:'Use soon'},{value:'low',label:'Low stock'}]}/><label className="pantry-sort"><SlidersHorizontal aria-hidden="true"/><span>Sort</span><select aria-label="Sort pantry" value={sort} onChange={event => setSort(event.target.value as PantrySort)}><option value="alphabetical">Alphabetical</option><option value="stock-low">Lowest stock</option><option value="stock-high">Highest stock</option></select></label></div>
-    <div className="pantry-list">{items.map(item => { const usable = item.quantity - item.reserved; const width = item.initialQuantity > 0 ? Math.max(0, Math.min(100, usable / item.initialQuantity * 100)) : 0; return <Card key={item.id} className={`pantry-item${editingId === item.id ? ' pantry-item--editing' : ''}`}><div className="pantry-icon">{item.name.slice(0,1)}</div>{editingId === item.id ? <><div className="pantry-edit-fields"><label>Name<input autoFocus required value={editingName} onChange={event => setEditingName(event.target.value)}/></label><label>On-hand quantity<div className="pantry-quantity-input"><input required min={item.reserved} step="any" type="number" value={editingQuantity} onChange={event => setEditingQuantity(event.target.value)}/><span>{item.unit}</span></div></label></div><div className="pantry-edit-note">{item.reserved > 0 ? `${item.reservedDisplay ?? `${item.reserved} ${item.unit}`} is reserved and cannot be removed.` : 'Set the current amount you have on hand.'}</div><div className="pantry-edit-actions"><Button disabled={saving || !editingName.trim()} onClick={() => saveEdit(item)}>Save</Button><Button variant="ghost" disabled={saving} onClick={() => setEditingId(null)}>Cancel</Button><Button variant="danger" disabled={saving} onClick={() => deleteItem(item)}><Trash2/>Delete</Button></div></> : <><div className="pantry-name"><strong>{item.name}</strong><span>{item.category}</span></div><div className="stock-meter"><div><span>Usable</span><strong>{item.usableDisplay ?? `${usable} ${item.unit}`}</strong></div><div className="macro-track"><span className="macro-fill macro-fill--green" style={{width:`${width}%`}}/></div><small>{item.reservedDisplay ?? `${item.reserved} ${item.unit}`} reserved</small></div><div className="pantry-tags">{item.expires && <Badge tone="warning">Use by {item.expires}</Badge>}{item.staple && <Badge>Staple</Badge>}</div><Button variant="ghost" onClick={() => startEditing(item)}>Edit</Button></>}</Card>})}</div>
+    {filter === 'low' && <p className="pantry-filter-help"><AlertTriangle/>Low stock is automatic when usable stock is 35% or less of the starting quantity. Accepted-plan reservations reduce the usable amount.</p>}
+    <div className="pantry-list">{items.map(item => <PantryRow key={item.id} item={item} editing={editingId === item.id} editingName={editingName} editingQuantity={editingQuantity} saving={saving} onEditingName={setEditingName} onEditingQuantity={setEditingQuantity} onStartEditing={startEditing} onCancelEditing={() => setEditingId(null)} onSave={saveEdit} onDelete={deleteItem} onToggleUseSoon={toggleUseSoon}/>)}</div>
   </div>
+}
+
+function PantryRow({ item, editing, editingName, editingQuantity, saving, onEditingName, onEditingQuantity, onStartEditing, onCancelEditing, onSave, onDelete, onToggleUseSoon }: {
+  item: PantryItem
+  editing: boolean
+  editingName: string
+  editingQuantity: string
+  saving: boolean
+  onEditingName: (value: string) => void
+  onEditingQuantity: (value: string) => void
+  onStartEditing: (item: PantryItem) => void
+  onCancelEditing: () => void
+  onSave: (item: PantryItem) => void
+  onDelete: (item: PantryItem) => void
+  onToggleUseSoon: (item: PantryItem) => void
+}) {
+  const usable = item.quantity - item.reserved
+  const width = Math.min(100, stockLevel(item) * 100)
+  return <Card className={`pantry-item${editing ? ' pantry-item--editing' : ''}`}>
+    <div className="pantry-icon">{item.name.slice(0, 1)}</div>
+    {editing ? <>
+      <div className="pantry-edit-fields">
+        <label>Name<input autoFocus required value={editingName} onChange={event => onEditingName(event.target.value)}/></label>
+        <label>On-hand quantity<div className="pantry-quantity-input"><input required min={item.reserved} step="any" type="number" value={editingQuantity} onChange={event => onEditingQuantity(event.target.value)}/><span>{item.unit}</span></div></label>
+      </div>
+      <div className="pantry-edit-note">{item.reserved > 0 ? `${item.reservedDisplay ?? `${item.reserved} ${item.unit}`} is reserved and cannot be removed.` : 'Set the current amount you have on hand.'}</div>
+      <div className="pantry-edit-actions"><Button disabled={saving || !editingName.trim()} onClick={() => onSave(item)}>Save</Button><Button variant="ghost" disabled={saving} onClick={onCancelEditing}>Cancel</Button><Button variant="danger" disabled={saving} onClick={() => onDelete(item)}><Trash2/>Delete</Button></div>
+    </> : <>
+      <div className="pantry-name"><strong>{item.name}</strong><span>{item.category}</span></div>
+      <div className="stock-meter"><div><span>Usable</span><strong>{item.usableDisplay ?? `${usable} ${item.unit}`}</strong></div><div className="macro-track"><span className="macro-fill macro-fill--green" style={{ width: `${width}%` }}/></div><small>{item.reservedDisplay ?? `${item.reserved} ${item.unit}`} reserved</small></div>
+      <div className="pantry-tags">{item.useSoon && <Badge tone="warning">Use soon</Badge>}{isLowStock(item) && <Badge tone="warm">Low stock</Badge>}{item.expires && <Badge>Use by {item.expires}</Badge>}{item.staple && <Badge>Staple</Badge>}</div>
+      <div className="pantry-row-actions"><Button variant="ghost" disabled={saving} onClick={() => onToggleUseSoon(item)}><Flag fill={item.useSoon ? 'currentColor' : 'none'}/>{item.useSoon ? 'Unflag' : 'Use soon'}</Button><Button variant="ghost" onClick={() => onStartEditing(item)}>Edit</Button></div>
+    </>}
+  </Card>
 }
 
 export function mapPantryItem(item: BackendPantryItem): PantryItem {
@@ -117,6 +168,7 @@ export function mapPantryItem(item: BackendPantryItem): PantryItem {
     category: 'Pantry',
     expires: item.expires_on,
     staple: item.always_have,
+    useSoon: item.use_soon,
   }
 }
 
@@ -125,6 +177,10 @@ export type PantrySort = 'alphabetical' | 'stock-low' | 'stock-high'
 export function stockLevel(item: PantryItem): number {
   if (item.initialQuantity <= 0) return 0
   return Math.max(0, item.quantity - item.reserved) / item.initialQuantity
+}
+
+export function isLowStock(item: PantryItem): boolean {
+  return stockLevel(item) <= .35
 }
 
 export function sortPantryItems(items: PantryItem[], sort: PantrySort): PantryItem[] {

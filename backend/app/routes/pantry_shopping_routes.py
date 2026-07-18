@@ -84,6 +84,7 @@ def create_pantry_lot(
         food_record_id=payload.food_record_id,
         expires_on=payload.expires_on,
         always_have=payload.always_have,
+        use_soon=payload.use_soon,
     )
     db.add(lot)
     db.commit()
@@ -124,11 +125,14 @@ def patch_pantry_lot(
     desired_quantity = round_quantity(payload.quantity, lot.unit)
     delta = desired_quantity - on_hand
     changed_name = lot.display_name != payload.display_name
+    changed_use_soon = payload.use_soon is not None and lot.use_soon != payload.use_soon
     if changed_name:
         lot.display_name = payload.display_name
+    if payload.use_soon is not None:
+        lot.use_soon = payload.use_soon
     if delta:
         adjust_lot(db, lot.id, delta, "pantry_item_edited")
-    elif changed_name:
+    elif changed_name or changed_use_soon:
         lot.version += 1
     db.commit()
     db.refresh(lot)
