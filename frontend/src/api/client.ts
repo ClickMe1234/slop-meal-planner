@@ -140,9 +140,11 @@ export const api = {
   calculateRecipe: (id: string) => request<{ per_serving_values: Record<string, number> }>(`/recipes/${id}/calculate`, { method: 'POST' }),
   job: (id: string) => request<JobStatus>(`/jobs/${id}`),
   listPantry: () => request<BackendPantryItem[]>('/pantry-items'),
+  pantryMatchSuggestions: () => request<BackendPantryMatchSuggestion[]>('/pantry-match-suggestions'),
   addPantry: (payload: { display_name: string; quantity: number; unit: string; always_have?: boolean }) => request<BackendPantryItem>('/pantry-items', { method: 'POST', body: JSON.stringify(payload) }),
   updatePantry: (itemId: string, payload: { expected_version: number; display_name: string; quantity: number; use_soon?: boolean }) => request<BackendPantryItem>(`/pantry-items/${itemId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deletePantry: (itemId: string) => request<void>(`/pantry-items/${itemId}`, { method: 'DELETE' }),
+  confirmPantryMatch: (itemId: string, payload: { expected_version: number; food_record_id: string }) => request<BackendPantryItem>(`/pantry-items/${itemId}/food-match`, { method: 'PUT', body: JSON.stringify(payload) }),
   activeShoppingList: () => request<BackendShoppingList>('/shopping-lists/active'),
   patchShoppingItem: (listId: string, itemId: string, payload: { expected_version: number; checked?: boolean; display_unit?: string }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items/${itemId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   renameShoppingItem: (listId: string, itemId: string, payload: { display_name: string; expected_display_name: string }) => request<BackendShoppingItem>(`/shopping-lists/${listId}/items/${itemId}/name`, { method: 'PUT', body: JSON.stringify(payload) }),
@@ -327,6 +329,7 @@ export interface RecipeCategoryResponse {
 
 export interface BackendPantryItem {
   id: string
+  food_record_id?: string
   display_name: string
   initial_quantity: number | string
   unit: string
@@ -341,6 +344,17 @@ export interface BackendPantryItem {
   reserved_quantity_display: string
   usable_quantity_display: string
   version: number
+}
+
+export interface BackendPantryMatchCandidate {
+  food_record_id: string
+  display_name: string
+  confidence: number
+}
+
+export interface BackendPantryMatchSuggestion {
+  pantry_lot_id: string
+  candidates: BackendPantryMatchCandidate[]
 }
 
 export interface BackendShoppingItem {

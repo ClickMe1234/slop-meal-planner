@@ -281,6 +281,65 @@ def test_shopping_keeps_readable_required_amount_but_rounds_purchase_up(db):
     assert item.purchase_quantity == Decimal("431")
 
 
+def test_pantry_reservations_convert_compatible_linked_units(db):
+    household = Household(name="Home")
+    food = FoodRecord(
+        provider="test",
+        provider_record_id="rice-cross-unit",
+        dataset_version="1",
+        name="Basmati rice",
+    )
+    db.add_all([household, food])
+    db.flush()
+    recipe = Recipe(household_id=household.id, title="Rice bowl")
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id, version_number=1, title=recipe.title, yield_servings=1
+    )
+    db.add(version)
+    db.flush()
+    db.add(
+        RecipeIngredient(
+            recipe_version_id=version.id,
+            position=0,
+            original_text="500 g basmati rice",
+            quantity_grams=500,
+            food_phrase="Basmati rice",
+            food_record_id=food.id,
+        )
+    )
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+    db.add(plan)
+    db.flush()
+    batch = MealBatch(
+        meal_plan_id=plan.id,
+        recipe_version_id=version.id,
+        servings=1,
+        planned_cook_date=plan.start_date,
+    )
+    lot = PantryLot(
+        household_id=household.id,
+        food_record_id=food.id,
+        display_name="Rice",
+        initial_quantity=1,
+        unit="kg",
+    )
+    db.add_all([batch, lot])
+    db.flush()
+
+    reserve_plan_batches(db, household.id, [batch])
+
+    reservation = db.scalar(select(PantryReservation))
+    assert reservation.quantity == Decimal("0.5")
+    assert reservation.unit == "kg"
+
+
 def test_pantry_reservations_round_indivisible_recipe_units(db):
     household = Household(name="Home")
     db.add(household)

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpDown, Flag, PackageOpen, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { FormEvent, useMemo, useState } from 'react'
-import { api, isDemoMode, type BackendPantryItem } from '../api/client'
+import { api, isDemoMode, type BackendPantryItem, type BackendPantryMatchCandidate, type BackendPantryMatchSuggestion } from '../api/client'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import { demoPantry } from '../data/demo'
 import type { PantryItem } from '../types'
@@ -21,8 +21,12 @@ export function PantryPage() {
   const [editingQuantity, setEditingQuantity] = useState('')
   const [saving, setSaving] = useState(false)
   const [actionError, setActionError] = useState('')
+  const [dismissedMatches, setDismissedMatches] = useState<string[]>([])
   const pantryQuery = useQuery({ queryKey: ['pantry'], queryFn: api.listPantry, enabled: !isDemoMode })
+  const matchesQuery = useQuery({ queryKey: ['pantry-match-suggestions'], queryFn: api.pantryMatchSuggestions, enabled: !isDemoMode })
   const pantry: PantryItem[] = isDemoMode ? demoItems : (pantryQuery.data ?? []).map(mapPantryItem)
+  const demoMatches: BackendPantryMatchSuggestion[] = [{ pantry_lot_id: 'p1', candidates: [{ food_record_id: 'demo-rice', display_name: 'Rice', confidence: .9 }] }]
+  const matchSuggestions = isDemoMode ? demoMatches : (matchesQuery.data ?? [])
   const items = useMemo(() => sortPantryItems(pantry.filter(item =>
     item.name.toLowerCase().includes(query.toLowerCase())
     && (filter === 'all' || (filter === 'soon' && item.useSoon) || (filter === 'low' && isLowStock(item)))
@@ -105,6 +109,25 @@ export function PantryPage() {
       setSaving(false)
     }
   }
+  const confirmMatch = async (item: PantryItem, candidate: BackendPantryMatchCandidate) => {
+    setSaving(true)
+    setActionError('')
+    try {
+      if (isDemoMode) {
+        setDemoItems(current => current.map(existing => existing.id === item.id ? { ...existing, foodRecordId: candidate.food_record_id, version: existing.version + 1 } : existing))
+      } else {
+        await api.confirmPantryMatch(item.id, { expected_version: item.version, food_record_id: candidate.food_record_id })
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['pantry'] }),
+          queryClient.invalidateQueries({ queryKey: ['pantry-match-suggestions'] }),
+        ])
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'The pantry match could not be confirmed.')
+    } finally {
+      setSaving(false)
+    }
+  }
   const reservedCount = pantry.filter(item => item.reserved > 0).length
   return <div className="page">
     <PageHeader eyebrow="Household stock" title="Pantry" description="Available stock is reserved when you accept a plan and consumed only when you cook." actions={<Button onClick={() => setAdding(value => !value)}><Plus/>Add item</Button>}/>
@@ -115,12 +138,13 @@ export function PantryPage() {
     <div className="summary-cards"><Card><span className="summary-icon"><PackageOpen/></span><div><strong>{pantry.length}</strong><span>ingredients tracked</span></div></Card><Card><span className="summary-icon summary-icon--warm"><AlertTriangle/></span><div><strong>{pantry.filter(item => item.useSoon).length}</strong><span>flagged use soon</span></div></Card><Card><span className="summary-icon summary-icon--blue"><ArrowUpDown/></span><div><strong>{reservedCount}</strong><span>reserved by plan</span></div></Card></div>
     <div className="table-toolbar"><div className="small-search"><Search/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search pantry…"/></div><Segmented value={filter} onChange={setFilter} label="Pantry filter" options={[{value:'all',label:'All'},{value:'soon',label:'Use soon'},{value:'low',label:'Low stock'}]}/><label className="pantry-sort"><SlidersHorizontal aria-hidden="true"/><span>Sort</span><select aria-label="Sort pantry" value={sort} onChange={event => setSort(event.target.value as PantrySort)}><option value="alphabetical">Alphabetical</option><option value="stock-low">Lowest stock</option><option value="stock-high">Highest stock</option></select></label></div>
     {filter === 'low' && <p className="pantry-filter-help"><AlertTriangle/>Low stock is automatic when usable stock is 35% or less of the starting quantity. Accepted-plan reservations reduce the usable amount.</p>}
-    <div className="pantry-list">{items.map(item => <PantryRow key={item.id} item={item} editing={editingId === item.id} editingName={editingName} editingQuantity={editingQuantity} saving={saving} onEditingName={setEditingName} onEditingQuantity={setEditingQuantity} onStartEditing={startEditing} onCancelEditing={() => setEditingId(null)} onSave={saveEdit} onDelete={deleteItem} onToggleUseSoon={toggleUseSoon}/>)}</div>
+    <div className="pantry-list">{items.map(item => <PantryRow key={item.id} item={item} match={item.foodRecordId || dismissedMatches.includes(item.id) ? undefined : matchSuggestions.find(suggestion => suggestion.pantry_lot_id === item.id)?.candidates[0]} editing={editingId === item.id} editingName={editingName} editingQuantity={editingQuantity} saving={saving} onEditingName={setEditingName} onEditingQuantity={setEditingQuantity} onStartEditing={startEditing} onCancelEditing={() => setEditingId(null)} onSave={saveEdit} onDelete={deleteItem} onToggleUseSoon={toggleUseSoon} onConfirmMatch={confirmMatch} onDismissMatch={itemId => setDismissedMatches(current => [...current, itemId])}/>)}</div>
   </div>
 }
 
-function PantryRow({ item, editing, editingName, editingQuantity, saving, onEditingName, onEditingQuantity, onStartEditing, onCancelEditing, onSave, onDelete, onToggleUseSoon }: {
+function PantryRow({ item, match, editing, editingName, editingQuantity, saving, onEditingName, onEditingQuantity, onStartEditing, onCancelEditing, onSave, onDelete, onToggleUseSoon, onConfirmMatch, onDismissMatch }: {
   item: PantryItem
+  match?: BackendPantryMatchCandidate
   editing: boolean
   editingName: string
   editingQuantity: string
@@ -132,6 +156,8 @@ function PantryRow({ item, editing, editingName, editingQuantity, saving, onEdit
   onSave: (item: PantryItem) => void
   onDelete: (item: PantryItem) => void
   onToggleUseSoon: (item: PantryItem) => void
+  onConfirmMatch: (item: PantryItem, candidate: BackendPantryMatchCandidate) => void
+  onDismissMatch: (itemId: string) => void
 }) {
   const usable = item.quantity - item.reserved
   const width = Math.min(100, stockLevel(item) * 100)
@@ -145,7 +171,7 @@ function PantryRow({ item, editing, editingName, editingQuantity, saving, onEdit
       <div className="pantry-edit-note">{item.reserved > 0 ? `${item.reservedDisplay ?? `${item.reserved} ${item.unit}`} is reserved and cannot be removed.` : 'Set the current amount you have on hand.'}</div>
       <div className="pantry-edit-actions"><Button disabled={saving || !editingName.trim()} onClick={() => onSave(item)}>Save</Button><Button variant="ghost" disabled={saving} onClick={onCancelEditing}>Cancel</Button><Button variant="danger" disabled={saving} onClick={() => onDelete(item)}><Trash2/>Delete</Button></div>
     </> : <>
-      <div className="pantry-name"><strong>{item.name}</strong><span>{item.category}</span></div>
+      <div className="pantry-name"><strong>{item.name}</strong><span>{item.foodRecordId ? 'Linked to saved recipes' : item.category}</span>{match && <div className="pantry-match"><span>Recipe match: <strong>{match.display_name}</strong></span><button type="button" disabled={saving} onClick={() => onConfirmMatch(item, match)}>Use as {match.display_name}</button><button type="button" disabled={saving} onClick={() => onDismissMatch(item.id)}>Not now</button></div>}</div>
       <div className="stock-meter"><div><span>Usable</span><strong>{item.usableDisplay ?? `${usable} ${item.unit}`}</strong></div><div className="macro-track"><span className="macro-fill macro-fill--green" style={{ width: `${width}%` }}/></div><small>{item.reservedDisplay ?? `${item.reserved} ${item.unit}`} reserved</small></div>
       <div className="pantry-tags">{item.useSoon && <Badge tone="warning">Use soon</Badge>}{isLowStock(item) && <Badge tone="warm">Low stock</Badge>}{item.expires && <Badge>Use by {item.expires}</Badge>}{item.staple && <Badge>Staple</Badge>}</div>
       <div className="pantry-row-actions"><Button variant="ghost" disabled={saving} onClick={() => onToggleUseSoon(item)}><Flag fill={item.useSoon ? 'currentColor' : 'none'}/>{item.useSoon ? 'Unflag' : 'Use soon'}</Button><Button variant="ghost" onClick={() => onStartEditing(item)}>Edit</Button></div>
@@ -156,6 +182,7 @@ function PantryRow({ item, editing, editingName, editingQuantity, saving, onEdit
 export function mapPantryItem(item: BackendPantryItem): PantryItem {
   return {
     id: item.id,
+    foodRecordId: item.food_record_id,
     version: item.version,
     name: item.display_name,
     initialQuantity: Number(item.initial_quantity),

@@ -6,7 +6,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..errors import DomainError, NotFoundError
-from ..models import MealBatch, PantryLot, PantryReservation, PantryTransaction, RecipeVersion
+from ..models import FoodRecord, MealBatch, PantryLot, PantryReservation, PantryTransaction, RecipeVersion
+from .measurement_conversion import convert_quantity_to_unit
 from .quantities import canonical_quantity_unit, round_quantity
 
 
@@ -84,13 +85,17 @@ def reserve_plan_batches(db: Session, household_id: str, batches: list[MealBatch
         existing_by_lot = {reservation.pantry_lot_id: reservation for reservation in existing_reservations}
         for (food_record_id, unit), unrounded_required in requirements.items():
             required = round_quantity(unrounded_required, unit)
+            food = db.get(FoodRecord, food_record_id)
+            density = Decimal(food.density_g_per_ml) if food and food.density_g_per_ml is not None else None
             existing = sum(
                 (
-                    Decimal(reservation.quantity)
+                    converted
                     for reservation in existing_reservations
                     if (reserved_lot := db.get(PantryLot, reservation.pantry_lot_id)) is not None
                     and reserved_lot.food_record_id == food_record_id
-                    and canonical_quantity_unit(reservation.unit) == unit
+                    and (converted := convert_quantity_to_unit(
+                        Decimal(reservation.quantity), reservation.unit, unit, density
+                    )) is not None
                 ),
                 Decimal("0"),
             )
@@ -102,29 +107,38 @@ def reserve_plan_batches(db: Session, household_id: str, batches: list[MealBatch
                 .where(
                     PantryLot.household_id == household_id,
                     PantryLot.food_record_id == food_record_id,
-                    PantryLot.unit == unit,
                 )
                 .order_by(PantryLot.expires_on.asc().nullslast(), PantryLot.created_at)
             ).all()
             for lot in lots:
                 _, _, usable = balances(db, lot)
-                quantity = min(max(usable, Decimal("0")), remaining)
-                if quantity > 0:
+                available = convert_quantity_to_unit(usable, lot.unit, unit, density)
+                if available is None:
+                    continue
+                quantity_in_required_unit = min(max(available, Decimal("0")), remaining)
+                quantity_in_lot_unit = convert_quantity_to_unit(
+                    quantity_in_required_unit, unit, lot.unit, density
+                )
+                if quantity_in_lot_unit is not None and quantity_in_lot_unit > 0:
+                    quantity_in_lot_unit = min(usable, round_quantity(quantity_in_lot_unit, lot.unit))
                     reservation = existing_by_lot.get(lot.id)
                     if reservation is not None:
                         reservation.quantity = round_quantity(
-                            Decimal(reservation.quantity) + quantity, unit
+                            Decimal(reservation.quantity) + quantity_in_lot_unit, lot.unit
                         )
                     else:
                         reservation = PantryReservation(
                             pantry_lot_id=lot.id,
                             meal_batch_id=batch.id,
-                            quantity=round_quantity(quantity, unit),
-                            unit=unit,
+                            quantity=quantity_in_lot_unit,
+                            unit=canonical_quantity_unit(lot.unit),
                         )
                         db.add(reservation)
                         existing_by_lot[lot.id] = reservation
-                    remaining -= quantity
+                    reserved_in_required_unit = convert_quantity_to_unit(
+                        quantity_in_lot_unit, lot.unit, unit, density
+                    )
+                    remaining -= reserved_in_required_unit or Decimal("0")
                 if remaining <= 0:
                     break
     db.flush()

@@ -13,6 +13,8 @@ from ..schemas import (
     PantryLotCreate,
     PantryLotOut,
     PantryLotPatch,
+    PantryMatchConfirmation,
+    PantryMatchSuggestion,
     ShoppingBuildRequest,
     ShoppingItemCreate,
     ShoppingItemNameUpdate,
@@ -21,6 +23,7 @@ from ..schemas import (
     ShoppingListOut,
 )
 from ..services.pantry import adjust_lot, balances, reserve_plan_batches
+from ..services.pantry_matching import pantry_match_candidates
 from ..services.ingredient_names import ingredient_name_keys, remember_ingredient_name
 from ..services.quantities import (
     canonical_quantity_unit,
@@ -67,6 +70,31 @@ def list_pantry(
         .order_by(PantryLot.expires_on.asc().nullslast(), PantryLot.display_name)
     ).all()
     return [_pantry_out(db, lot, context.user.ingredient_locale) for lot in lots]
+
+
+@router.get("/pantry-match-suggestions", response_model=list[PantryMatchSuggestion])
+def list_pantry_match_suggestions(
+    context: AuthContext = Depends(get_auth_context), db: Session = Depends(get_db)
+):
+    lots = db.scalars(
+        select(PantryLot).where(
+            PantryLot.household_id == context.user.household_id,
+            PantryLot.food_record_id.is_(None),
+        )
+    ).all()
+    suggestions = []
+    for lot in lots:
+        candidates = pantry_match_candidates(
+            db,
+            context.user.household_id,
+            lot,
+            context.user.ingredient_locale,
+        )
+        if candidates:
+            suggestions.append(
+                PantryMatchSuggestion(pantry_lot_id=lot.id, candidates=candidates)
+            )
+    return suggestions
 
 
 @router.post("/pantry-items", response_model=PantryLotOut, status_code=201)
@@ -134,6 +162,59 @@ def patch_pantry_lot(
         adjust_lot(db, lot.id, delta, "pantry_item_edited")
     elif changed_name or changed_use_soon:
         lot.version += 1
+    db.commit()
+    db.refresh(lot)
+    return _pantry_out(db, lot, context.user.ingredient_locale)
+
+
+@router.put("/pantry-items/{lot_id}/food-match", response_model=PantryLotOut)
+def confirm_pantry_food_match(
+    lot_id: str,
+    payload: PantryMatchConfirmation,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    lot = db.scalar(select(PantryLot).where(PantryLot.id == lot_id).with_for_update())
+    if lot is None or lot.household_id != context.user.household_id:
+        raise NotFoundError("Pantry lot")
+    if lot.version != payload.expected_version:
+        raise ConflictError()
+    candidates = pantry_match_candidates(
+        db,
+        context.user.household_id,
+        lot,
+        context.user.ingredient_locale,
+    )
+    if payload.food_record_id not in {
+        str(candidate["food_record_id"]) for candidate in candidates
+    }:
+        raise DomainError(
+            "PANTRY_MATCH_UNAVAILABLE",
+            "That ingredient is not a current match from this household's saved recipes",
+        )
+
+    lot.food_record_id = payload.food_record_id
+    lot.version += 1
+    accepted_plans = db.scalars(
+        select(MealPlan).where(
+            MealPlan.household_id == context.user.household_id,
+            MealPlan.status == PlanStatus.ACCEPTED.value,
+        )
+    ).all()
+    for plan in accepted_plans:
+        batches = db.scalars(
+            select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
+        ).all()
+        reserve_plan_batches(db, context.user.household_id, list(batches))
+        shopping_lists = db.scalars(
+            select(ShoppingList).where(
+                ShoppingList.meal_plan_id == plan.id,
+                ShoppingList.active.is_(True),
+            )
+        ).all()
+        for shopping_list in shopping_lists:
+            shopping_list.rebuild_recommended = True
+            shopping_list.version += 1
     db.commit()
     db.refresh(lot)
     return _pantry_out(db, lot, context.user.ingredient_locale)

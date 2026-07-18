@@ -426,6 +426,21 @@ class PantryLotOut(APIModel):
     version: int
 
 
+class PantryMatchCandidate(APIModel):
+    food_record_id: str
+    display_name: str
+    confidence: float
+
+
+class PantryMatchSuggestion(APIModel):
+    pantry_lot_id: str
+    candidates: list[PantryMatchCandidate]
+
+
+class PantryMatchConfirmation(VersionedUpdate):
+    food_record_id: str
+
+
 class ShoppingBuildRequest(APIModel):
     meal_plan_id: str
     name: str = "Current shopping list"
