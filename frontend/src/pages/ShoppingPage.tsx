@@ -348,6 +348,7 @@ export function ShoppingPage() {
         const result = await api.confirmShoppingPantryMatch(listId, item.id, {
           expected_version: versions[item.id],
           pantry_lot_id: match.pantryLotId,
+          decision: 'match',
         })
         if (result.removed || !result.item) {
           setItems(all => all.filter(value => value.id !== item.id))
@@ -370,6 +371,35 @@ export function ShoppingPage() {
       setNotice(`${match.displayName} is now linked for this and future shopping lists.`)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'The pantry match could not be confirmed.')
+    } finally {
+      setPantryMatchSavingId('')
+    }
+  }
+
+  const rejectPantryMatch = async (item: ShoppingItem) => {
+    const match = item.pantryMatches?.[0]
+    if (!match) return
+    setPantryMatchSavingId(item.id)
+    try {
+      if (isDemoMode) {
+        setItems(all => all.map(value => value.id === item.id
+          ? { ...value, pantryMatches: [] }
+          : value))
+      } else if (online && listId && versions[item.id]) {
+        const result = await api.confirmShoppingPantryMatch(listId, item.id, {
+          expected_version: versions[item.id],
+          pantry_lot_id: match.pantryLotId,
+          decision: 'reject',
+        })
+        if (result.item) {
+          const mapped = mapShoppingItem(result.item)
+          setItems(all => all.map(value => value.id === item.id ? mapped : value))
+          setVersions(all => ({ ...all, [item.id]: result.item!.version }))
+        }
+      }
+      setNotice(`${match.displayName} will not be matched with ${item.name}.`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'The pantry match decision could not be saved.')
     } finally {
       setPantryMatchSavingId('')
     }
@@ -685,7 +715,7 @@ export function ShoppingPage() {
                   onClick={() => startNameEdit(item)}
                 ><Pencil size={16}/></Button>
               </div>
-              {pantryMatch && !pantryConflict && <div className="shopping-pantry-match" role="status"><PackageOpen/><div><strong>Possible pantry match</strong><p>Is your pantry item <b>{pantryMatch.displayName}</b> ({pantryMatch.usableDisplay}) the same ingredient as <b>{item.name}</b> on this list?</p><small>Confirming remembers the match; you will still review units that cannot be converted safely.</small></div><Badge tone="green">Suggested</Badge><Button type="button" variant="secondary" disabled={!canReviewPantry || pantryMatchSavingId === item.id} onClick={() => confirmPantryMatch(item)}>{pantryMatchSavingId === item.id ? 'Matching…' : canReviewPantry ? 'Yes, match these' : 'Reconnect to match'}</Button></div>}
+              {pantryMatch && !pantryConflict && <div className="shopping-pantry-match" role="status"><PackageOpen/><div><strong>Possible pantry match</strong><p>Is your pantry item <b>{pantryMatch.displayName}</b> ({pantryMatch.usableDisplay}) the same ingredient as <b>{item.name}</b> on this list?</p><small>Your choice is remembered for future shopping lists.</small></div><Badge tone="green">Suggested</Badge><div className="shopping-pantry-match-actions"><Button type="button" variant="secondary" disabled={!canReviewPantry || pantryMatchSavingId === item.id} onClick={() => confirmPantryMatch(item)}>{pantryMatchSavingId === item.id ? 'Saving…' : canReviewPantry ? 'Yes, match these' : 'Reconnect to decide'}</Button><Button type="button" variant="ghost" disabled={!canReviewPantry || pantryMatchSavingId === item.id} onClick={() => rejectPantryMatch(item)}>Not the same</Button></div></div>}
               {pantryConflict && <div className="shopping-pantry-warning" role="status"><AlertTriangle/><div><strong>Pantry amount needs review</strong><p>You have {pantryConflict.usableDisplay} of {pantryConflict.displayName}, but this list needs {item.exact || item.buy}. Savour cannot safely compare {unitLabel(pantryConflict.unit)} with {unitLabel(item.unit ?? '')}.</p></div><Badge tone="warning">Unit check</Badge><Button type="button" variant="secondary" disabled={!canReviewPantry} onClick={() => pantryReviewOpen ? setPantryReviewId('') : startPantryReview(item)}>{pantryReviewOpen ? 'Close' : canReviewPantry ? 'Review pantry' : 'Reconnect to review'}</Button></div>}
               {pantryReviewOpen && pantryConflict && <form className="shopping-pantry-review" onSubmit={event => usePantryAmount(event, item)}><div className="shopping-pantry-review-heading"><PackageOpen/><div><strong>Decide what this pantry stock covers</strong><p>No conversion will be remembered or assumed. This decision only adjusts this pantry lot and shopping line.</p></div></div>{(item.pantryConflicts?.length ?? 0) > 1 && <label>Pantry item<select value={pantryReviewLotId} onChange={event => { setPantryReviewLotId(event.target.value); setPantryAmount('') }}>{item.pantryConflicts?.map(conflict => <option key={conflict.pantryLotId} value={conflict.pantryLotId}>{conflict.displayName} · {conflict.usableDisplay}</option>)}</select></label>}<div className="shopping-pantry-review-grid"><label>Remove from pantry<div className="shopping-review-quantity"><input required type="number" min="0.01" max={pantryConflict.usableQuantity} step="any" value={pantryAmount} onChange={event => setPantryAmount(event.target.value)} placeholder="0"/><span>{unitLabel(pantryConflict.unit)}</span></div><small>Up to {pantryConflict.usableDisplay} available</small></label><label>This amount covers<div className="shopping-review-quantity"><input required type="number" min="0.01" max={item.exactQuantity} step="any" value={coveredAmount} onChange={event => setCoveredAmount(event.target.value)} placeholder="0"/><span>{unitLabel(item.unit ?? '')}</span></div><small>How much to remove from the recipe requirement</small></label></div><div className="shopping-pantry-review-actions"><Button type="submit" disabled={pantryReviewSaving || !pantryAmount || !coveredAmount}>Use pantry amount</Button><Button type="button" variant="secondary" disabled={pantryReviewSaving} onClick={() => keepFullPurchase(item)}>Buy as listed</Button><Button type="button" variant="ghost" disabled={pantryReviewSaving} onClick={() => setPantryReviewId('')}>Cancel</Button></div></form>}
               {editingId === item.id && <form className="shopping-name-editor" onSubmit={event => finishNameEdit(event, item)}>

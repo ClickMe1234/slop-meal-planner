@@ -432,6 +432,9 @@ class PantryLot(IdMixin, AuditMixin, Base):
     shopping_name_keys: Mapped[list[str]] = mapped_column(
         JSON, default=list, server_default="[]"
     )
+    rejected_shopping_name_keys: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
 
 
 class PantryTransaction(IdMixin, Base):

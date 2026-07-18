@@ -517,6 +517,7 @@ class ShoppingPantryMatchSuggestion(APIModel):
 
 class ShoppingPantryMatchRequest(VersionedUpdate):
     pantry_lot_id: str
+    decision: Literal["match", "reject"]
 
 
 class ShoppingPantryReviewRequest(VersionedUpdate):

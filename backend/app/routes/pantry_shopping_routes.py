@@ -387,8 +387,10 @@ def _shopping_pantry_match_suggestions(
         select(PantryLot).where(PantryLot.household_id == shopping_list.household_id)
     ).all()
     for lot in lots:
-        if lot.id in conflict_lot_ids or source_keys.intersection(
-            lot.shopping_name_keys or []
+        if (
+            lot.id in conflict_lot_ids
+            or source_keys.intersection(lot.shopping_name_keys or [])
+            or source_keys.intersection(lot.rejected_shopping_name_keys or [])
         ):
             continue
         if (
@@ -600,8 +602,27 @@ def confirm_shopping_pantry_match(
         raise NotFoundError("Pantry lot")
 
     source_keys = _shopping_source_keys(db, item)
+    if payload.decision == "reject":
+        lot.rejected_shopping_name_keys = sorted(
+            set(lot.rejected_shopping_name_keys or []).union(source_keys)
+        )
+        lot.version += 1
+        item.version += 1
+        shopping_list.version += 1
+        db.commit()
+        db.refresh(item)
+        db.refresh(lot)
+        return ShoppingPantryMatchOut(
+            removed=False,
+            item=_shopping_item_out(db, item, context.user.ingredient_locale),
+            pantry_item=_pantry_out(db, lot, context.user.ingredient_locale),
+        )
+
     lot.shopping_name_keys = sorted(
         set(lot.shopping_name_keys or []).union(source_keys)
+    )
+    lot.rejected_shopping_name_keys = sorted(
+        set(lot.rejected_shopping_name_keys or []).difference(source_keys)
     )
     if lot.food_record_id is None and item.food_record_id is not None:
         lot.food_record_id = item.food_record_id

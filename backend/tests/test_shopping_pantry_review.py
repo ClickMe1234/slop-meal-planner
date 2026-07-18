@@ -147,7 +147,11 @@ def test_user_can_confirm_an_unresolved_name_match_on_an_existing_list(
     response = client.post(
         f"/api/v1/shopping-lists/{list_id}/items/{item_id}/pantry-match",
         headers={"X-CSRF-Token": owner["csrf_token"]},
-        json={"expected_version": version, "pantry_lot_id": pantry_id},
+        json={
+            "expected_version": version,
+            "pantry_lot_id": pantry_id,
+            "decision": "match",
+        },
     )
 
     assert response.status_code == 200, response.text
@@ -159,3 +163,61 @@ def test_user_can_confirm_an_unresolved_name_match_on_an_existing_list(
         pantry = db.get(PantryLot, pantry_id)
         assert pantry.food_record_id is None
         assert pantry.shopping_name_keys == ["courgette", "stem:courgett"]
+
+
+def test_user_can_reject_an_unresolved_name_match(
+    client, owner, session_factory
+):
+    with session_factory() as db:
+        household = db.scalar(select(Household))
+        pantry = PantryLot(
+            household_id=household.id,
+            display_name="courgette",
+            initial_quantity=4,
+            unit="count",
+        )
+        shopping_list = ShoppingList(
+            household_id=household.id,
+            name="Current shopping list",
+            active=True,
+        )
+        db.add_all([pantry, shopping_list])
+        db.flush()
+        item = ShoppingItem(
+            shopping_list_id=shopping_list.id,
+            display_name="courgette",
+            exact_quantity=700,
+            purchase_quantity=700,
+            unit="g",
+            source_name_keys=["courgette", "stem:courgett"],
+        )
+        db.add(item)
+        db.commit()
+        list_id, item_id, version, pantry_id = (
+            shopping_list.id,
+            item.id,
+            item.version,
+            pantry.id,
+        )
+
+    response = client.post(
+        f"/api/v1/shopping-lists/{list_id}/items/{item_id}/pantry-match",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+        json={
+            "expected_version": version,
+            "pantry_lot_id": pantry_id,
+            "decision": "reject",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["item"]["pantry_match_suggestions"] == []
+    assert payload["item"]["pantry_unit_conflicts"] == []
+    with session_factory() as db:
+        pantry = db.get(PantryLot, pantry_id)
+        assert pantry.shopping_name_keys == []
+        assert pantry.rejected_shopping_name_keys == [
+            "courgette",
+            "stem:courgett",
+        ]

@@ -69,4 +69,15 @@ describe('ShoppingPage controls', () => {
     expect(screen.getByText(/Courgette is now linked for this and future shopping lists/i)).toBeInTheDocument()
     expect(screen.getByText('Decide what this pantry stock covers')).toBeInTheDocument()
   })
+
+  it('lets the shopper reject a suggested pantry match', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    await user.click(await screen.findByRole('button', { name: 'Not the same' }))
+
+    expect(screen.queryByText('Possible pantry match')).not.toBeInTheDocument()
+    expect(screen.getByText('Courgette will not be matched with Courgette.')).toBeInTheDocument()
+    expect(screen.queryByText('Decide what this pantry stock covers')).not.toBeInTheDocument()
+  })
 })
