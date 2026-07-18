@@ -1,6 +1,6 @@
 """Persist pantry unit conflicts on generated shopping items.
 
-Revision ID: 0011_shopping_pantry_unit_conflicts
+Revision ID: 0011_shopping_pantry_conflicts
 Revises: 0010_pantry_use_soon
 """
 
@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0011_shopping_pantry_unit_conflicts"
+revision = "0011_shopping_pantry_conflicts"
 down_revision = "0010_pantry_use_soon"
 branch_labels = None
 depends_on = None
