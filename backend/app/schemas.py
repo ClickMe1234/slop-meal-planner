@@ -386,11 +386,25 @@ class PantryLotCreate(APIModel):
     food_record_id: str | None = None
     expires_on: date | None = None
     always_have: bool = False
+    use_soon: bool = False
 
 
 class PantryAdjustment(APIModel):
     quantity_delta: Decimal
     reason: str = Field(min_length=1, max_length=60)
+
+
+class PantryLotPatch(VersionedUpdate):
+    display_name: str = Field(min_length=1, max_length=240)
+    quantity: Decimal = Field(ge=0)
+    use_soon: bool | None = None
+
+    @model_validator(mode="after")
+    def strip_display_name(self):
+        self.display_name = self.display_name.strip()
+        if not self.display_name:
+            raise ValueError("pantry item name cannot be blank")
+        return self
 
 
 class PantryLotOut(APIModel):
@@ -401,6 +415,7 @@ class PantryLotOut(APIModel):
     unit: str
     expires_on: date | None
     always_have: bool
+    use_soon: bool
     on_hand_quantity: Decimal
     reserved_quantity: Decimal
     usable_quantity: Decimal
@@ -409,6 +424,36 @@ class PantryLotOut(APIModel):
     reserved_quantity_display: str
     usable_quantity_display: str
     version: int
+
+
+class PantryMatchCandidate(APIModel):
+    food_record_id: str
+    display_name: str
+    confidence: float
+
+
+class PantryMatchSuggestion(APIModel):
+    pantry_lot_id: str
+    candidates: list[PantryMatchCandidate]
+
+
+class PantryMatchConfirmation(VersionedUpdate):
+    food_record_id: str
+
+
+class PantryBatchDeleteRequest(APIModel):
+    item_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class PantryBatchDeleteBlocked(APIModel):
+    id: str
+    display_name: str
+    reason: str
+
+
+class PantryBatchDeleteOut(APIModel):
+    deleted_ids: list[str]
+    blocked: list[PantryBatchDeleteBlocked]
 
 
 class ShoppingBuildRequest(APIModel):
@@ -453,6 +498,53 @@ class ShoppingQuantityOption(APIModel):
     approximate: bool = False
 
 
+class ShoppingPantryUnitConflict(APIModel):
+    pantry_lot_id: str
+    display_name: str
+    usable_quantity: Decimal
+    unit: str
+    usable_quantity_display: str
+
+
+class ShoppingPantryMatchSuggestion(APIModel):
+    pantry_lot_id: str
+    display_name: str
+    usable_quantity: Decimal
+    unit: str
+    usable_quantity_display: str
+    confidence: float
+
+
+class ShoppingPantryConfirmedMatch(ShoppingPantryMatchSuggestion):
+    fuzzy: bool
+
+
+class ShoppingPantryMatchRequest(VersionedUpdate):
+    pantry_lot_id: str
+    decision: Literal["match", "reject", "undo"]
+
+
+class ShoppingPantryReviewRequest(VersionedUpdate):
+    decision: Literal["buy", "use"]
+    pantry_lot_id: str | None = None
+    pantry_quantity: Decimal | None = Field(default=None, gt=0)
+    requirement_quantity: Decimal | None = Field(default=None, gt=0)
+    requirement_unit: str | None = None
+
+    @model_validator(mode="after")
+    def require_usage_amounts(self):
+        if self.decision == "use" and (
+            not self.pantry_lot_id
+            or self.pantry_quantity is None
+            or self.requirement_quantity is None
+            or not self.requirement_unit
+        ):
+            raise ValueError(
+                "pantry lot, pantry quantity, requirement quantity and unit are required"
+            )
+        return self
+
+
 class ShoppingItemOut(APIModel):
     id: str
     display_name: str
@@ -466,7 +558,22 @@ class ShoppingItemOut(APIModel):
     category: str
     checked: bool
     manual: bool
+    pantry_unit_conflicts: list[ShoppingPantryUnitConflict]
+    pantry_match_suggestions: list[ShoppingPantryMatchSuggestion]
+    pantry_confirmed_matches: list[ShoppingPantryConfirmedMatch]
     version: int
+
+
+class ShoppingPantryReviewOut(APIModel):
+    removed: bool
+    item: ShoppingItemOut | None = None
+    pantry_item: PantryLotOut | None = None
+
+
+class ShoppingPantryMatchOut(APIModel):
+    removed: bool
+    item: ShoppingItemOut | None = None
+    pantry_item: PantryLotOut
 
 
 class ShoppingListOut(APIModel):

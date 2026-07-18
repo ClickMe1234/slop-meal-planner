@@ -281,6 +281,196 @@ def test_shopping_keeps_readable_required_amount_but_rounds_purchase_up(db):
     assert item.purchase_quantity == Decimal("431")
 
 
+def test_pantry_reservations_convert_compatible_linked_units(db):
+    household = Household(name="Home")
+    food = FoodRecord(
+        provider="test",
+        provider_record_id="rice-cross-unit",
+        dataset_version="1",
+        name="Basmati rice",
+    )
+    db.add_all([household, food])
+    db.flush()
+    recipe = Recipe(household_id=household.id, title="Rice bowl")
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id, version_number=1, title=recipe.title, yield_servings=1
+    )
+    db.add(version)
+    db.flush()
+    db.add(
+        RecipeIngredient(
+            recipe_version_id=version.id,
+            position=0,
+            original_text="500 g basmati rice",
+            quantity_grams=500,
+            food_phrase="Basmati rice",
+            food_record_id=food.id,
+        )
+    )
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+    db.add(plan)
+    db.flush()
+    batch = MealBatch(
+        meal_plan_id=plan.id,
+        recipe_version_id=version.id,
+        servings=1,
+        planned_cook_date=plan.start_date,
+    )
+    lot = PantryLot(
+        household_id=household.id,
+        food_record_id=food.id,
+        display_name="Rice",
+        initial_quantity=1,
+        unit="kg",
+    )
+    db.add_all([batch, lot])
+    db.flush()
+
+    reserve_plan_batches(db, household.id, [batch])
+
+    reservation = db.scalar(select(PantryReservation))
+    assert reservation.quantity == Decimal("0.5")
+    assert reservation.unit == "kg"
+
+
+def test_shopping_flags_linked_pantry_stock_with_incompatible_units(db):
+    household = Household(name="Home")
+    food = FoodRecord(
+        provider="test",
+        provider_record_id="chickpeas-count-conflict",
+        dataset_version="1",
+        name="Chickpeas",
+    )
+    db.add_all([household, food])
+    db.flush()
+    recipe = Recipe(household_id=household.id, title="Chickpea bowl")
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id, version_number=1, title=recipe.title, yield_servings=1
+    )
+    db.add(version)
+    db.flush()
+    db.add(
+        RecipeIngredient(
+            recipe_version_id=version.id,
+            position=0,
+            original_text="400 g chickpeas",
+            quantity_grams=400,
+            food_phrase="Chickpeas",
+            food_record_id=food.id,
+        )
+    )
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+    db.add(plan)
+    db.flush()
+    db.add_all(
+        [
+            MealBatch(
+                meal_plan_id=plan.id,
+                recipe_version_id=version.id,
+                servings=1,
+                planned_cook_date=plan.start_date,
+            ),
+            PantryLot(
+                household_id=household.id,
+                food_record_id=food.id,
+                display_name="Chickpeas",
+                initial_quantity=2,
+                unit="count",
+            ),
+        ]
+    )
+    db.flush()
+
+    shopping = build_shopping_list(db, household.id, plan.id, "Week shopping")
+    item = db.scalar(
+        select(ShoppingItem).where(ShoppingItem.shopping_list_id == shopping.id)
+    )
+
+    assert item.exact_quantity == Decimal("400")
+    assert item.pantry_unit_conflicts == [
+        {
+            "pantry_lot_id": db.scalar(select(PantryLot.id)),
+            "display_name": "Chickpeas",
+            "usable_quantity": "2",
+            "unit": "item",
+            "usable_quantity_display": "2 items",
+        }
+    ]
+
+
+def test_shopping_reuses_a_confirmed_name_match_without_food_records(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    recipe = Recipe(household_id=household.id, title="Courgette pasta")
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id, version_number=1, title=recipe.title, yield_servings=1
+    )
+    db.add(version)
+    db.flush()
+    db.add(
+        RecipeIngredient(
+            recipe_version_id=version.id,
+            position=0,
+            original_text="700 g courgette",
+            quantity_grams=700,
+            food_phrase="courgette",
+        )
+    )
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+    db.add(plan)
+    db.flush()
+    pantry = PantryLot(
+        household_id=household.id,
+        display_name="courgette",
+        initial_quantity=4,
+        unit="count",
+        shopping_name_keys=["courgette", "stem:courgett"],
+    )
+    db.add_all(
+        [
+            MealBatch(
+                meal_plan_id=plan.id,
+                recipe_version_id=version.id,
+                servings=1,
+                planned_cook_date=plan.start_date,
+            ),
+            pantry,
+        ]
+    )
+    db.flush()
+
+    shopping = build_shopping_list(db, household.id, plan.id, "Week shopping")
+    item = db.scalar(
+        select(ShoppingItem).where(ShoppingItem.shopping_list_id == shopping.id)
+    )
+
+    assert item.food_record_id is None
+    assert item.exact_quantity == Decimal("700")
+    assert item.pantry_unit_conflicts[0]["pantry_lot_id"] == pantry.id
+
+
 def test_pantry_reservations_round_indivisible_recipe_units(db):
     household = Household(name="Home")
     db.add(household)

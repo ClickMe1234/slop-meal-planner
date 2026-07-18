@@ -428,6 +428,13 @@ class PantryLot(IdMixin, AuditMixin, Base):
     unit: Mapped[str] = mapped_column(String(30), nullable=False)
     expires_on: Mapped[date | None] = mapped_column(Date)
     always_have: Mapped[bool] = mapped_column(Boolean, default=False)
+    use_soon: Mapped[bool] = mapped_column(Boolean, default=False)
+    shopping_name_keys: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
+    rejected_shopping_name_keys: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
 
 
 class PantryTransaction(IdMixin, Base):
@@ -476,6 +483,9 @@ class ShoppingItem(IdMixin, AuditMixin, Base):
     checked: Mapped[bool] = mapped_column(Boolean, default=False)
     manual: Mapped[bool] = mapped_column(Boolean, default=False)
     source_name_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
+    pantry_unit_conflicts: Mapped[list[dict]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
 
 
 Index("ix_recipe_household_title", Recipe.household_id, Recipe.title)

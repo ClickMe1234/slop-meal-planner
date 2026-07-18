@@ -55,7 +55,10 @@ export interface DayPlan {
 
 export interface PantryItem {
   id: string
+  foodRecordId?: string
+  version: number
   name: string
+  initialQuantity: number
   quantity: number
   unit: string
   reserved: number
@@ -65,6 +68,7 @@ export interface PantryItem {
   category: string
   expires?: string
   staple?: boolean
+  useSoon?: boolean
 }
 
 export interface ShoppingItem {
@@ -79,12 +83,33 @@ export interface ShoppingItem {
   updatedAt: number
   unit?: string
   quantityOptions?: ShoppingQuantityOption[]
+  exactQuantity?: number
+  pantryConflicts?: ShoppingPantryUnitConflict[]
+  pantryMatches?: ShoppingPantryMatchSuggestion[]
+  pantryConfirmedMatches?: ShoppingPantryConfirmedMatch[]
+}
+
+export interface ShoppingPantryUnitConflict {
+  pantryLotId: string
+  displayName: string
+  usableQuantity: number
+  unit: string
+  usableDisplay: string
+}
+
+export interface ShoppingPantryMatchSuggestion extends ShoppingPantryUnitConflict {
+  confidence: number
+}
+
+export interface ShoppingPantryConfirmedMatch extends ShoppingPantryMatchSuggestion {
+  fuzzy: boolean
 }
 
 export interface ShoppingQuantityOption {
   unit: string
   buy: string
   exact: string
+  exactQuantity?: number
   approximate: boolean
 }
 

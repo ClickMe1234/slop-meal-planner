@@ -20,6 +20,7 @@ from ..models import (
 from .pantry import balances
 from .quantities import (
     canonical_quantity_unit,
+    format_quantity,
     round_purchase_quantity,
     round_quantity,
 )
@@ -273,28 +274,48 @@ def build_shopping_list(
             if converted is not None:
                 reserved += converted
         remaining = max(exact - reserved, Decimal("0"))
-        if food_ids:
-            lots = db.scalars(
-                select(PantryLot)
-                .where(
-                    PantryLot.household_id == household_id,
-                    PantryLot.food_record_id.in_(food_ids),
-                )
-                .order_by(PantryLot.expires_on.asc().nullslast())
-            ).all()
-            for lot in lots:
-                _, _, usable = balances(db, lot)
-                converted = convert_quantity_to_unit(
-                    usable,
-                    lot.unit,
-                    unit,
-                    density_by_food.get(lot.food_record_id, default_density),
-                )
-                if converted is None:
-                    continue
-                remaining -= min(max(converted, Decimal("0")), remaining)
-                if remaining <= 0:
-                    break
+        pantry_unit_conflicts: list[dict[str, object]] = []
+        lots = db.scalars(
+            select(PantryLot)
+            .where(PantryLot.household_id == household_id)
+            .order_by(PantryLot.expires_on.asc().nullslast())
+        ).all()
+        for lot in lots:
+            matches_food = bool(
+                food_ids
+                and lot.food_record_id
+                and lot.food_record_id in food_ids
+            )
+            matches_confirmed_name = bool(
+                source_keys.intersection(lot.shopping_name_keys or [])
+            )
+            if not matches_food and not matches_confirmed_name:
+                continue
+            _, _, usable = balances(db, lot)
+            converted = convert_quantity_to_unit(
+                usable,
+                lot.unit,
+                unit,
+                density_by_food.get(lot.food_record_id, default_density),
+            )
+            if converted is None:
+                if usable > 0:
+                    lot_unit = canonical_quantity_unit(lot.unit)
+                    pantry_unit_conflicts.append(
+                        {
+                            "pantry_lot_id": lot.id,
+                            "display_name": lot.display_name,
+                            "usable_quantity": str(usable),
+                            "unit": lot_unit,
+                            "usable_quantity_display": format_quantity(
+                                usable, lot_unit
+                            ),
+                        }
+                    )
+                continue
+            remaining -= min(max(converted, Decimal("0")), remaining)
+            if remaining <= 0:
+                break
         if remaining > 0:
             matching_prior = []
             for item in previous_items:
@@ -349,6 +370,7 @@ def build_shopping_list(
                     checked=checked,
                     manual=False,
                     source_name_keys=sorted(source_keys),
+                    pantry_unit_conflicts=pantry_unit_conflicts,
                 )
             )
     for item in previous_items:

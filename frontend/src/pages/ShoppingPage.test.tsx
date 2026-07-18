@@ -31,4 +31,67 @@ describe('ShoppingPage controls', () => {
     expect(screen.getByText('480 ml')).toBeInTheDocument()
     expect(within(controls).getByRole('button', { name: 'ml' })).toHaveAttribute('aria-pressed', 'true')
   })
+
+  it('flags incompatible pantry units and applies an explicit user conversion', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    await user.click(await screen.findByRole('button', { name: 'Review pantry' }))
+    await user.type(screen.getByRole('spinbutton', { name: /Remove from pantry/ }), '1')
+    await user.type(screen.getByRole('spinbutton', { name: /This amount covers/ }), '760')
+    await user.click(screen.getByRole('button', { name: 'Use pantry amount' }))
+
+    expect(screen.queryByText('Chickpeas')).not.toBeInTheDocument()
+    expect(screen.getByText(/pantry stock adjusted/i)).toBeInTheDocument()
+  })
+
+  it('allows the shopper to keep the full purchase without changing pantry', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    await user.click(await screen.findByRole('button', { name: 'Review pantry' }))
+    await user.click(screen.getByRole('button', { name: 'Buy as listed' }))
+
+    expect(screen.getByText('Chickpeas')).toBeInTheDocument()
+    expect(screen.queryByText('Pantry amount needs review')).not.toBeInTheDocument()
+  })
+
+  it('lets the shopper confirm a readable pantry match before reviewing units', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    expect(await screen.findByText('Possible pantry match')).toBeInTheDocument()
+    expect(screen.getByText((_, node) => node?.tagName === 'P'
+      && node.textContent === 'Is your pantry item Courgette (4 items) the same ingredient as Courgette on this list?')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Yes, match these' }))
+
+    expect(screen.queryByText('Possible pantry match')).not.toBeInTheDocument()
+    expect(screen.getByText(/Courgette is now linked for this and future shopping lists/i)).toBeInTheDocument()
+    expect(screen.getByText('Matched to pantry: Courgette')).toBeInTheDocument()
+    expect(screen.getByText('Decide what this pantry stock covers')).toBeInTheDocument()
+  })
+
+  it('shows and can undo a confirmed pantry match', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    await user.click(await screen.findByRole('button', { name: 'Yes, match these' }))
+    await user.click(screen.getByRole('button', { name: 'Undo match' }))
+
+    expect(screen.queryByText('Matched to pantry: Courgette')).not.toBeInTheDocument()
+    expect(screen.getByText('Possible pantry match')).toBeInTheDocument()
+    expect(screen.queryByText('Decide what this pantry stock covers')).not.toBeInTheDocument()
+    expect(screen.getByText(/Match to Courgette removed.*Pantry stock was not changed/i)).toBeInTheDocument()
+  })
+
+  it('lets the shopper reject a suggested pantry match', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    await user.click(await screen.findByRole('button', { name: 'Not the same' }))
+
+    expect(screen.queryByText('Possible pantry match')).not.toBeInTheDocument()
+    expect(screen.getByText('Courgette will not be matched with Courgette.')).toBeInTheDocument()
+    expect(screen.queryByText('Decide what this pantry stock covers')).not.toBeInTheDocument()
+  })
 })

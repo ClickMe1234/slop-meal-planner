@@ -40,6 +40,7 @@ describe('quantity display mapping', () => {
       usable_quantity_display: '0.91 l',
       unit: 'l',
       always_have: false,
+      use_soon: false,
       version: 1,
     }
 
