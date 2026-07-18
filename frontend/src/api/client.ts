@@ -1,7 +1,7 @@
 import type { JobStatus } from '../types'
 
 const baseUrl = import.meta.env.VITE_API_URL ?? ''
-const csrfStorageKey = 'savour-csrf'
+const csrfStorageKey = 'slop-csrf'
 
 let csrfToken = sessionStorage.getItem(csrfStorageKey)
 

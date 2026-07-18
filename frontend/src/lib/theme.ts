@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ThemeChoice } from '../types'
 
-const storageKey = 'savour-theme'
+const storageKey = 'slop-theme'
 
 function applyTheme(choice: ThemeChoice) {
   const systemPrefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
