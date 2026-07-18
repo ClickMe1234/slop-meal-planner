@@ -3,6 +3,13 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.8.0 - 2026-07-18
+
+- Add pantry sorting, item editing and deletion, and batch deletion.
+- Add automatic low-stock indicators, manual use-soon flags, and dark-mode-safe destructive controls.
+- Link shopping-list ingredients to pantry stock with exact and user-confirmed fuzzy matches, including rejection, matched-item details, and undo.
+- Flag incompatible shopping-list and pantry units for user review instead of assuming an unsafe conversion.
+
 ## 0.7.0 - 2026-07-17
 
 - Record and edit the finished weight of a cooked meal batch from the week screen.
