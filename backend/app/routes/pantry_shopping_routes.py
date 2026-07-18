@@ -23,6 +23,8 @@ from ..schemas import (
     ShoppingItemOut,
     ShoppingItemPatch,
     ShoppingListOut,
+    ShoppingPantryReviewOut,
+    ShoppingPantryReviewRequest,
 )
 from ..services.pantry import adjust_lot, balances, reserve_plan_batches
 from ..services.pantry_matching import pantry_match_candidates
@@ -327,6 +329,25 @@ def _shopping_item_data(
             "approximate": measurement_dimension(storage_unit) != measurement_dimension(unit),
         })
     selected = next(option for option in options if option["unit"] == selected_unit)
+    conflicts = []
+    for conflict in item.pantry_unit_conflicts or []:
+        conflict_unit = canonical_quantity_unit(str(conflict["unit"]))
+        conflict_quantity = round_quantity(
+            Decimal(str(conflict["usable_quantity"])), conflict_unit
+        )
+        conflicts.append(
+            {
+                **conflict,
+                "display_name": convert_ingredient_text(
+                    db, str(conflict["display_name"]), ingredient_locale
+                ),
+                "usable_quantity": conflict_quantity,
+                "unit": conflict_unit,
+                "usable_quantity_display": format_quantity(
+                    conflict_quantity, conflict_unit
+                ),
+            }
+        )
     data.update(
         display_name=convert_ingredient_text(db, item.display_name, ingredient_locale),
         exact_quantity=selected["exact_quantity"],
@@ -336,6 +357,7 @@ def _shopping_item_data(
         unit=selected_unit,
         available_units=list(units),
         quantity_options=options,
+        pantry_unit_conflicts=conflicts,
     )
     return data
 
@@ -467,6 +489,141 @@ def patch_item(
     db.commit()
     db.refresh(item)
     return _shopping_item_out(db, item, context.user.ingredient_locale)
+
+
+@router.post(
+    "/shopping-lists/{list_id}/items/{item_id}/pantry-review",
+    response_model=ShoppingPantryReviewOut,
+)
+def resolve_shopping_pantry_review(
+    list_id: str,
+    item_id: str,
+    payload: ShoppingPantryReviewRequest,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    shopping_list = db.scalar(
+        select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
+    )
+    item = db.scalar(
+        select(ShoppingItem).where(ShoppingItem.id == item_id).with_for_update()
+    )
+    if (
+        shopping_list is None
+        or shopping_list.household_id != context.user.household_id
+        or item is None
+        or item.shopping_list_id != shopping_list.id
+    ):
+        raise NotFoundError("Shopping item")
+    if item.version != payload.expected_version:
+        raise ConflictError()
+    if not item.pantry_unit_conflicts:
+        raise DomainError(
+            "PANTRY_REVIEW_COMPLETE",
+            "This shopping item no longer has a pantry unit warning",
+        )
+
+    if payload.decision == "buy":
+        item.pantry_unit_conflicts = []
+        item.version += 1
+        shopping_list.version += 1
+        db.commit()
+        db.refresh(item)
+        return ShoppingPantryReviewOut(
+            removed=False,
+            item=_shopping_item_out(db, item, context.user.ingredient_locale),
+        )
+
+    conflict = next(
+        (
+            value
+            for value in item.pantry_unit_conflicts
+            if value.get("pantry_lot_id") == payload.pantry_lot_id
+        ),
+        None,
+    )
+    if conflict is None:
+        raise DomainError(
+            "PANTRY_REVIEW_LOT_UNAVAILABLE",
+            "That pantry item is no longer part of this unit warning",
+        )
+    lot = db.scalar(
+        select(PantryLot)
+        .where(PantryLot.id == payload.pantry_lot_id)
+        .with_for_update()
+    )
+    if lot is None or lot.household_id != context.user.household_id:
+        raise NotFoundError("Pantry lot")
+
+    pantry_quantity = round_quantity(Decimal(payload.pantry_quantity), lot.unit)
+    _, _, usable = balances(db, lot)
+    if pantry_quantity > usable:
+        raise DomainError(
+            "PANTRY_REVIEW_QUANTITY_UNAVAILABLE",
+            f"Only {format_quantity(usable, lot.unit)} is currently available",
+        )
+    requirement_unit = canonical_quantity_unit(str(payload.requirement_unit))
+    density = (
+        Decimal(item.density_g_per_ml)
+        if item.density_g_per_ml is not None
+        else None
+    )
+    covered_in_storage_unit = convert_quantity_to_unit(
+        Decimal(payload.requirement_quantity),
+        requirement_unit,
+        item.unit,
+        density,
+    )
+    if covered_in_storage_unit is None:
+        raise DomainError(
+            "PANTRY_REVIEW_REQUIREMENT_UNIT_INVALID",
+            "The covered requirement must use one of this shopping item's units",
+        )
+    covered = round_quantity(covered_in_storage_unit, item.unit)
+    current_exact = round_quantity(Decimal(item.exact_quantity), item.unit)
+    if covered > current_exact:
+        raise DomainError(
+            "PANTRY_REVIEW_COVERAGE_TOO_LARGE",
+            f"The pantry amount cannot cover more than {format_quantity(current_exact, item.unit)}",
+        )
+
+    adjust_lot(
+        db,
+        lot.id,
+        -pantry_quantity,
+        "shopping_unit_review",
+        reference_type="shopping_item",
+        reference_id=item.id,
+    )
+    remaining = round_quantity(current_exact - covered, item.unit)
+    shopping_list.version += 1
+    if remaining <= 0:
+        db.delete(item)
+        db.commit()
+        db.refresh(lot)
+        return ShoppingPantryReviewOut(
+            removed=True,
+            pantry_item=_pantry_out(db, lot, context.user.ingredient_locale),
+        )
+
+    item.exact_quantity = remaining
+    item.purchase_quantity = max(
+        round_purchase_quantity(remaining, item.unit), remaining
+    )
+    item.pantry_unit_conflicts = [
+        value
+        for value in item.pantry_unit_conflicts
+        if value.get("pantry_lot_id") != lot.id
+    ]
+    item.version += 1
+    db.commit()
+    db.refresh(item)
+    db.refresh(lot)
+    return ShoppingPantryReviewOut(
+        removed=False,
+        item=_shopping_item_out(db, item, context.user.ingredient_locale),
+        pantry_item=_pantry_out(db, lot, context.user.ingredient_locale),
+    )
 
 
 @router.put(

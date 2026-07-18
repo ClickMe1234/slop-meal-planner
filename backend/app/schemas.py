@@ -498,6 +498,35 @@ class ShoppingQuantityOption(APIModel):
     approximate: bool = False
 
 
+class ShoppingPantryUnitConflict(APIModel):
+    pantry_lot_id: str
+    display_name: str
+    usable_quantity: Decimal
+    unit: str
+    usable_quantity_display: str
+
+
+class ShoppingPantryReviewRequest(VersionedUpdate):
+    decision: Literal["buy", "use"]
+    pantry_lot_id: str | None = None
+    pantry_quantity: Decimal | None = Field(default=None, gt=0)
+    requirement_quantity: Decimal | None = Field(default=None, gt=0)
+    requirement_unit: str | None = None
+
+    @model_validator(mode="after")
+    def require_usage_amounts(self):
+        if self.decision == "use" and (
+            not self.pantry_lot_id
+            or self.pantry_quantity is None
+            or self.requirement_quantity is None
+            or not self.requirement_unit
+        ):
+            raise ValueError(
+                "pantry lot, pantry quantity, requirement quantity and unit are required"
+            )
+        return self
+
+
 class ShoppingItemOut(APIModel):
     id: str
     display_name: str
@@ -511,7 +540,14 @@ class ShoppingItemOut(APIModel):
     category: str
     checked: bool
     manual: bool
+    pantry_unit_conflicts: list[ShoppingPantryUnitConflict]
     version: int
+
+
+class ShoppingPantryReviewOut(APIModel):
+    removed: bool
+    item: ShoppingItemOut | None = None
+    pantry_item: PantryLotOut | None = None
 
 
 class ShoppingListOut(APIModel):

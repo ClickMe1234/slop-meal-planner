@@ -31,4 +31,28 @@ describe('ShoppingPage controls', () => {
     expect(screen.getByText('480 ml')).toBeInTheDocument()
     expect(within(controls).getByRole('button', { name: 'ml' })).toHaveAttribute('aria-pressed', 'true')
   })
+
+  it('flags incompatible pantry units and applies an explicit user conversion', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    await user.click(await screen.findByRole('button', { name: 'Review pantry' }))
+    await user.type(screen.getByRole('spinbutton', { name: /Remove from pantry/ }), '1')
+    await user.type(screen.getByRole('spinbutton', { name: /This amount covers/ }), '760')
+    await user.click(screen.getByRole('button', { name: 'Use pantry amount' }))
+
+    expect(screen.queryByText('Chickpeas')).not.toBeInTheDocument()
+    expect(screen.getByText(/pantry stock adjusted/i)).toBeInTheDocument()
+  })
+
+  it('allows the shopper to keep the full purchase without changing pantry', async () => {
+    const user = userEvent.setup()
+    render(<ShoppingPage/>)
+
+    await user.click(await screen.findByRole('button', { name: 'Review pantry' }))
+    await user.click(screen.getByRole('button', { name: 'Buy as listed' }))
+
+    expect(screen.getByText('Chickpeas')).toBeInTheDocument()
+    expect(screen.queryByText('Pantry amount needs review')).not.toBeInTheDocument()
+  })
 })

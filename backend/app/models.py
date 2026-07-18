@@ -477,6 +477,9 @@ class ShoppingItem(IdMixin, AuditMixin, Base):
     checked: Mapped[bool] = mapped_column(Boolean, default=False)
     manual: Mapped[bool] = mapped_column(Boolean, default=False)
     source_name_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
+    pantry_unit_conflicts: Mapped[list[dict]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
 
 
 Index("ix_recipe_household_title", Recipe.household_id, Recipe.title)

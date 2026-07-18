@@ -340,6 +340,78 @@ def test_pantry_reservations_convert_compatible_linked_units(db):
     assert reservation.unit == "kg"
 
 
+def test_shopping_flags_linked_pantry_stock_with_incompatible_units(db):
+    household = Household(name="Home")
+    food = FoodRecord(
+        provider="test",
+        provider_record_id="chickpeas-count-conflict",
+        dataset_version="1",
+        name="Chickpeas",
+    )
+    db.add_all([household, food])
+    db.flush()
+    recipe = Recipe(household_id=household.id, title="Chickpea bowl")
+    db.add(recipe)
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id, version_number=1, title=recipe.title, yield_servings=1
+    )
+    db.add(version)
+    db.flush()
+    db.add(
+        RecipeIngredient(
+            recipe_version_id=version.id,
+            position=0,
+            original_text="400 g chickpeas",
+            quantity_grams=400,
+            food_phrase="Chickpeas",
+            food_record_id=food.id,
+        )
+    )
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+    db.add(plan)
+    db.flush()
+    db.add_all(
+        [
+            MealBatch(
+                meal_plan_id=plan.id,
+                recipe_version_id=version.id,
+                servings=1,
+                planned_cook_date=plan.start_date,
+            ),
+            PantryLot(
+                household_id=household.id,
+                food_record_id=food.id,
+                display_name="Chickpeas",
+                initial_quantity=2,
+                unit="count",
+            ),
+        ]
+    )
+    db.flush()
+
+    shopping = build_shopping_list(db, household.id, plan.id, "Week shopping")
+    item = db.scalar(
+        select(ShoppingItem).where(ShoppingItem.shopping_list_id == shopping.id)
+    )
+
+    assert item.exact_quantity == Decimal("400")
+    assert item.pantry_unit_conflicts == [
+        {
+            "pantry_lot_id": db.scalar(select(PantryLot.id)),
+            "display_name": "Chickpeas",
+            "usable_quantity": "2",
+            "unit": "item",
+            "usable_quantity_display": "2 items",
+        }
+    ]
+
+
 def test_pantry_reservations_round_indivisible_recipe_units(db):
     household = Household(name="Home")
     db.add(household)

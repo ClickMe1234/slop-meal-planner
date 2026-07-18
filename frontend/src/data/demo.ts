@@ -134,6 +134,6 @@ export const initialShopping: ShoppingItem[] = [
   ] },
   { id: 's5', name: 'Red peppers', buy: '3 items', exact: '', category: 'Fruit & veg', checked: false, updatedAt: 1 },
   { id: 's6', name: 'Lemons', buy: '2 items', exact: '', category: 'Fruit & veg', checked: false, updatedAt: 1 },
-  { id: 's7', name: 'Chickpeas', buy: '2 × 400 g tins', exact: '760 g required', pantryUsed: '1 tin already available', category: 'Cupboard', checked: false, updatedAt: 1 },
+  { id: 's7', name: 'Chickpeas', buy: '2 × 400 g tins', exact: '760 g required', exactQuantity: 760, pantryUsed: '1 tin already available', category: 'Cupboard', checked: false, updatedAt: 1, unit: 'g', pantryConflicts: [{ pantryLotId: 'p4', displayName: 'Chickpeas', usableQuantity: 1, unit: 'item', usableDisplay: '1 item' }] },
   { id: 's8', name: 'Arborio rice', buy: '500 g', exact: '380 g required', category: 'Cupboard', checked: false, updatedAt: 1 }
 ]

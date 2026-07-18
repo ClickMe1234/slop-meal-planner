@@ -30,7 +30,15 @@ def balances(db: Session, lot: PantryLot) -> tuple[Decimal, Decimal, Decimal]:
     return on_hand, reserved_amount, usable
 
 
-def adjust_lot(db: Session, lot_id: str, delta: Decimal, reason: str) -> PantryTransaction:
+def adjust_lot(
+    db: Session,
+    lot_id: str,
+    delta: Decimal,
+    reason: str,
+    *,
+    reference_type: str | None = None,
+    reference_id: str | None = None,
+) -> PantryTransaction:
     lot = db.get(PantryLot, lot_id)
     if lot is None:
         raise NotFoundError("Pantry lot")
@@ -44,7 +52,11 @@ def adjust_lot(db: Session, lot_id: str, delta: Decimal, reason: str) -> PantryT
             "This adjustment would reduce stock below the quantity reserved by accepted plans",
         )
     transaction = PantryTransaction(
-        pantry_lot_id=lot.id, quantity_delta=rounded_delta, reason=reason
+        pantry_lot_id=lot.id,
+        quantity_delta=rounded_delta,
+        reason=reason,
+        reference_type=reference_type,
+        reference_id=reference_id,
     )
     db.add(transaction)
     lot.version += 1

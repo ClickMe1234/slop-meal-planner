@@ -83,12 +83,23 @@ export interface ShoppingItem {
   updatedAt: number
   unit?: string
   quantityOptions?: ShoppingQuantityOption[]
+  exactQuantity?: number
+  pantryConflicts?: ShoppingPantryUnitConflict[]
+}
+
+export interface ShoppingPantryUnitConflict {
+  pantryLotId: string
+  displayName: string
+  usableQuantity: number
+  unit: string
+  usableDisplay: string
 }
 
 export interface ShoppingQuantityOption {
   unit: string
   buy: string
   exact: string
+  exactQuantity?: number
   approximate: boolean
 }
 

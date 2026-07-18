@@ -20,6 +20,7 @@ from ..models import (
 from .pantry import balances
 from .quantities import (
     canonical_quantity_unit,
+    format_quantity,
     round_purchase_quantity,
     round_quantity,
 )
@@ -273,6 +274,7 @@ def build_shopping_list(
             if converted is not None:
                 reserved += converted
         remaining = max(exact - reserved, Decimal("0"))
+        pantry_unit_conflicts: list[dict[str, object]] = []
         if food_ids:
             lots = db.scalars(
                 select(PantryLot)
@@ -291,6 +293,19 @@ def build_shopping_list(
                     density_by_food.get(lot.food_record_id, default_density),
                 )
                 if converted is None:
+                    if usable > 0:
+                        lot_unit = canonical_quantity_unit(lot.unit)
+                        pantry_unit_conflicts.append(
+                            {
+                                "pantry_lot_id": lot.id,
+                                "display_name": lot.display_name,
+                                "usable_quantity": str(usable),
+                                "unit": lot_unit,
+                                "usable_quantity_display": format_quantity(
+                                    usable, lot_unit
+                                ),
+                            }
+                        )
                     continue
                 remaining -= min(max(converted, Decimal("0")), remaining)
                 if remaining <= 0:
@@ -349,6 +364,7 @@ def build_shopping_list(
                     checked=checked,
                     manual=False,
                     source_name_keys=sorted(source_keys),
+                    pantry_unit_conflicts=pantry_unit_conflicts,
                 )
             )
     for item in previous_items:
