@@ -49,7 +49,7 @@ def fetch_and_cache_usda_foods(
                 "sortBy": "dataType.keyword",
                 "sortOrder": "asc",
             },
-            headers={"User-Agent": "Savour meal planner/0.1"},
+            headers={"User-Agent": "Slop meal planner/0.1"},
         )
         response.raise_for_status()
         payload = response.json()

@@ -209,7 +209,7 @@ export function memberNutritionTotals(occurrences: BackendPlanDetail['occurrence
   return Array.from(totals, ([memberId, nutrition]) => ({ memberId, nutrition }))
 }
 
-const demoPlanStorageKey = 'savour-demo-plan'
+const demoPlanStorageKey = 'slop-demo-plan'
 
 export function storeDemoPlan(plan: BackendPlanDetail): void {
   sessionStorage.setItem(demoPlanStorageKey, JSON.stringify(plan))

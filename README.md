@@ -1,6 +1,6 @@
-# Savour Meal Planner
+# Slop Meal Planner
 
-Savour is a private, self-hosted household meal planner. It imports real
+Slop is a private, self-hosted household meal planner. It imports real
 recipes, plans meals against per-person nutrition targets, reserves pantry
 stock, and produces an offline-capable shopping list.
 

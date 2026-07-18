@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['meal-mark.svg'],
       manifest: {
-        name: 'Savour Meal Planner',
-        short_name: 'Savour',
+        name: 'Slop Meal Planner',
+        short_name: 'Slop',
         description: 'Private household meal planning, pantry and shopping.',
         theme_color: '#2e6b45',
         background_color: '#f7f5ef',
