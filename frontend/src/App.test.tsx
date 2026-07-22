@@ -37,7 +37,19 @@ describe('App', () => {
 
     expect(screen.getByRole('heading', { name: 'Wild mushroom risotto' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Harissa chicken with chickpeas' })).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Edit recipe' }).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('link', { name: 'Edit meal types' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Berry overnight oats' })).not.toBeInTheDocument()
+  })
+
+  it('signs out from the dark theme', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('slop-theme', 'dark')
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/week']}><App/></MemoryRouter></QueryClientProvider>)
+
+    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    expect(screen.getByRole('heading', { name: 'Sign in to your household' })).toBeInTheDocument()
   })
 
   it('filters by categories without a text query and enforces the three-category limit', async () => {
