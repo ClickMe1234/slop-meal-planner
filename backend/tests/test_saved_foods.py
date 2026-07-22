@@ -132,6 +132,7 @@ def test_open_food_facts_barcode_can_be_previewed_and_saved(client, owner, monke
             "brands": "Example",
             "source_url": "https://world.openfoodfacts.org/product/5000123456789",
             "attribution": "Product data from Open Food Facts (ODbL)",
+            "image_url": "https://images.openfoodfacts.org/example-beans.jpg",
             "package_amount": "400",
             "package_unit": "g",
             "serving_amount": "200",
@@ -144,6 +145,7 @@ def test_open_food_facts_barcode_can_be_previewed_and_saved(client, owner, monke
     assert preview.status_code == 200, preview.text
     assert Decimal(preview.json()["package_amount"]) == 400
     assert preview.json()["complete"] is True
+    assert preview.json()["image_url"] == "https://images.openfoodfacts.org/example-beans.jpg"
 
     saved = client.post(
         "/api/v1/saved-foods",
@@ -154,6 +156,26 @@ def test_open_food_facts_barcode_can_be_previewed_and_saved(client, owner, monke
     assert saved.json()["barcode"] == "5000123456789"
     assert Decimal(saved.json()["serving_amount"]) == 200
     assert saved.json()["attribution"] == "Product data from Open Food Facts (ODbL)"
+    assert saved.json()["image_url"] == "https://images.openfoodfacts.org/example-beans.jpg"
+
+    planned = client.patch(
+        f"/api/v1/saved-foods/{saved.json()['id']}",
+        headers=headers,
+        json={
+            "expected_version": saved.json()["version"],
+            "display_name": "Example beans",
+            "serving_amount": 200,
+            "serving_unit": "g",
+            "planner_enabled": True,
+            "meal_types": ["lunch"],
+        },
+    )
+    assert planned.status_code == 200, planned.text
+    planner_recipes = client.get("/api/v1/recipes?page_size=100&include_food=true")
+    planner_choice = next(
+        item for item in planner_recipes.json()["items"] if item["source_type"] == "food"
+    )
+    assert planner_choice["image_url"] == "https://images.openfoodfacts.org/example-beans.jpg"
 
 
 def test_zero_macro_values_are_complete(client, owner):

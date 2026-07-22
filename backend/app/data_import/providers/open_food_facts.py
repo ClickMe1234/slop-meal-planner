@@ -41,6 +41,14 @@ class OpenFoodFactsProvider(FoodDataProvider):
             return "ml"
         return None
 
+    @staticmethod
+    def _image_url(product: Mapping[str, object]) -> str | None:
+        for key in ("image_front_url", "image_url"):
+            value = product.get(key)
+            if isinstance(value, str) and value.strip().casefold().startswith(("https://", "http://")):
+                return value.strip()
+        return None
+
     @classmethod
     def _normalised_quantity(cls, value: object, source_unit: object) -> tuple[Decimal | None, str | None]:
         amount = cls._decimal(value)
@@ -114,6 +122,7 @@ class OpenFoodFactsProvider(FoodDataProvider):
                 "package_unit": package_unit,
                 "serving_amount": str(serving_amount) if serving_amount is not None else None,
                 "serving_unit": serving_unit,
+                "image_url": self._image_url(product),
                 "basis_inferred": package_unit is None,
             }
         )

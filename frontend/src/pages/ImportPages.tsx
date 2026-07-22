@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, Barcode, Check, ExternalLink, FileSearch, Link2, Plus, Search, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
-import { FormEvent, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { FormEvent, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { NutritionStrip } from '../components/Nutrition'
 import { BarcodeScanner } from '../components/BarcodeScanner'
@@ -593,22 +593,77 @@ export function ImportReviewPage() {
   return isDemoMode ? <DemoImportReviewPage /> : <LiveImportReviewPage />
 }
 
-function DemoImportReviewPage() {
+type ImportReviewPresentation = 'page' | 'drawer'
+
+interface ImportReviewPresentationProps {
+  presentation?: ImportReviewPresentation
+  onDismiss?: () => void
+  onSaved?: () => void
+  demoTitle?: string
+}
+
+export function ImportReviewDrawer() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const drawerState = location.state as { returnFocusRecipeId?: string; demoTitle?: string } | null
+  const returnFocusRecipeId = drawerState?.returnFocusRecipeId
+  const close = () => navigate(-1)
+
+  useEffect(() => () => {
+    window.setTimeout(() => {
+      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-recipe-save-id]'))
+      buttons.find((button) => button.dataset.recipeSaveId === returnFocusRecipeId)?.focus()
+    }, 0)
+  }, [returnFocusRecipeId])
+
+  const props: ImportReviewPresentationProps = { presentation: 'drawer', onDismiss: close, onSaved: close, demoTitle: drawerState?.demoTitle }
+  return isDemoMode ? <DemoImportReviewPage {...props} /> : <LiveImportReviewPage {...props} />
+}
+
+function ImportReviewDrawerFrame({ children, saving, onDismiss }: { children: ReactNode; saving: boolean; onDismiss: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    if (typeof dialog.showModal === 'function') dialog.showModal()
+    else dialog.setAttribute('open', '')
+    return () => {
+      if (dialog.open && typeof dialog.close === 'function') dialog.close()
+    }
+  }, [])
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="import-review-drawer"
+      aria-label="Review imported recipe"
+      onCancel={(event) => {
+        event.preventDefault()
+        if (!saving) onDismiss()
+      }}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onDismiss()
+      }}
+    >
+      {children}
+    </dialog>
+  )
+}
+
+function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoTitle = 'Harissa chicken with chickpeas' }: ImportReviewPresentationProps = {}) {
   const navigate = useNavigate()
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const demoIngredients = ['600g boneless skinless chicken thighs', '2 x 400g cans chickpeas, drained', '2 tbsp rose harissa', 'a splash of olive oil', '1 lemon, zest and juice']
-  return (
+  const content = (
     <div className="page page--wide">
       <div className="review-top">
-        <Link to="/recipes" className="icon-link">
-          <ArrowLeft />
-          Back to recipes
-        </Link>
+        {presentation === 'drawer' ? <button type="button" className="icon-link icon-link--button" onClick={onDismiss}><ArrowLeft />Back to results</button> : <Link to="/recipes" className="icon-link"><ArrowLeft />Back to recipes</Link>}
         <Badge tone="green">Nutrition from Good Food</Badge>
       </div>
       <PageHeader
         eyebrow="Import review"
-        title="Harissa chicken with chickpeas"
+        title={demoTitle}
         description="Nutrition is reported by Good Food and will be used for planning."
         actions={
           <Button variant="secondary">
@@ -654,12 +709,13 @@ function DemoImportReviewPage() {
               }}
             />
             <p>Per serving · reported by Good Food · used for planning</p>
-            <Button onClick={() => navigate('/recipes')}>Save recipe</Button>
+            <Button onClick={() => onSaved ? onSaved() : navigate('/recipes')}>Save recipe</Button>
           </Card>
         </aside>
       </div>
     </div>
   )
+  return presentation === 'drawer' && onDismiss ? <ImportReviewDrawerFrame saving={false} onDismiss={onDismiss}>{content}</ImportReviewDrawerFrame> : content
 }
 
 interface ImportedIngredientRow {
@@ -677,7 +733,7 @@ interface ImportedIngredientRow {
   shopping_excluded: boolean
 }
 
-function LiveImportReviewPage() {
+function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: ImportReviewPresentationProps = {}) {
   const { jobId = '', recipeId: directRecipeId = '' } = useParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -706,6 +762,9 @@ function LiveImportReviewPage() {
     enabled: Boolean(recipeId),
   })
   const publisherIsPrimary = completePublisherNutrition(recipe.data)
+  const present = (content: ReactNode) => presentation === 'drawer' && onDismiss
+    ? <ImportReviewDrawerFrame saving={saving} onDismiss={onDismiss}>{content}</ImportReviewDrawerFrame>
+    : content
 
   useEffect(() => {
     if (!recipe.data) return
@@ -781,7 +840,8 @@ function LiveImportReviewPage() {
       }
       await api.saveRecipeReview(recipe.data.id, payload)
       await Promise.all([queryClient.invalidateQueries({ queryKey: ['recipes'] }), queryClient.invalidateQueries({ queryKey: ['recipe', recipe.data.id] }), queryClient.invalidateQueries({ queryKey: ['plan'] })])
-      navigate(returnTo)
+      if (presentation === 'drawer' && onSaved) onSaved()
+      else navigate(returnTo)
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'The reviewed recipe could not be saved.')
     } finally {
@@ -790,7 +850,7 @@ function LiveImportReviewPage() {
   }
 
   if (job.data?.status === 'failed')
-    return (
+    return present(
       <div className="page">
         <Notice tone="warning" title="Import failed">
           {job.data.error_detail ?? 'The publisher page could not be read.'}
@@ -798,7 +858,7 @@ function LiveImportReviewPage() {
       </div>
     )
   if (!recipe.data)
-    return (
+    return present(
       <div className="page">
         <PageHeader eyebrow="Import review" title="Preparing the recipe" description="The worker is safely reading the page and extracting fields already present." />
         <ProgressBar value={job.data?.progress ?? 10} label={job.data?.stage ?? 'Queued'} />
@@ -818,14 +878,11 @@ function LiveImportReviewPage() {
         }
       : null
 
-  return (
+  return present(
     <div className="page page--wide">
       <IngredientUnitOptions />
       <div className="review-top">
-        <Link to={returnTo} className="icon-link">
-          <ArrowLeft />
-          Back
-        </Link>
+        {presentation === 'drawer' ? <button type="button" className="icon-link icon-link--button" disabled={saving} onClick={onDismiss}><ArrowLeft />Back to results</button> : <Link to={returnTo} className="icon-link"><ArrowLeft />Back</Link>}
         <Badge tone={publisherPreview ? 'green' : undefined}>Nutrition from {publisherName}</Badge>
       </div>
       <PageHeader
