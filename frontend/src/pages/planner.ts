@@ -6,6 +6,8 @@ export const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'] as const
 export type MealType = typeof MEAL_TYPES[number]
 export type AttendanceOverrides = Record<string, boolean>
 export type CookStarts = Record<string, boolean>
+export type CalorieBoosts = Record<string, number>
+export type GuestCounts = Record<string, number>
 
 export function compareMealTypes(left: string, right: string): number {
   const leftIndex = MEAL_TYPES.indexOf(left as MealType)
@@ -73,6 +75,35 @@ export function attendanceKey(date: string, mealType: MealType, memberId: string
 
 export function cookStartKey(date: string, mealType: MealType): string {
   return `${date}:${mealType}`
+}
+
+export function calorieBoostKey(date: string, memberId: string): string {
+  return `${date}:${memberId}`
+}
+
+export function calorieBoostEntries(
+  dates: PlannerDate[],
+  memberIds: string[],
+  boosts: CalorieBoosts,
+): Array<{ meal_date: string; member_id: string; calories: number }> {
+  return dates.flatMap(date => memberIds.flatMap(memberId => {
+    const calories = Number(boosts[calorieBoostKey(date.iso, memberId)] ?? 0)
+    return Number.isFinite(calories) && calories > 0
+      ? [{ meal_date: date.iso, member_id: memberId, calories }]
+      : []
+  }))
+}
+
+export function guestDayEntries(
+  dates: PlannerDate[],
+  guests: GuestCounts,
+): Array<{ meal_date: string; guest_count: number }> {
+  return dates.flatMap(date => {
+    const guestCount = Math.floor(Number(guests[date.iso] ?? 0))
+    return Number.isFinite(guestCount) && guestCount > 0
+      ? [{ meal_date: date.iso, guest_count: guestCount }]
+      : []
+  })
 }
 
 export function isAttending(
@@ -174,6 +205,7 @@ function nutritionValue(values: Record<string, number> | undefined, ...keys: str
 
 export function occurrenceServings(occurrence: BackendPlanDetail['occurrences'][number]): number {
   return occurrence.portions.reduce((sum, portion) => sum + Number(portion.servings || 0), 0)
+    + Number(occurrence.guest_servings || 0)
 }
 
 export function totalNutrition(occurrences: BackendPlanDetail['occurrences']): Nutrition {
