@@ -1,6 +1,6 @@
 import { Check, ChefHat, ExternalLink, Filter, Link2, Search, Sparkles, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NutritionStrip } from '../components/Nutrition'
 import { RecipeRating } from '../components/RecipeRating'
@@ -81,6 +81,7 @@ function reviewPayload(recipe: BackendRecipeDetail, mealTypes: RecipeMealType[])
 
 export function RecipesPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
   const [query, setQuery] = useState('')
   const [scope, setScope] = useState<'discover' | 'saved'>('discover')
@@ -155,6 +156,16 @@ export function RecipesPage() {
     try {
       if (isDemoMode) {
         await new Promise(resolve => window.setTimeout(resolve, 300))
+        if (pendingRecipe.state === 'needs_review') {
+          const params = new URLSearchParams({ returnTo: '/recipes', suggestedMealTypes: pendingMealTypes.join(',') })
+          const returnFocusRecipeId = pendingRecipe.id
+          const demoTitle = pendingRecipe.title
+          setPendingRecipe(null)
+          navigate(`/imports/demo/review?${params}`, {
+            state: { backgroundLocation: location, returnFocusRecipeId, demoTitle },
+          })
+          return
+        }
         setMessage(`${pendingRecipe.title} was saved for ${pendingMealTypes.join(', ')}.`)
         setPendingRecipe(null)
         return
@@ -171,7 +182,11 @@ export function RecipesPage() {
       const imported = await api.getRecipe(recipeId)
       if (importedRecipeNeedsReview(imported)) {
         const params = new URLSearchParams({ returnTo: '/recipes', suggestedMealTypes: pendingMealTypes.join(',') })
-        navigate(`/imports/${job.id}/review?${params}`)
+        const returnFocusRecipeId = pendingRecipe.id
+        setPendingRecipe(null)
+        navigate(`/imports/${job.id}/review?${params}`, {
+          state: { backgroundLocation: location, returnFocusRecipeId },
+        })
         return
       }
       await api.saveRecipeReview(imported.id, reviewPayload(imported, pendingMealTypes))
@@ -259,7 +274,7 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
       {Boolean(recipe.publisherTags?.length) && <div className="recipe-publisher-tags" aria-label="Publisher categories">{recipe.publisherTags?.map(tag => <span key={tag}>{tag}</span>)}</div>}
       {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>Nutrition from {nutritionSource} · per serving</span><Badge tone={planningBadge?.tone ?? 'green'}>{planningBadge?.label ?? 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
       {missingMealTypes && <div className="recipe-planning-note recipe-planning-note--warning" role="status"><strong>Not used for meal planning</strong><span>Add breakfast, lunch, dinner, snack or side so the planner knows where this recipe belongs.</span></div>}
-      <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{recipe.reviewCount ? 'Review ingredients' : missingMealTypes ? 'Add meal types' : 'Edit recipe'}</Link> : <Button disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}</div>
+      <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{recipe.reviewCount ? 'Review ingredients' : missingMealTypes ? 'Add meal types' : 'Edit recipe'}</Link> : <Button data-recipe-save-id={recipe.id} disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}</div>
     </div>
   </Card></div>
 }
