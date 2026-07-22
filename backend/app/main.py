@@ -17,6 +17,7 @@ from .db import engine
 from .errors import DomainError
 from .routes.auth_routes import router as auth_router
 from .routes.discovery_routes import close_discovery_client, router as discovery_router
+from .routes.food_routes import router as food_router
 from .routes.household_routes import router as household_router
 from .routes.pantry_shopping_routes import router as pantry_shopping_router
 from .routes.planning_routes import router as planning_router
@@ -34,7 +35,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="Meal Planner API",
-        version="0.1.0",
+        version="0.9.0",
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
         lifespan=lifespan,
@@ -45,6 +46,7 @@ def create_app() -> FastAPI:
     for router in (
         auth_router,
         household_router,
+        food_router,
         recipe_router,
         discovery_router,
         planning_router,

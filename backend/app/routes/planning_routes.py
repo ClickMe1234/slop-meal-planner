@@ -38,7 +38,7 @@ from ..schemas import (
     PlanSideCreateRequest,
     PlanSideRemoveRequest,
 )
-from ..services.nutrition import publisher_values
+from ..services.nutrition import planning_values
 from ..services.pantry import reserve_plan_batches
 from ..services.planner import (
     ParticipantTarget,
@@ -71,7 +71,7 @@ def _candidate(db: Session, recipe: Recipe, meal_type: str) -> RecipeCandidate |
         .where(RecipeVersion.recipe_id == recipe.id)
         .order_by(RecipeVersion.version_number.desc())
     )
-    return _candidate_from_version(recipe, version)
+    return _candidate_from_version(db, recipe, version)
 
 
 def _side_tags(meal_type: str) -> tuple[str, ...]:
@@ -94,15 +94,15 @@ def _side_candidate(
         .where(RecipeVersion.recipe_id == recipe.id)
         .order_by(RecipeVersion.version_number.desc())
     )
-    return _candidate_from_version(recipe, version)
+    return _candidate_from_version(db, recipe, version)
 
 
 def _candidate_from_version(
-    recipe: Recipe, version: RecipeVersion | None
+    db: Session, recipe: Recipe, version: RecipeVersion | None
 ) -> RecipeCandidate | None:
     if version is None or not version.yield_servings:
         return None
-    nutrition = publisher_values(version)
+    nutrition = planning_values(db, version)
     if nutrition is None:
         return None
     included_ingredients = [item for item in version.ingredients if item.included]
@@ -246,7 +246,7 @@ def _validate_mutable_plan_constraints(
             version = db.get(RecipeVersion, batch.recipe_version_id)
             recipe = db.get(Recipe, version.recipe_id) if version is not None else None
             candidate = (
-                _candidate_from_version(recipe, version)
+                _candidate_from_version(db, recipe, version)
                 if recipe is not None
                 else None
             )
@@ -259,7 +259,7 @@ def _validate_mutable_plan_constraints(
                         "label": f"Review {recipe.title}",
                         "href": f"/recipes/{recipe.id}/review",
                         "suggestion": (
-                            "Confirm the recipe yield and publisher nutrition, then return to the plan."
+                            "Confirm the recipe yield and complete nutrition, then return to the plan."
                         ),
                         "recipe_id": recipe.id,
                         "batch_id": batch.id,
@@ -267,7 +267,7 @@ def _validate_mutable_plan_constraints(
                 )
             raise DomainError(
                 "INVALID_BATCH",
-                "A planned recipe no longer has complete publisher nutrition and a serving yield",
+                "A planned recipe no longer has complete nutrition and a serving yield",
                 actions=actions,
             )
         occurrences = db.scalars(
@@ -451,11 +451,11 @@ def _rebalance_plan(
 
     for batch in batches:
         version = db.get(RecipeVersion, batch.recipe_version_id)
-        nutrition = publisher_values(version) if version is not None else None
+        nutrition = planning_values(db, version)
         if version is None or nutrition is None:
             raise DomainError(
                 "INVALID_BATCH",
-                "A planned recipe no longer has complete publisher nutrition",
+                "A planned recipe no longer has complete nutrition",
             )
         occurrences = db.scalars(
             select(MealOccurrence)
@@ -656,7 +656,7 @@ def generate_plan(
             .where(RecipeVersion.recipe_id == recipe.id)
             .order_by(RecipeVersion.version_number.desc())
         )
-        candidate = _candidate_from_version(recipe, version)
+        candidate = _candidate_from_version(db, recipe, version)
         if candidate is not None:
             base_candidates[recipe.id] = candidate
     candidates_by_meal_type = {
@@ -895,7 +895,7 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
         batch = db.get(MealBatch, occurrence.batch_id)
         version = db.get(RecipeVersion, batch.recipe_version_id)
         recipe = db.get(Recipe, version.recipe_id)
-        nutrition = publisher_values(version)
+        nutrition = planning_values(db, version)
         portions = db.scalars(
             select(PortionAllocation).where(
                 PortionAllocation.meal_occurrence_id == occurrence.id
@@ -1036,7 +1036,7 @@ def replace_occurrence_recipe(
     if candidate is None:
         raise DomainError(
             "RECIPE_NOT_PLANNER_READY",
-            "The selected recipe needs complete publisher nutrition, a yield and the matching meal tag",
+            "The selected recipe needs complete nutrition, a yield and the matching meal tag",
         )
     batch = db.get(MealBatch, occurrence.batch_id)
     batch_occurrences = db.scalars(

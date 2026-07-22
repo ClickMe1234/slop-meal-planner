@@ -22,8 +22,13 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     session_days: int = 30
     timezone: str = "Europe/London"
-    usda_api_key: str = "DEMO_KEY"
+    usda_api_key: str = ""
     remote_food_search_enabled: bool = True
+    open_food_facts_enabled: bool = True
+    open_food_facts_user_agent: str = (
+        "SlopMealPlanner/0.9.0 (https://github.com/ClickMe1234/slop-meal-planner)"
+    )
+    open_food_facts_timeout_seconds: float = 10.0
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod

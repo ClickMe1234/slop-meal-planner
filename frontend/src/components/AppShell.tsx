@@ -1,4 +1,4 @@
-import { CalendarDays, ChefHat, ClipboardList, Heart, LogOut, Menu, Moon, PackageOpen, Settings, Sun, WandSparkles, X } from 'lucide-react'
+import { CalendarDays, ChefHat, ClipboardList, Heart, LogOut, Menu, Moon, PackageOpen, Settings, Sun, WandSparkles, Wheat, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -9,6 +9,7 @@ const items = [
   { to: '/week', label: 'Week', icon: CalendarDays },
   { to: '/plan', label: 'Plan', icon: WandSparkles },
   { to: '/recipes', label: 'Recipes', icon: ChefHat },
+  { to: '/ingredients', label: 'Ingredients', icon: Wheat },
   { to: '/pantry', label: 'Pantry', icon: PackageOpen },
   { to: '/shopping', label: 'Shopping', icon: ClipboardList }
 ]

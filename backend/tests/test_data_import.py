@@ -84,6 +84,29 @@ def test_open_food_facts_provider_uses_per_100g_product_values():
     assert next(n for n in food.nutrients if n.code == "protein_g").amount == Decimal("4.7")
 
 
+def test_open_food_facts_provider_normalises_package_and_serving_units():
+    food = OpenFoodFactsProvider().normalise_record(
+        {
+            "code": "12345678",
+            "product_name_en": "Fruit drink",
+            "product_quantity": 1.5,
+            "product_quantity_unit": "l",
+            "serving_size": "250 ml",
+            "nutriments": {
+                "energy-kcal_100g": 42,
+                "proteins_100g": 0,
+                "carbohydrates_100g": 10,
+                "fat_100g": 0,
+            },
+        }
+    )
+    assert food.basis_unit == "ml"
+    assert food.metadata["package_amount"] == "1500.0"
+    assert food.metadata["package_unit"] == "ml"
+    assert food.metadata["serving_amount"] == "250"
+    assert food.metadata["source_url"].endswith("/12345678")
+
+
 def test_persistence_upsert_replaces_old_nutrients_and_records_provenance(db):
     first = CofidCsvImporter(dataset_version="2021", source_uri="source-a").from_text(
         "Food Code,Food Name,Energy (kcal),Protein (g)\n1,Apple,52,0.3\n",

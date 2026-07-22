@@ -108,4 +108,32 @@ describe('App', () => {
     expect(screen.queryByText(/not used for meal planning yet/i)).not.toBeInTheDocument()
     expect(screen.getByText('1 selected')).toBeInTheDocument()
   })
+
+  it('opens the ingredient search page with scan and manual fallbacks', () => {
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/ingredients']}><App/></MemoryRouter></QueryClientProvider>)
+
+    expect(screen.getByRole('heading', { name: /find it once/i })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/barcode number/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add manually/i })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /general usda/i })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /packaged open food facts/i })).toBeChecked()
+    expect(screen.getByRole('button', { name: /^search$/i })).toBeInTheDocument()
+    expect(screen.getByText(/photo and number lookup still work/i)).toBeInTheDocument()
+  })
+
+  it('integrates nutrition search and barcode scanning while building a custom recipe', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes/new']}><App/></MemoryRouter></QueryClientProvider>)
+
+    await user.type(screen.getByRole('textbox', { name: /ingredient as written/i }), '200g yoghurt')
+
+    await user.click(screen.getByRole('button', { name: /find nutrition/i }))
+    expect(screen.getByRole('checkbox', { name: /general usda/i })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /packaged open food facts/i })).toBeChecked()
+    expect(screen.getByRole('button', { name: /^search$/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /scan barcode/i }))
+    expect(screen.getByRole('textbox', { name: /barcode number for recipe ingredient/i })).toBeInTheDocument()
+    expect(screen.getByText(/photo and number lookup still work/i)).toBeInTheDocument()
+    expect(screen.getByText(/0 of 1 ingredients matched/i)).toBeInTheDocument()
+  })
 })
