@@ -52,7 +52,7 @@ ENV APP_VERSION=${APP_VERSION} \
     HOME=/tmp
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends postgresql-client && \
+    apt-get install -y --no-install-recommends gosu postgresql-client && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --gid 10001 mealplanner && \
     useradd --uid 10001 --gid mealplanner --no-create-home --shell /usr/sbin/nologin mealplanner && \
@@ -73,7 +73,6 @@ COPY --chown=mealplanner:mealplanner deploy/scripts/backup.sh /opt/meal-planner/
 RUN chmod 0555 /usr/local/bin/meal-planner-entrypoint /opt/meal-planner/backup.sh
 
 WORKDIR /app/backend
-USER mealplanner
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

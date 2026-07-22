@@ -3,6 +3,12 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.9.1 - 2026-07-22
+
+- Make the sidebar sign-out control visible and reliable in dark mode, including when the server logout request fails.
+- Rename the saved-recipe action from "Edit meal types" to "Edit recipe".
+- Prepare backup and application-data bind mounts for the configured unprivileged runtime identity so in-app backups can write their verified archives.
+
 ## 0.9.0 - 2026-07-19
 
 - Add a household Ingredients page with saved-food search, manual nutrition entry, barcode camera/photo/number scanning, and explicit packaged-product search through the public Open Food Facts read API.

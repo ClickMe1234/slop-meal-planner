@@ -103,6 +103,10 @@ h2 { margin-bottom: 6px; }
 .profile-chip>span, .member-avatar { align-items: center; background: var(--warm-soft); border-radius: 50%; color: var(--warm); display: flex; font-weight: 700; height: 35px; justify-content: center; width: 35px; }
 .profile-chip strong, .profile-chip small { display: block; }
 .profile-chip small { color: var(--muted); font-size: .7rem; margin-top: 2px; }
+.profile-chip>div { flex: 1; min-width: 0; }
+.profile-chip>button { align-items:center;background:transparent;border:0;border-radius:9px;color:var(--muted);display:flex;flex:none;height:38px;justify-content:center;width:38px; }
+.profile-chip>button:hover { background:var(--surface-2);color:var(--text); }
+.profile-chip>button:focus-visible { outline:3px solid color-mix(in srgb,var(--primary) 35%,transparent);outline-offset:2px; }
 .app-main { margin-left: 248px; min-height: 100vh; }
 .app-main main { margin: auto; max-width: 1540px; padding: 42px clamp(25px, 4vw, 68px) 80px; }
 .mobile-topbar, .bottom-nav, .mobile-close, .nav-scrim { display: none; }
