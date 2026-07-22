@@ -405,7 +405,8 @@ def _target_for(
     member_id: str,
     meal_type: str,
     household_id: str,
-    calorie_boost: Decimal = Decimal("0"),
+    daily_calorie_boost: Decimal = Decimal("0"),
+    meal_calorie_boost: Decimal = Decimal("0"),
 ) -> ParticipantTarget:
     member = db.get(HouseholdMember, member_id)
     if member is None or member.household_id != household_id or not member.active:
@@ -421,18 +422,22 @@ def _target_for(
     )
     if allocation is None:
         raise DomainError("MISSING_MEAL_ALLOCATION", f"No target allocation exists for {meal_type}")
-    if calorie_boost and target.mode != "calorie":
+    if (daily_calorie_boost or meal_calorie_boost) and target.mode != "calorie":
         raise DomainError(
             "CALORIE_BOOST_REQUIRES_CALORIE_TARGET",
             f"{member.name} uses macro targets, so a calorie boost cannot be applied",
             422,
         )
+    allocation_percentage = Decimal(allocation.percentage)
+    equivalent_daily_boost = daily_calorie_boost
+    if meal_calorie_boost:
+        equivalent_daily_boost += meal_calorie_boost * Decimal("100") / allocation_percentage
     return ParticipantTarget(
         member_id=member.id,
         mode=target.mode,
-        allocation=Decimal(allocation.percentage),
+        allocation=allocation_percentage,
         calorie_target=(
-            Decimal(target.calorie_target or 0) + calorie_boost
+            Decimal(target.calorie_target or 0) + equivalent_daily_boost
             if target.mode == "calorie"
             else target.calorie_target
         ),
@@ -449,18 +454,30 @@ def _target_for(
     )
 
 
-def _calorie_boost_map(plan: MealPlan) -> dict[tuple[str, str], Decimal]:
-    return {
-        (item["meal_date"], item["member_id"]): Decimal(str(item["calories"]))
-        for item in (plan.calorie_boosts or [])
-    }
+def _calorie_boost_maps(
+    plan: MealPlan,
+) -> tuple[dict[tuple[str, str], Decimal], dict[tuple[str, str, str], Decimal]]:
+    daily: dict[tuple[str, str], Decimal] = {}
+    by_meal: dict[tuple[str, str, str], Decimal] = {}
+    for item in plan.calorie_boosts or []:
+        calories = Decimal(str(item["calories"]))
+        allocations = item.get("meal_allocations") or []
+        if not allocations:
+            daily[(item["meal_date"], item["member_id"])] = calories
+            continue
+        for allocation in allocations:
+            by_meal[(item["meal_date"], item["member_id"], allocation["meal_type"])] = (
+                calories * Decimal(str(allocation["percentage"])) / Decimal("100")
+            )
+    return daily, by_meal
 
 
-def _guest_count_map(plan: MealPlan) -> dict[str, int]:
-    return {
-        item["meal_date"]: int(item["guest_count"])
-        for item in (plan.guest_days or [])
-    }
+def _guest_count_map(plan: MealPlan) -> dict[tuple[str, str], int]:
+    result: dict[tuple[str, str], int] = {}
+    for item in plan.guest_days or []:
+        for meal_type in item.get("meal_types") or ["*"]:
+            result[(item["meal_date"], meal_type)] = int(item["guest_count"])
+    return result
 
 
 def _rebalance_plan(
@@ -477,7 +494,7 @@ def _rebalance_plan(
     variables: list[PlanPortionVariable] = []
     allocations_by_variable: dict[str, list[PortionAllocation]] = {}
     daily_targets: dict[tuple[str, str], list[ParticipantTarget]] = defaultdict(list)
-    calorie_boosts = _calorie_boost_map(plan)
+    daily_calorie_boosts, meal_calorie_boosts = _calorie_boost_maps(plan)
 
     for batch in batches:
         version = db.get(RecipeVersion, batch.recipe_version_id)
@@ -507,8 +524,12 @@ def _rebalance_plan(
                             allocation.member_id,
                             occurrence.meal_type,
                             plan.household_id,
-                            calorie_boosts.get(
+                            daily_calorie_boosts.get(
                                 (date_text, allocation.member_id), Decimal("0")
+                            ),
+                            meal_calorie_boosts.get(
+                                (date_text, allocation.member_id, occurrence.meal_type),
+                                Decimal("0"),
                             ),
                         )
                     )
@@ -588,7 +609,12 @@ def _rebalance_plan(
             default=Decimal("0"),
         )
         occurrence.guest_servings = (
-            Decimal(guest_counts.get(occurrence.meal_date.isoformat(), 0))
+            Decimal(
+                guest_counts.get(
+                    (occurrence.meal_date.isoformat(), occurrence.meal_type),
+                    guest_counts.get((occurrence.meal_date.isoformat(), "*"), 0),
+                )
+            )
             * largest_household_portion
         )
     for batch in batches:
@@ -637,12 +663,35 @@ def generate_plan(
                 "A calorie boost must belong to someone eating on that date",
                 422,
             )
+        attended_meals = {
+            slot.meal_type
+            for slot in payload.slots
+            if slot.meal_date == boost.meal_date
+            and boost.member_id in slot.participant_member_ids
+        }
+        if any(item.meal_type not in attended_meals for item in boost.meal_allocations):
+            raise DomainError(
+                "INVALID_CALORIE_BOOST_MEAL",
+                "Calorie boosts can only be assigned to meals that person is eating",
+                422,
+            )
     planned_dates = {slot.meal_date for slot in payload.slots}
     for guest_day in payload.guest_days:
         if guest_day.meal_date not in planned_dates:
             raise DomainError(
                 "INVALID_GUEST_DAY",
                 "Guests can only be added to a date with at least one planned meal",
+                422,
+            )
+        planned_meals = {
+            slot.meal_type
+            for slot in payload.slots
+            if slot.meal_date == guest_day.meal_date
+        }
+        if any(meal_type not in planned_meals for meal_type in guest_day.meal_types):
+            raise DomainError(
+                "INVALID_GUEST_MEAL",
+                "Guests can only attend meals that are planned for that date",
                 422,
             )
     recipe_conditions = [
@@ -672,10 +721,19 @@ def generate_plan(
     )
 
     dates = [slot.meal_date for slot in payload.slots]
-    calorie_boosts = {
-        (boost.meal_date.isoformat(), boost.member_id): Decimal(boost.calories)
-        for boost in payload.calorie_boosts
-    }
+    daily_calorie_boosts: dict[tuple[str, str], Decimal] = {}
+    meal_calorie_boosts: dict[tuple[str, str, str], Decimal] = {}
+    for boost in payload.calorie_boosts:
+        date_text = boost.meal_date.isoformat()
+        if not boost.meal_allocations:
+            daily_calorie_boosts[(date_text, boost.member_id)] = Decimal(boost.calories)
+            continue
+        for allocation in boost.meal_allocations:
+            meal_calorie_boosts[(date_text, boost.member_id, allocation.meal_type)] = (
+                Decimal(boost.calories)
+                * Decimal(allocation.percentage)
+                / Decimal("100")
+            )
     grouped_slots: dict[str, list] = {}
     for index, slot in enumerate(payload.slots):
         key = slot.batch_key.strip() if slot.batch_key and slot.batch_key.strip() else f"slot-{index}"
@@ -771,8 +829,30 @@ def generate_plan(
                 context.user.household_id,
                 sum(
                     (
-                        calorie_boosts.get(
+                        daily_calorie_boosts.get(
                             (grouped_slot.meal_date.isoformat(), member_id),
+                            Decimal("0"),
+                        )
+                        for grouped_slot in slots
+                        if member_id in grouped_slot.participant_member_ids
+                    ),
+                    Decimal("0"),
+                )
+                / max(
+                    1,
+                    sum(
+                        member_id in grouped_slot.participant_member_ids
+                        for grouped_slot in slots
+                    ),
+                ),
+                sum(
+                    (
+                        meal_calorie_boosts.get(
+                            (
+                                grouped_slot.meal_date.isoformat(),
+                                member_id,
+                                grouped_slot.meal_type,
+                            ),
                             Decimal("0"),
                         )
                         for grouped_slot in slots
@@ -919,8 +999,16 @@ def generate_plan(
                     member_id,
                     grouped_slot.meal_type,
                     context.user.household_id,
-                    calorie_boosts.get(
+                    daily_calorie_boosts.get(
                         (grouped_slot.meal_date.isoformat(), member_id), Decimal("0")
+                    ),
+                    meal_calorie_boosts.get(
+                        (
+                            grouped_slot.meal_date.isoformat(),
+                            member_id,
+                            grouped_slot.meal_type,
+                        ),
+                        Decimal("0"),
                     ),
                 )
                 daily_key = (grouped_slot.meal_date, member_id)
