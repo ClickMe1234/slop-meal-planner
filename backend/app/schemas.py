@@ -445,15 +445,37 @@ class PlanSlotIn(APIModel):
     food_safety_acknowledged: bool = False
 
 
+class MealCalorieBoostAllocationIn(APIModel):
+    meal_type: MealType
+    percentage: int = Field(ge=0, le=100)
+
+
 class DayCalorieBoostIn(APIModel):
     meal_date: date
     member_id: str
     calories: Decimal = Field(gt=0, le=10000)
+    meal_allocations: list[MealCalorieBoostAllocationIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_meal_allocations(self):
+        meal_types = [item.meal_type for item in self.meal_allocations]
+        if len(meal_types) != len(set(meal_types)):
+            raise ValueError("calorie boost meal types must be unique")
+        if self.meal_allocations and sum(item.percentage for item in self.meal_allocations) != 100:
+            raise ValueError("calorie boost meal allocations must total 100 percent")
+        return self
 
 
 class GuestDayIn(APIModel):
     meal_date: date
     guest_count: int = Field(gt=0, le=50)
+    meal_types: list[MealType] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_meal_types(self):
+        if len(self.meal_types) != len(set(self.meal_types)):
+            raise ValueError("guest meal types must be unique")
+        return self
 
 
 class PlanGenerateRequest(APIModel):

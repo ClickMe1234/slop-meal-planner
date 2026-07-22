@@ -44,6 +44,9 @@ import {
   buildPlanSlots,
   calorieBoostEntries,
   calorieBoostKey,
+  calorieBoostMealKey,
+  boostSharesFor,
+  rebalanceBoostShares,
   capitalise,
   compareMealTypes,
   cookStartKey,
@@ -59,12 +62,15 @@ import {
   readDemoPlan,
   storeDemoPlan,
   guestDayEntries,
+  guestMealKey,
   type CalorieBoosts,
+  type CalorieBoostMealShares,
   type AttendanceOverrides,
   type CookStarts,
   type IngredientChoice,
   type IngredientGuidance,
   type GuestCounts,
+  type GuestMeals,
   type MealType,
   type PlannerDate,
   type PlannerSlot,
@@ -154,7 +160,9 @@ export function PlanPage() {
   const [membersInitialised, setMembersInitialised] = useState(false)
   const [attendance, setAttendance] = useState<AttendanceOverrides>({})
   const [calorieBoosts, setCalorieBoosts] = useState<CalorieBoosts>({})
+  const [calorieBoostShares, setCalorieBoostShares] = useState<CalorieBoostMealShares>({})
   const [guestCounts, setGuestCounts] = useState<GuestCounts>({})
+  const [guestMeals, setGuestMeals] = useState<GuestMeals>({})
   const [cookStarts, setCookStarts] = useState<CookStarts>({})
   const [foodSafetyAcknowledged, setFoodSafetyAcknowledged] = useState(false)
   const [ingredientQuery, setIngredientQuery] = useState('')
@@ -312,7 +320,7 @@ export function PlanPage() {
     try {
       if (isDemoMode) {
         await new Promise(resolve => window.setTimeout(resolve, 500))
-        const plan = buildDemoPlan(dates, slots, calorieBoosts, guestCounts)
+        const plan = buildDemoPlan(dates, slots, calorieBoosts, calorieBoostShares, guestCounts, guestMeals)
         storeDemoPlan(plan)
         setLivePlan(plan)
         setSearchParams({ plan: 'demo' }, { replace: true })
@@ -333,8 +341,8 @@ export function PlanPage() {
         must_use_ingredient_terms: ingredientGuidance.must.map(item => item.term),
         prefer_ingredient_terms: ingredientGuidance.prefer.map(item => item.term),
         exclude_ingredient_terms: ingredientGuidance.exclude.map(item => item.term),
-        calorie_boosts: calorieBoostEntries(dates, selectedMemberIds, calorieBoosts),
-        guest_days: guestDayEntries(dates, guestCounts),
+        calorie_boosts: calorieBoostEntries(dates, selectedMemberIds, calorieBoosts, calorieBoostShares, slots),
+        guest_days: guestDayEntries(dates, guestCounts, guestMeals, slots),
         ignore_nutrition_tolerances: ignoreNutritionTolerances,
       })
       const detail = await api.getPlan(plan.id)
@@ -389,10 +397,10 @@ export function PlanPage() {
         {step === 0 && <DateStep startDate={startDate} days={days} dates={dates} onStartDate={setStartDate} onDays={value => setDays(clampDays(value))}/>}
         {step === 1 && <PeopleStep members={members} selectedMemberIds={selectedMemberIds} targets={targetsByMember} loading={membersQuery.isLoading || selectedTargetLoading} onToggle={toggleMember}/>}
         {step === 2 && <AttendanceStep dates={dates} members={members.filter(member => selectedMemberIds.includes(member.id))} attendance={attendance} onToggle={toggleAttendance}/>}
-        {step === 3 && <SpecialDaysStep dates={dates} slots={slots} members={members.filter(member => selectedMemberIds.includes(member.id))} targets={targetsByMember} calorieBoosts={calorieBoosts} guestCounts={guestCounts} onCalorieBoost={(date, memberId, calories) => setCalorieBoosts(current => ({ ...current, [calorieBoostKey(date, memberId)]: calories }))} onGuestCount={(date, count) => setGuestCounts(current => ({ ...current, [date]: count }))}/>}
+        {step === 3 && <SpecialDaysStep dates={dates} slots={slots} members={members.filter(member => selectedMemberIds.includes(member.id))} targets={targetsByMember} calorieBoosts={calorieBoosts} calorieBoostShares={calorieBoostShares} guestCounts={guestCounts} guestMeals={guestMeals} onCalorieBoost={(date, memberId, calories) => setCalorieBoosts(current => ({ ...current, [calorieBoostKey(date, memberId)]: calories }))} onCalorieBoostShares={(date, memberId, shares) => setCalorieBoostShares(current => ({ ...current, ...Object.fromEntries(MEAL_TYPES.map(mealType => [calorieBoostMealKey(date, memberId, mealType), shares[mealType]])) }))} onGuestCount={(date, count) => setGuestCounts(current => ({ ...current, [date]: count }))} onGuestMeals={(date, meals) => setGuestMeals(current => ({ ...current, ...Object.fromEntries(MEAL_TYPES.map(mealType => [guestMealKey(date, mealType), meals.includes(mealType)])) }))}/>}
         {step === 4 && <CookDaysStep dates={dates} selectedMemberIds={selectedMemberIds} attendance={attendance} cookStarts={cookStarts} slots={slots} foodSafetyAcknowledged={foodSafetyAcknowledged} onToggle={toggleCookStart} onAcknowledge={setFoodSafetyAcknowledged}/>}
         {step === 5 && <IngredientsStep query={ingredientQuery} onQuery={setIngredientQuery} loading={ingredientSearch.isFetching} results={ingredientResults} guidance={ingredientGuidance} profileRestrictions={profileRestrictions} catalogue={isDemoMode ? demoIngredientCatalogue : (recipeIngredientCatalogue.data?.items ?? [])} impactLoading={!isDemoMode && recipeIngredientCatalogue.isLoading} impactError={!isDemoMode && recipeIngredientCatalogue.isError} onAdd={addIngredient} onRemove={removeIngredient} onOpenPantry={() => setPantryImportOpen(true)}/>}
-        {step === 6 && <ReviewStep dates={dates} slots={slots} members={members.filter(member => selectedMemberIds.includes(member.id))} guidance={ingredientGuidance} profileRestrictionCount={profileRestrictions.length} generating={generating} calorieBoosts={calorieBoosts} guestCounts={guestCounts}/>}
+        {step === 6 && <ReviewStep dates={dates} slots={slots} members={members.filter(member => selectedMemberIds.includes(member.id))} guidance={ingredientGuidance} profileRestrictionCount={profileRestrictions.length} generating={generating} calorieBoosts={calorieBoosts} calorieBoostShares={calorieBoostShares} guestCounts={guestCounts} guestMeals={guestMeals}/>}
 
         <div className="wizard-actions">
           <Button variant="ghost" disabled={step === 0 || generating} onClick={() => setStep(current => current - 1)}><ChevronLeft/>Back</Button>
@@ -441,19 +449,30 @@ function AttendanceStep({ dates, members, attendance, onToggle }: { dates: Plann
   })}</fieldset></td>)}</tr>)}</tbody></table></div>
 }
 
-function SpecialDaysStep({ dates, slots, members, targets, calorieBoosts, guestCounts, onCalorieBoost, onGuestCount }: { dates: PlannerDate[]; slots: PlannerSlot[]; members: BackendMember[]; targets: Map<string, BackendTarget>; calorieBoosts: CalorieBoosts; guestCounts: GuestCounts; onCalorieBoost: (date: string, memberId: string, calories: number) => void; onGuestCount: (date: string, count: number) => void }) {
-  const boostCount = calorieBoostEntries(dates, members.map(member => member.id), calorieBoosts).length
-  const guestTotal = guestDayEntries(dates, guestCounts).reduce((sum, day) => sum + day.guest_count, 0)
+function SpecialDaysStep({ dates, slots, members, targets, calorieBoosts, calorieBoostShares, guestCounts, guestMeals, onCalorieBoost, onCalorieBoostShares, onGuestCount, onGuestMeals }: { dates: PlannerDate[]; slots: PlannerSlot[]; members: BackendMember[]; targets: Map<string, BackendTarget>; calorieBoosts: CalorieBoosts; calorieBoostShares: CalorieBoostMealShares; guestCounts: GuestCounts; guestMeals: GuestMeals; onCalorieBoost: (date: string, memberId: string, calories: number) => void; onCalorieBoostShares: (date: string, memberId: string, shares: Record<MealType, number>) => void; onGuestCount: (date: string, count: number) => void; onGuestMeals: (date: string, meals: MealType[]) => void }) {
+  const boostCount = calorieBoostEntries(dates, members.map(member => member.id), calorieBoosts, calorieBoostShares, slots).length
+  const guestTotal = guestDayEntries(dates, guestCounts, guestMeals, slots).reduce((sum, day) => sum + day.guest_count, 0)
   return <div className="special-days"><div className="special-days-summary"><span><Bike/><strong>{boostCount}</strong><small>active-day {boostCount === 1 ? 'boost' : 'boosts'}</small></span><span><UserRoundPlus/><strong>{guestTotal}</strong><small>guest {guestTotal === 1 ? 'place' : 'places'}</small></span></div><div className="special-day-list">{dates.map(date => {
     const activeMemberIds = new Set(slots.filter(slot => slot.meal_date === date.iso).flatMap(slot => slot.participant_member_ids))
+    const plannedMeals = MEAL_TYPES.filter(mealType => slots.some(slot => slot.meal_date === date.iso && slot.meal_type === mealType))
+    const selectedGuestMeals = guestDayEntries([date], guestCounts, guestMeals, slots)[0]?.meal_types ?? []
     const hasMeals = activeMemberIds.size > 0
-    return <section className="special-day-card" key={date.iso}><header><div><strong>{new Date(`${date.iso}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long' })}</strong><small>{date.shortDate}</small></div>{(guestCounts[date.iso] ?? 0) > 0 && <span className="special-day-status"><UserRoundPlus/>{guestCounts[date.iso]}</span>}</header><div className="special-day-fields"><label><span><UserRoundPlus/>Guests</span><div className="input-suffix"><input type="number" min="0" max="50" step="1" disabled={!hasMeals} value={guestCounts[date.iso] || ''} placeholder="0" onChange={event => onGuestCount(date.iso, Math.max(0, Math.min(50, Math.floor(Number(event.target.value) || 0))))}/><span>people</span></div><small>Each guest gets the largest household portion for each meal.</small></label><div className="calorie-boost-fields"><span className="special-field-label"><Flame/>Extra calories</span>{members.map(member => {
+    return <section className="special-day-card" key={date.iso}><header><div><strong>{new Date(`${date.iso}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long' })}</strong><small>{date.shortDate}</small></div>{(guestCounts[date.iso] ?? 0) > 0 && <span className="special-day-status"><UserRoundPlus/>{guestCounts[date.iso]} · {selectedGuestMeals.map(capitalise).join(', ')}</span>}</header><div className="special-day-fields"><div className="guest-day-field"><label><span><UserRoundPlus/>Guests</span><div className="input-suffix"><input aria-label={`Guests on ${date.shortDate}`} type="number" min="0" max="50" step="1" disabled={!hasMeals} value={guestCounts[date.iso] || ''} placeholder="0" onChange={event => onGuestCount(date.iso, Math.max(0, Math.min(50, Math.floor(Number(event.target.value) || 0))))}/><span>people</span></div><small>Each guest gets the largest household portion at their selected meals.</small></label>{(guestCounts[date.iso] ?? 0) > 0 && <fieldset className="guest-meal-picker"><legend>Which meals?</legend>{plannedMeals.map(mealType => {
+      const selected = selectedGuestMeals.includes(mealType)
+      return <label key={mealType} className={selected ? 'selected' : ''}><input type="checkbox" checked={selected} onChange={() => {
+        const next = selected ? selectedGuestMeals.filter(item => item !== mealType) : [...selectedGuestMeals, mealType]
+        if (next.length) onGuestMeals(date.iso, next)
+      }}/><span>{capitalise(mealType)}</span></label>
+    })}</fieldset>}</div><div className="calorie-boost-fields"><span className="special-field-label"><Flame/>Extra calories</span>{members.map(member => {
       const target = targets.get(member.id)
       const enabled = target?.mode === 'calorie' && activeMemberIds.has(member.id)
       const key = calorieBoostKey(date.iso, member.id)
-      return <label key={member.id}><span>{member.name}</span><div className="input-suffix"><input type="number" min="0" max="10000" step="50" disabled={!enabled} value={calorieBoosts[key] || ''} placeholder="0" aria-label={`${member.name} extra calories on ${date.shortDate}`} onChange={event => onCalorieBoost(date.iso, member.id, Math.max(0, Math.min(10000, Number(event.target.value) || 0)))}/><span>kcal</span></div>{target?.mode === 'macros' && <small>Uses macro targets</small>}{!activeMemberIds.has(member.id) && <small>Not eating this day</small>}</label>
+      const activeMeals = MEAL_TYPES.filter(mealType => slots.some(slot => slot.meal_date === date.iso && slot.meal_type === mealType && slot.participant_member_ids.includes(member.id)))
+      const shares = boostSharesFor(date.iso, member.id, activeMeals, calorieBoostShares)
+      const boostCalories = Number(calorieBoosts[key] ?? 0)
+      return <div className="member-boost" key={member.id}><label className="member-boost-amount"><span>{member.name}</span><div className="input-suffix"><input type="number" min="0" max="10000" step="50" disabled={!enabled} value={calorieBoosts[key] || ''} placeholder="0" aria-label={`${member.name} extra calories on ${date.shortDate}`} onChange={event => onCalorieBoost(date.iso, member.id, Math.max(0, Math.min(10000, Number(event.target.value) || 0)))}/><span>kcal</span></div>{target?.mode === 'macros' && <small>Uses macro targets</small>}{!activeMemberIds.has(member.id) && <small>Not eating this day</small>}</label>{enabled && boostCalories > 0 && <div className="boost-allocation"><div><strong>Put the boost into</strong><small>Drag a meal to move the extra calories. Shares always total 100%.</small></div>{activeMeals.map(mealType => <label key={mealType}><span>{capitalise(mealType)} <em>{shares[mealType]}% · {Math.round(boostCalories * shares[mealType] / 100)} kcal</em></span><input type="range" min="0" max="100" step="5" value={shares[mealType]} aria-label={`${member.name} ${mealType} boost share on ${date.shortDate}`} onChange={event => onCalorieBoostShares(date.iso, member.id, rebalanceBoostShares(shares, mealType, Number(event.target.value), activeMeals))}/></label>)}</div>}</div>
     })}</div></div></section>
-  })}</div><Notice tone="info" title="How adjustments work"><span>Calorie boosts raise that person's target for one day. Guest portions increase recipe batches and the shopping list, but do not change household nutrition totals.</span></Notice></div>
+  })}</div><Notice tone="info" title="How adjustments work"><span>Calorie boosts are assigned to the selected meals for that person. Guest portions increase only their selected meal batches and the shopping list, but do not change household nutrition totals.</span></Notice></div>
 }
 
 function CookDaysStep({ dates, selectedMemberIds, attendance, cookStarts, slots, foodSafetyAcknowledged, onToggle, onAcknowledge }: { dates: PlannerDate[]; selectedMemberIds: string[]; attendance: AttendanceOverrides; cookStarts: CookStarts; slots: PlannerSlot[]; foodSafetyAcknowledged: boolean; onToggle: (date: string, mealType: MealType) => void; onAcknowledge: (value: boolean) => void }) {
@@ -649,10 +668,10 @@ function GuidanceImpactDecks({ catalogue, guidance, loading, error }: { catalogu
   return <aside className="recipe-impact-panel" aria-labelledby="recipe-impact-title"><div className="recipe-impact-panel-heading"><div><p className="eyebrow">Live recipe impact</p><h2 id="recipe-impact-title">What these choices change</h2></div><span>Swipe the cards</span></div>{loading && <Loading label="Checking saved recipes…"/>}{error && <Notice tone="warning" title="Preview unavailable">The saved ingredient catalogue could not be loaded.</Notice>}{!loading && !error && <div className="recipe-impact-decks"><RecipeImpactDeck title="Favoured recipes" description="Must-use matches come first, followed by preferred matches." tone="favoured" recipes={decks.favoured}/><RecipeImpactDeck title="Excluded recipes" description="These recipes are removed before the planner ranks the rest." tone="excluded" recipes={decks.excluded}/></div>}{decks.unmatched.length > 0 && <div className="recipe-impact-unmatched"><TriangleAlert/><span>Not found in a saved recipe: {decks.unmatched.join(', ')}</span></div>}<p className="recipe-impact-note">Ingredient-only preview. Meal tags, household rules and nutrition targets still shape the final plan.</p></aside>
 }
 
-function ReviewStep({ dates, slots, members, guidance, profileRestrictionCount, generating, calorieBoosts, guestCounts }: { dates: PlannerDate[]; slots: PlannerSlot[]; members: BackendMember[]; guidance: IngredientGuidance; profileRestrictionCount: number; generating: boolean; calorieBoosts: CalorieBoosts; guestCounts: GuestCounts }) {
+function ReviewStep({ dates, slots, members, guidance, profileRestrictionCount, generating, calorieBoosts, calorieBoostShares, guestCounts, guestMeals }: { dates: PlannerDate[]; slots: PlannerSlot[]; members: BackendMember[]; guidance: IngredientGuidance; profileRestrictionCount: number; generating: boolean; calorieBoosts: CalorieBoosts; calorieBoostShares: CalorieBoostMealShares; guestCounts: GuestCounts; guestMeals: GuestMeals }) {
   const mealCounts = MEAL_TYPES.map(mealType => `${slots.filter(slot => slot.meal_type === mealType).length} ${mealType}`).join(' · ')
-  const boosts = calorieBoostEntries(dates, members.map(member => member.id), calorieBoosts)
-  const guestPlaces = guestDayEntries(dates, guestCounts).reduce((sum, day) => sum + day.guest_count, 0)
+  const boosts = calorieBoostEntries(dates, members.map(member => member.id), calorieBoosts, calorieBoostShares, slots)
+  const guestPlaces = guestDayEntries(dates, guestCounts, guestMeals, slots).reduce((sum, day) => sum + day.guest_count, 0)
   return <div className="constraint-review"><dl><div><dt>Dates</dt><dd>{formatDateRange(dates)} · {dates.length} {dates.length === 1 ? 'day' : 'days'}</dd></div><div><dt>Meal slots</dt><dd>{slots.length} total · {mealCounts}</dd></div><div><dt>People</dt><dd>{members.map(member => member.name).join(', ')}</dd></div><div><dt>Special days</dt><dd>{boosts.length} calorie {boosts.length === 1 ? 'boost' : 'boosts'} · {guestPlaces} guest {guestPlaces === 1 ? 'place' : 'places'}</dd></div><div><dt>Cooking</dt><dd>{batchCount(slots)} new recipe {batchCount(slots) === 1 ? 'batch' : 'batches'}</dd></div><div><dt>Plan guidance</dt><dd>{guidance.must.length} must use · {guidance.prefer.length} preferred · {guidance.exclude.length} excluded</dd></div><div><dt>Profile rules</dt><dd>{profileRestrictionCount} applied automatically</dd></div></dl><Notice title="Recipes are meal-tagged">Only planner-ready recipes tagged for the relevant breakfast, lunch, dinner or snack slot will be considered.</Notice>{generating && <ProgressBar value={72} label="Balancing nutrition, portions, batches and preferences…"/>}</div>
 }
 
@@ -679,7 +698,7 @@ function GeneratedPlan({ plan, memberNames, onBack, onPlanChange }: { plan: Back
   }, {})
   const planDayCount = Math.max(1, Math.round((new Date(`${plan.plan.end_date}T12:00:00`).getTime() - new Date(`${plan.plan.start_date}T12:00:00`).getTime()) / (24 * 60 * 60 * 1000)) + 1)
   const dates = plannerDates(plan.plan.start_date, planDayCount).map(date => date.iso)
-  const guestCounts = new Map((plan.plan.guest_days ?? []).map(day => [day.meal_date, day.guest_count]))
+  const guestDays = new Map((plan.plan.guest_days ?? []).map(day => [day.meal_date, day]))
   const boostsByDate = (plan.plan.calorie_boosts ?? []).reduce<Record<string, Array<{ member_id: string; calories: number }>>>((result, boost) => {
     ;(result[boost.meal_date] ??= []).push({ member_id: boost.member_id, calories: Number(boost.calories) })
     return result
@@ -735,8 +754,10 @@ function GeneratedPlan({ plan, memberNames, onBack, onPlanChange }: { plan: Back
     const memberNutrition = memberNutritionTotals(occurrences)
     const collapsed = Boolean(collapsedDays[date])
     const dayBoosts = boostsByDate[date] ?? []
-    const guestCount = guestCounts.get(date) ?? 0
-    return <Card key={date} className={`generated-day${collapsed ? ' is-collapsed' : ''}`}><div className="generated-day-head generated-day-head--rich"><div className="generated-day-date"><strong>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long' })}</strong><small>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</small>{(dayBoosts.length > 0 || guestCount > 0) && <span className="generated-day-adjustments">{dayBoosts.map(boost => <em key={boost.member_id}><Flame/>{memberNames[boost.member_id] ?? 'Member'} +{Number(boost.calories).toLocaleString()} kcal</em>)}{guestCount > 0 && <em><UserRoundPlus/>{guestCount} {guestCount === 1 ? 'guest' : 'guests'}</em>}</span>}</div><div className="day-member-nutrition">{memberNutrition.map(item => <div className="day-member-nutrition-row" key={item.memberId}><span>{memberNames[item.memberId] ?? 'Household member'}</span><NutritionStrip compact nutrition={item.nutrition}/></div>)}</div><button type="button" className="day-collapse-button" onClick={() => setCollapsedDays(current => ({ ...current, [date]: !collapsed }))} aria-expanded={!collapsed} aria-controls={`planned-day-${date}`} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${date}`}>{collapsed ? <ChevronDown/> : <ChevronUp/>}</button></div><div id={`planned-day-${date}`} hidden={collapsed}>{!occurrences.length && <div className="generated-day-empty">No meals needed</div>}{occurrences.map(item => {
+    const guestDay = guestDays.get(date)
+    const guestCount = guestDay?.guest_count ?? 0
+    const guestMealLabel = guestDay?.meal_types?.length ? ` · ${guestDay.meal_types.map(capitalise).join(', ')}` : ''
+    return <Card key={date} className={`generated-day${collapsed ? ' is-collapsed' : ''}`}><div className="generated-day-head generated-day-head--rich"><div className="generated-day-date"><strong>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long' })}</strong><small>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</small>{(dayBoosts.length > 0 || guestCount > 0) && <span className="generated-day-adjustments">{dayBoosts.map(boost => <em key={boost.member_id}><Flame/>{memberNames[boost.member_id] ?? 'Member'} +{Number(boost.calories).toLocaleString()} kcal</em>)}{guestCount > 0 && <em><UserRoundPlus/>{guestCount} {guestCount === 1 ? 'guest' : 'guests'}{guestMealLabel}</em>}</span>}</div><div className="day-member-nutrition">{memberNutrition.map(item => <div className="day-member-nutrition-row" key={item.memberId}><span>{memberNames[item.memberId] ?? 'Household member'}</span><NutritionStrip compact nutrition={item.nutrition}/></div>)}</div><button type="button" className="day-collapse-button" onClick={() => setCollapsedDays(current => ({ ...current, [date]: !collapsed }))} aria-expanded={!collapsed} aria-controls={`planned-day-${date}`} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${date}`}>{collapsed ? <ChevronDown/> : <ChevronUp/>}</button></div><div id={`planned-day-${date}`} hidden={collapsed}>{!occurrences.length && <div className="generated-day-empty">No meals needed</div>}{occurrences.map(item => {
       const servings = occurrenceServings(item)
       const kcal = Number(item.nutrition_per_serving?.energy_kcal ?? 0) * servings
       const isSide = item.component_slot > 0
@@ -792,7 +813,12 @@ const demoMeals: Record<MealType, Array<{ id: string; title: string; nutrition: 
   ],
 }
 
-function buildDemoPlan(dates: PlannerDate[], slots: PlannerSlot[], calorieBoosts: CalorieBoosts, guestCounts: GuestCounts): BackendPlanDetail {
+function buildDemoPlan(dates: PlannerDate[], slots: PlannerSlot[], calorieBoosts: CalorieBoosts, calorieBoostShares: CalorieBoostMealShares, guestCounts: GuestCounts, guestMeals: GuestMeals): BackendPlanDetail {
+  const guestDays = guestDayEntries(dates, guestCounts, guestMeals, slots)
+  const guestCountFor = (slot: PlannerSlot) => {
+    const day = guestDays.find(item => item.meal_date === slot.meal_date)
+    return day?.meal_types.includes(slot.meal_type) ? day.guest_count : 0
+  }
   const batchIndexes = new Map<string, number>()
   const nextIndex: Record<MealType, number> = { breakfast: 0, lunch: 0, dinner: 0, snack: 0 }
   for (const slot of slots) {
@@ -802,7 +828,7 @@ function buildDemoPlan(dates: PlannerDate[], slots: PlannerSlot[], calorieBoosts
     }
   }
   const batchServings = slots.reduce<Record<string, number>>((result, slot) => {
-    result[slot.batch_key] = (result[slot.batch_key] ?? 0) + slot.participant_member_ids.length + (guestCounts[slot.meal_date] ?? 0)
+    result[slot.batch_key] = (result[slot.batch_key] ?? 0) + slot.participant_member_ids.length + guestCountFor(slot)
     return result
   }, {})
   return {
@@ -813,8 +839,8 @@ function buildDemoPlan(dates: PlannerDate[], slots: PlannerSlot[], calorieBoosts
       end_date: dates.at(-1)?.iso ?? localToday(),
       status: 'ready',
       diagnostics: [],
-      calorie_boosts: calorieBoostEntries(dates, [demoMember.id], calorieBoosts),
-      guest_days: guestDayEntries(dates, guestCounts),
+      calorie_boosts: calorieBoostEntries(dates, [demoMember.id], calorieBoosts, calorieBoostShares, slots),
+      guest_days: guestDays,
       version: 1,
     },
     occurrences: slots.map((slot, index) => {
@@ -826,7 +852,7 @@ function buildDemoPlan(dates: PlannerDate[], slots: PlannerSlot[], calorieBoosts
         meal_type: slot.meal_type,
         batch_id: slot.batch_key,
         component_slot: 0,
-        guest_servings: guestCounts[slot.meal_date] ?? 0,
+        guest_servings: guestCountFor(slot),
         recipe_id: recipe.id,
         recipe_title: recipe.title,
         batch_servings: batchServings[slot.batch_key],

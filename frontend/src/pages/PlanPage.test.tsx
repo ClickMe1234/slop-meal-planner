@@ -76,6 +76,15 @@ describe('PlanPage wizard', () => {
     const guestInput = screen.getByRole('spinbutton', { name: /guests/i })
     await user.type(guestInput, '2')
 
+    expect(screen.getByRole('checkbox', { name: 'Dinner' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Breakfast' })).not.toBeChecked()
+    const dinnerShare = screen.getByRole('slider', { name: /you dinner boost share/i })
+    const snackShare = screen.getByRole('slider', { name: /you snack boost share/i })
+    expect(snackShare).toHaveValue('100')
+    fireEvent.change(dinnerShare, { target: { value: '40' } })
+    expect(dinnerShare).toHaveValue('40')
+    expect(snackShare).toHaveValue('60')
+
     const boostSummary = screen.getByText((_, element) => element?.tagName === 'SMALL' && element.textContent === 'active-day boost')
     const guestSummary = screen.getByText((_, element) => element?.tagName === 'SMALL' && element.textContent === 'guest places')
     expect(boostSummary.parentElement).toHaveTextContent('1active-day boost')
