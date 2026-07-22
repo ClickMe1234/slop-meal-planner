@@ -5,6 +5,13 @@
 > Ingredient matching/calculation is parked. Good Food and Allrecipes discovery
 > remain active; Great British Chefs is temporarily disabled.
 
+> **Decision update — 19 July 2026:** the parked ingredient-matching boundary is
+> superseded for household foods. Slop now uses the public, unauthenticated Open
+> Food Facts read API for on-demand barcode lookup, keeps legacy name search an
+> explicit best-effort action, supports manual label fallback, and admits
+> complete ingredient-calculated nutrition to planning. It does not upload
+> corrections, copy product images, or bulk-import Open Food Facts.
+
 **Status:** Living discovery and decision record; initial implementation completed 12 July 2026
 **Research date:** 12 July 2026
 **Primary region assumed:** United Kingdom

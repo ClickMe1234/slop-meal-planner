@@ -186,3 +186,27 @@ def latest_calculation(db: Session, recipe_version_id: str) -> NutritionCalculat
         .where(NutritionCalculation.recipe_version_id == recipe_version_id)
         .order_by(NutritionCalculation.calculated_at.desc())
     )
+
+
+def planning_values(db: Session, version: RecipeVersion | None) -> dict[str, Decimal] | None:
+    """Return the authoritative per-serving values used by the planner.
+
+    Ingredient calculations take precedence when a complete snapshot exists;
+    publisher values remain the compatibility fallback for imported recipes.
+    """
+
+    if version is None:
+        return None
+    calculation = latest_calculation(db, version.id)
+    if calculation is not None and isinstance(calculation.per_serving_values, dict):
+        values: dict[str, Decimal] = {}
+        for code in REQUIRED_NUTRIENTS:
+            raw = calculation.per_serving_values.get(code)
+            if raw is None:
+                return publisher_values(version)
+            try:
+                values[code] = Decimal(str(raw))
+            except Exception:
+                return publisher_values(version)
+        return values
+    return publisher_values(version)

@@ -39,6 +39,7 @@ from ..services.quantities import (
 )
 from ..services.shopping import build_shopping_list
 from ..services.regional_ingredients import convert_ingredient_text
+from ..services.saved_foods import accessible_food_record
 from ..services.measurement_conversion import (
     available_display_units,
     convert_quantity_to_unit,
@@ -109,6 +110,8 @@ def create_pantry_lot(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
+    if payload.food_record_id is not None:
+        accessible_food_record(db, payload.food_record_id, context.user.household_id)
     unit = canonical_quantity_unit(payload.unit)
     lot = PantryLot(
         household_id=context.user.household_id,

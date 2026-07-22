@@ -61,6 +61,10 @@ class PasswordChange(APIModel):
     new_password: str = Field(min_length=12, max_length=200)
 
 
+class IntegrationCredentialUpdate(APIModel):
+    api_key: str = Field(min_length=8, max_length=200, pattern=r"^\S+$")
+
+
 class MemberCreate(APIModel):
     name: str = Field(min_length=1, max_length=120)
 
@@ -279,6 +283,129 @@ class FoodRecordOut(APIModel):
     basis_unit: str
     density_g_per_ml: Decimal | None
     nutrients: list[dict[str, Any]]
+
+
+class FoodLookupSearch(APIModel):
+    query: str = Field(min_length=2, max_length=200)
+    page: int = Field(default=1, ge=1, le=20)
+
+    @model_validator(mode="after")
+    def normalize_query(self):
+        self.query = " ".join(self.query.split())
+        if len(self.query) < 2:
+            raise ValueError("enter at least two characters")
+        return self
+
+
+class FoodLookupOut(APIModel):
+    provider: str
+    provider_record_id: str
+    name: str
+    brand: str | None = None
+    barcode: str | None = None
+    basis_amount: Decimal = Decimal("100")
+    basis_unit: Literal["g", "ml"]
+    nutrients: dict[str, Decimal | None]
+    complete: bool
+    package_amount: Decimal | None = None
+    package_unit: Literal["g", "ml"] | None = None
+    serving_amount: Decimal | None = None
+    serving_unit: Literal["g", "ml"] | None = None
+    source_url: str | None = None
+    attribution: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class FoodLookupSearchOut(APIModel):
+    items: list[FoodLookupOut]
+    page: int
+    has_more: bool = False
+    remote_error: str | None = None
+
+
+class SavedFoodCreate(APIModel):
+    source_type: Literal["food_record", "open_food_facts", "manual"]
+    food_record_id: str | None = None
+    barcode: str | None = Field(default=None, max_length=40)
+    display_name: str | None = Field(default=None, max_length=300)
+    basis_amount: Decimal = Field(default=100, gt=0)
+    basis_unit: Literal["g", "ml"] = "g"
+    nutrients: list[FoodNutrientIn] = Field(default_factory=list)
+    serving_amount: Decimal | None = Field(default=None, gt=0)
+    serving_unit: Literal["g", "ml"] | None = None
+    planner_enabled: bool = False
+    meal_types: list[RecipeTag] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_source_and_planner(self):
+        if self.display_name is not None:
+            self.display_name = self.display_name.strip()
+        if self.source_type == "manual" and (not self.display_name or not self.nutrients):
+            raise ValueError("manual foods require a name and nutrition values")
+        if self.source_type == "open_food_facts" and not self.barcode:
+            raise ValueError("an Open Food Facts barcode is required")
+        if self.source_type == "food_record" and not self.food_record_id:
+            raise ValueError("a food record is required")
+        if self.planner_enabled and (
+            self.serving_amount is None or self.serving_unit is None or not self.meal_types
+        ):
+            raise ValueError("planner foods require a serving and at least one meal type")
+        if len(set(self.meal_types)) != len(self.meal_types):
+            raise ValueError("meal types must be unique")
+        return self
+
+
+class SavedFoodUpdate(VersionedUpdate):
+    display_name: str = Field(min_length=1, max_length=300)
+    serving_amount: Decimal | None = Field(default=None, gt=0)
+    serving_unit: Literal["g", "ml"] | None = None
+    planner_enabled: bool = False
+    meal_types: list[RecipeTag] = Field(default_factory=list)
+    basis_amount: Decimal | None = Field(default=None, gt=0)
+    basis_unit: Literal["g", "ml"] | None = None
+    nutrients: list[FoodNutrientIn] | None = None
+
+    @model_validator(mode="after")
+    def validate_planner(self):
+        self.display_name = self.display_name.strip()
+        if not self.display_name:
+            raise ValueError("display name cannot be blank")
+        if (self.serving_amount is None) != (self.serving_unit is None):
+            raise ValueError("serving amount and unit must be supplied together")
+        if self.planner_enabled and (
+            self.serving_amount is None or self.serving_unit is None or not self.meal_types
+        ):
+            raise ValueError("planner foods require a serving and at least one meal type")
+        if len(set(self.meal_types)) != len(self.meal_types):
+            raise ValueError("meal types must be unique")
+        if self.nutrients is not None and (self.basis_amount is None or self.basis_unit is None):
+            raise ValueError("nutrition corrections require a basis")
+        return self
+
+
+class SavedFoodOut(APIModel):
+    id: str
+    display_name: str
+    food_record_id: str
+    provider: str
+    provider_record_id: str
+    barcode: str | None = None
+    brand: str | None = None
+    dataset_version: str
+    basis_amount: Decimal
+    basis_unit: str
+    nutrients: dict[str, Decimal | None]
+    serving_amount: Decimal | None
+    serving_unit: str | None
+    planner_enabled: bool
+    planner_recipe_id: str | None
+    meal_types: list[RecipeTag] = Field(default_factory=list)
+    package_amount: Decimal | None = None
+    package_unit: str | None = None
+    source_url: str | None = None
+    attribution: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    version: int
 
 
 class NutritionCalculationOut(APIModel):

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from decimal import Decimal
 from typing import Literal
-from sqlalchemy import delete, exists, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..auth import AuthContext, get_auth_context, require_csrf, require_owner
@@ -46,7 +46,13 @@ from ..schemas import (
     RecipeReviewUpdate,
     RecipeSummary,
 )
-from ..services.food_search import fetch_and_cache_usda_foods, normalise_food_query
+from ..services.food_search import (
+    FoodDataCentralConfigurationError,
+    FoodDataCentralRateLimited,
+    FoodDataCentralUnavailable,
+    fetch_and_cache_usda_foods,
+    normalise_food_query,
+)
 from ..services.ingredient_names import (
     household_name_overrides,
     ingredient_name_keys,
@@ -54,9 +60,11 @@ from ..services.ingredient_names import (
     remember_ingredient_name,
 )
 from ..services.ingredients import PARSER_VERSION, parse_ingredient
+from ..services.integration_credentials import effective_usda_key
 from ..services.regional_ingredients import convert_ingredient_text, equivalent_terms, query_for_locale
 from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
 from ..services.pantry import reserve_plan_batches
+from ..services.saved_foods import accessible_food_record
 
 router = APIRouter(tags=["recipes and food data"])
 
@@ -108,6 +116,8 @@ def _ingredient_values(
     *,
     reviewed: bool,
 ) -> dict:
+    if row.food_record_id:
+        accessible_food_record(db, row.food_record_id, household_id)
     parsed = parse_ingredient(row.original_text)
     automatic_name = convert_ingredient_text(db, parsed.food_phrase, "uk") or parsed.food_phrase
     submitted_name = convert_ingredient_text(db, row.food_phrase, "uk") if row.food_phrase else None
@@ -262,9 +272,9 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         planner_warnings.append(
             "Choose at least one meal type before this recipe can be used for meal planning."
         )
-    if reported_values is None or not version.yield_servings:
+    if nutrition_values is None or not version.yield_servings:
         planner_warnings.append(
-            "Complete publisher-reported per-serving nutrition and a serving yield are required."
+            "Complete per-serving nutrition and a serving yield are required."
         )
     review_count = sum(
         1 for ingredient in ingredients if ingredient["included"] and ingredient["needs_review"]
@@ -292,7 +302,7 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         meal_types=meal_types,
         planner_eligible=(
             effective_eligibility == RecipeEligibility.PLANNER_READY
-            and reported_values is not None
+            and nutrition_values is not None
             and bool(version.yield_servings)
             and bool(meal_types)
         ),
@@ -318,6 +328,7 @@ def list_recipes(
     publisher_category_match: Literal["any", "all"] = Query(default="any"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=24, ge=1, le=100),
+    include_food: bool = Query(default=False),
     context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
@@ -328,6 +339,8 @@ def list_recipes(
     except KeyError as exc:
         raise DomainError("UNKNOWN_RECIPE_CATEGORY", f"Unknown recipe category: {exc.args[0]}", 422) from exc
     conditions = [Recipe.household_id == context.user.household_id, Recipe.archived_at.is_(None)]
+    if not include_food:
+        conditions.append(Recipe.source_type != "food")
     if q.strip():
         search_terms = equivalent_terms(db, q.strip())
         ingredient_match = exists(
@@ -513,7 +526,19 @@ def create_recipe(
     db.flush()
     for position, item in enumerate(ingredient_values):
         db.add(RecipeIngredient(recipe_version_id=version.id, position=position, **item))
-    if publisher_values(version) is not None and version.yield_servings:
+    db.flush()
+    if payload.source_type == "custom":
+        try:
+            calculate_recipe(db, version.id)
+        except DomainError as exc:
+            if exc.code not in {
+                "MISSING_YIELD",
+                "MISSING_INGREDIENTS",
+                "NUTRITION_REVIEW_REQUIRED",
+            }:
+                raise
+            recipe.eligibility = RecipeEligibility.DRAFT.value
+    elif publisher_values(version) is not None and version.yield_servings:
         recipe.eligibility = RecipeEligibility.PLANNER_READY.value
     db.commit()
     db.refresh(recipe)
@@ -654,11 +679,20 @@ def save_recipe_review(
     if payload.meal_types is not None:
         _replace_meal_types(db, recipe, payload.meal_types)
     recipe.title = payload.title
-    recipe.eligibility = (
-        RecipeEligibility.PLANNER_READY.value
-        if publisher_values(next_version) is not None
-        else RecipeEligibility.DRAFT.value
-    )
+    recipe.eligibility = RecipeEligibility.DRAFT.value
+    db.flush()
+    if recipe.source_type == "custom":
+        try:
+            calculate_recipe(db, next_version.id)
+        except DomainError as exc:
+            if exc.code not in {
+                "MISSING_YIELD",
+                "MISSING_INGREDIENTS",
+                "NUTRITION_REVIEW_REQUIRED",
+            }:
+                raise
+    elif publisher_values(next_version) is not None:
+        recipe.eligibility = RecipeEligibility.PLANNER_READY.value
     recipe.version += 1
     _resync_plan_batches_after_review(
         db,
@@ -742,23 +776,48 @@ def search_foods(
     db: Session = Depends(get_db),
 ):
     cleaned_query = normalise_food_query(q.strip()) if q.strip() else ""
-    conditions = []
+    conditions = [
+        or_(
+            FoodRecord.owner_household_id.is_(None),
+            FoodRecord.owner_household_id == context.user.household_id,
+        )
+    ]
     if cleaned_query:
         terms = equivalent_terms(db, cleaned_query)
-        conditions.append(or_(*(func.lower(FoodRecord.name).contains(term) for term in terms)))
+        conditions.append(or_(*(
+            and_(*(func.lower(FoodRecord.name).contains(token) for token in term.split()))
+            for term in terms
+        )))
     total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
     remote_error = None
+    remote_error_code = None
     settings = get_settings()
     if cleaned_query and total < 3 and settings.remote_food_search_enabled:
+        usda_api_key, usda_key_source = effective_usda_key(
+            db, context.user.household_id, settings
+        )
         try:
             fetch_and_cache_usda_foods(
                 db,
                 query_for_locale(db, cleaned_query, "us"),
-                api_key=settings.usda_api_key,
+                api_key=usda_api_key,
             )
             total = db.scalar(select(func.count(FoodRecord.id)).where(*conditions)) or 0
-        except Exception:
+        except FoodDataCentralConfigurationError:
+            remote_error = "FoodData Central needs a USDA API key before general-food search can run."
+            remote_error_code = "USDA_API_KEY_REQUIRED"
+        except FoodDataCentralRateLimited:
+            remote_error = (
+                "FoodData Central's shared demo quota is exhausted. Add a free USDA API key to restore general-food search."
+                if usda_key_source == "demo"
+                else "FoodData Central is rate limited. Existing local matches are still shown."
+            )
+            remote_error_code = (
+                "USDA_API_KEY_REQUIRED" if usda_key_source == "demo" else "USDA_RATE_LIMITED"
+            )
+        except FoodDataCentralUnavailable:
             remote_error = "FoodData Central could not be reached. Existing local matches are still shown."
+            remote_error_code = "USDA_UNAVAILABLE"
     rows = db.scalars(
         select(FoodRecord)
         .where(*conditions)
@@ -783,6 +842,7 @@ def search_foods(
         "page_size": page_size,
         "total": total,
         "remote_error": remote_error,
+        "remote_error_code": remote_error_code,
     }
 
 

@@ -3,6 +3,20 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.9.0 - 2026-07-19
+
+- Add a household Ingredients page with saved-food search, manual nutrition entry, barcode camera/photo/number scanning, and explicit packaged-product search through the public Open Food Facts read API.
+- Add pantry quantities directly from ingredient results, including package-count conversion, expiry, use-soon, and always-stocked options linked to the selected nutrition record.
+- Let saved ingredients become serving-sized breakfast, lunch, dinner, snack, or side candidates in meal planning without cluttering the normal Recipes page.
+- Match custom-recipe ingredients to household or shared nutrition records and calculate complete per-serving calories and macros for planning.
+- Integrate general-food search, packaged-product search, and barcode camera/photo/number lookup directly into each custom-recipe ingredient row.
+- Show compact calories, carbohydrate, fat, and protein values on custom-recipe nutrition search results.
+- Retry and briefly cache transient Open Food Facts searches, run USDA and Open Food Facts only after an explicit search, match multi-word USDA names regardless of word order, and report USDA configuration or quota failures explicitly.
+- Add clear General and Packaged source selectors so ingredient searches can query USDA, Open Food Facts, or both from one Search action.
+- Let household owners securely save an encrypted USDA API key in System settings, with contextual signup links and guidance when ingredient searches need one.
+- Normalise surrounding and repeated whitespace in ingredient searches, and only show packaged-food empty states after an explicit packaged search.
+- Keep household nutrition corrections private, preserve source attribution, enforce household record access, and degrade cleanly when remote product services are unavailable.
+
 ## 0.8.1 - 2026-07-18
 
 - Recover from stale browser CSRF tokens when saving recipe meal types and other protected changes.

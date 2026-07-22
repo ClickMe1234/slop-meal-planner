@@ -51,7 +51,7 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0013_rejected_pantry_matches (head)" in current.stdout
+    assert "0015_integration_credentials (head)" in current.stdout
     assert "recipe_publisher_tag" in _tables(database)
 
     # A full reverse and second replay catches migration ordering, hidden live
