@@ -48,7 +48,10 @@ connection URL. Hex output from the command above is safe. Set:
 - `BACKUP_ROOT=/mnt/user/backups/meal-planner`
 - `ALLOWED_HOSTS` to the Unraid hostname/IP and names used by household devices.
 - `WEB_PORT` to the desired LAN port (default `8080`).
-- `APP_VERSION` to an immutable release such as `0.2.0`; never use `latest`.
+- `APP_VERSION` to an immutable release such as `0.9.0`; never use `latest`.
+- `OPEN_FOOD_FACTS_ENABLED=true` to permit read-only packaged-product lookup,
+  or `false` to disable that external service. The timeout defaults to eight
+  seconds.
 
 Create the host folders before first startup:
 
@@ -76,6 +79,27 @@ For a developer workstation, change `APPDATA_ROOT` to `./.runtime` and
 `BACKUP_ROOT` to `./backups`. Compose resolves these from the `deploy` directory.
 On Linux, also set `PUID` and `PGID` to the
 output of `id -u` and `id -g`.
+
+### HTTPS for live barcode scanning
+
+Browsers expose the live camera only in a secure context. `localhost` is treated
+as secure during development, but a phone opening a plain LAN URL such as
+`http://meal-planner:8080` cannot use live scan. Put the web service behind a
+trusted HTTPS reverse proxy or use a Tailscale certificate, add that hostname to
+`ALLOWED_HOSTS`, and set `COOKIE_SECURE=true`. Barcode photos and typed barcode
+numbers remain available without camera access.
+
+Open Food Facts access is read-only and requires outbound HTTPS from the `web`
+container. No Open Food Facts login or API key is required. Selected product
+records and their source attribution are stored in PostgreSQL and therefore in
+normal application backups.
+
+General-food search uses USDA FoodData Central. Household owners can enter a
+free private key in **Settings → System** after deployment. Alternatively,
+create a key at `https://fdc.nal.usda.gov/api-key-signup.html` and set `USDA_API_KEY` in
+`deploy/.env`. Do not rely on `DEMO_KEY` outside initial exploration: its shared
+quota is only 30 requests per hour and 50 per day. Keep a private key in the
+ignored `.env` file and never commit it.
 
 ## 2. Routine commands
 
@@ -181,6 +205,9 @@ pre-upgrade backup, set the prior `APP_VERSION`, then start the prior image.
 - Do not expose the web port through router port forwarding.
 - `COOKIE_SECURE=false` is necessary for plain HTTP on a LAN. Change it to
   `true` if a trusted local reverse proxy or Tailscale supplies HTTPS.
+- Open Food Facts product data is community-contributed. Slop displays its
+  attribution and source link; operators redistributing extracted data should
+  review the Open Food Facts ODbL/database-contents licence obligations.
 - Add every actual hostname to `ALLOWED_HOSTS`; do not use `*`.
 - The application containers run as Unraid's `nobody:users` (`99:100`) by
   default and have no Docker socket or privileged mode.

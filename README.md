@@ -8,7 +8,7 @@ The production target is an Unraid server on a trusted LAN. The repository also
 includes a demo mode so the complete responsive light/dark interface can be
 evaluated without accounts, a database, or publisher access.
 
-Current release: **0.6.0**. See [CHANGELOG.md](CHANGELOG.md) for the complete
+Current release: **0.9.0**. See [CHANGELOG.md](CHANGELOG.md) for the complete
 release history.
 
 ## Implemented features
@@ -48,14 +48,34 @@ release history.
   results to review.
 - Explicit ingredient arithmetic, including package expressions such as
   `2 x 55 g`, nested item counts, and unambiguous fractional item descriptions.
+- Household food matching for custom-recipe ingredients, with automatic
+  per-serving calorie and macro calculation when every included amount has a
+  compatible, complete nutrition record.
+
+### Ingredients and packaged foods
+
+- A dedicated Ingredients page for household-library search, general nutrition
+  search, manual label entry, and explicit packaged-product search.
+- Read-only barcode lookup through the public Open Food Facts API; no Open Food
+  Facts account or login session is required. Slop sends an identifying user
+  agent, applies conservative local request limits, and keeps remote failures
+  recoverable.
+- Live camera scanning over HTTPS, plus barcode-photo and manual-number
+  fallbacks. Only the decoded barcode is sent to the application server.
+- Private household names and nutrition corrections that leave the community
+  source unchanged while retaining its URL and attribution.
+- Optional confirmed servings and meal tags that make an individual food a
+  breakfast, lunch, dinner, snack, or side choice for the planner.
+- Direct pantry additions with a quantity, package-count conversion when pack
+  size is known, optional expiry, use-soon, and always-stocked flags.
 
 ### Nutrition and planning
 
-- Automatic planning from recipes with complete publisher-reported per-serving
-  calories, protein, carbohydrate, and fat. Nutrition provenance is retained.
-- CoFID CSV ingestion plus USDA FoodData Central and Open Food Facts provider
-  boundaries, with dataset version and source provenance retained for future
-  catalogue and calculation work.
+- Automatic planning from recipes with complete publisher-reported or
+  ingredient-calculated per-serving calories, protein, carbohydrate, and fat.
+  Nutrition provenance and dataset versions are retained.
+- CoFID CSV ingestion, USDA FoodData Central search/cache, and on-demand Open
+  Food Facts product records with source provenance.
 - Multi-day plans with per-person portions from 0.5 to 2.0 servings in
   quarter-serving increments.
 - Shared cooked batches that can cover multiple meal occurrences, with an
@@ -118,6 +138,11 @@ Open `http://<unraid-host>:8080`. On first run, use the `SETUP_TOKEN` from the
 private `deploy/.env` file to create the owner. Production images compile the UI
 with `VITE_DEMO_MODE=false`.
 
+Live barcode camera access is a browser secure-context feature. It works on
+`localhost`, but a LAN hostname/IP needs HTTPS from a trusted reverse proxy or
+Tailscale certificate. On plain HTTP, barcode photos and typed numbers remain
+available. Set `COOKIE_SECURE=true` when HTTPS is enabled.
+
 Only port 8080 is published. Do not expose it through router port forwarding;
 use Tailscale later if remote access is needed.
 
@@ -153,12 +178,20 @@ npm.cmd run dev
 For UI-only evaluation, omit `VITE_DEMO_MODE=false`; demo mode requires no
 accounts, database, or publisher access.
 
-## Load nutrition data
+## Nutrition data
 
-Ingredient-to-food matching and calculated nutrition are currently parked, so
-nutrition datasets are not required for automatic planning. CoFID can still be
-loaded for future catalogue work. Download it from the official UK government
-source, retain its licence/version notes, then run:
+The Ingredients page can cache general ingredient matches from USDA FoodData
+Central and selected packaged products from Open Food Facts, or accept a
+private manual label. CoFID remains available as a reproducible local base
+dataset. Reliable FoodData Central search requires a free private USDA API key.
+Household owners can save one under **Settings → System**; Slop encrypts it in
+the database and uses it immediately. `USDA_API_KEY` remains available as a
+server-managed fallback. USDA's shared `DEMO_KEY` is limited to 30 requests per hour
+and 50 per day, so it is intended only for initial API exploration. Slop
+debounces searches and caches records, but cannot increase that shared quota.
+
+To load CoFID, download the official UK government source, retain its
+licence/version notes, then run:
 
 ```powershell
 Set-Location backend
@@ -183,7 +216,7 @@ npm.cmd test
 npm.cmd run build
 ```
 
-The current repository passes 51 backend tests, 22 frontend tests, TypeScript
+The current repository passes 156 backend tests, 67 frontend tests, TypeScript
 compilation, the production PWA build, the initial and incremental Alembic
 upgrades, and Compose YAML parsing. A Docker Desktop smoke test also passed:
 PostgreSQL, Redis, web, worker, and scheduler started; migrations ran; health
@@ -206,8 +239,8 @@ setup plus a database-backed household member query completed successfully.
 ## Deliberate boundaries and deferred work
 
 - No recipe, ingredient, missing-quantity, or nutrition generation by an LLM.
-- Ingredient-to-food matching and calculated nutrition are parked; automatic
-  planning uses complete publisher per-serving nutrition only.
+- Open Food Facts integration is read-only and on-demand: Slop does not upload
+  corrections, copy product images, or bulk-mirror the community database.
 - Great British Chefs discovery is disabled. Publisher access controls are
   never bypassed, and a source can fail independently.
 - No specialist medical-user logic or medical, paediatric, pregnancy, or

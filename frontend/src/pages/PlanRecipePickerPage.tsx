@@ -68,7 +68,7 @@ export function PlanRecipePickerPage() {
 
   const savedRecipes = useQuery({
     queryKey: ['recipes', 'picker', query, candidateTags.join(',')],
-    queryFn: () => api.listRecipes(query, candidateTags),
+    queryFn: () => api.listRecipes(query, candidateTags, [], 'any', true),
     enabled: !isDemoMode && Boolean(mealType),
   })
   const remoteRecipes = useQuery({

@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Meal Planner Web</Name>
-  <Repository>meal-planner:0.2.0</Repository>
+  <Repository>meal-planner:0.9.0</Repository>
   <Registry></Registry>
   <Network>meal-planner_internal</Network>
   <MyIP></MyIP>
@@ -30,4 +30,6 @@
   <Config Name="Allowed hosts" Target="MEAL_PLANNER_ALLOWED_HOSTS" Default="localhost,meal-planner" Mode="" Description="Comma-separated LAN hostnames and addresses" Type="Variable" Display="always" Required="true" Mask="false">localhost,meal-planner</Config>
   <Config Name="Secure cookies" Target="MEAL_PLANNER_COOKIE_SECURE" Default="false" Mode="" Description="Set true only when serving through HTTPS" Type="Variable" Display="advanced" Required="true" Mask="false">false</Config>
   <Config Name="Timezone" Target="MEAL_PLANNER_TIMEZONE" Default="Europe/London" Mode="" Description="IANA timezone" Type="Variable" Display="advanced" Required="true" Mask="false">Europe/London</Config>
+  <Config Name="Open Food Facts" Target="MEAL_PLANNER_OPEN_FOOD_FACTS_ENABLED" Default="true" Mode="" Description="Enable read-only packaged-product barcode and name lookups" Type="Variable" Display="advanced" Required="true" Mask="false">true</Config>
+  <Config Name="USDA FoodData Central API key" Target="MEAL_PLANNER_USDA_API_KEY" Default="" Mode="" Description="Free private key from fdc.nal.usda.gov/api-key-signup.html; required for reliable general-food search" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
 </Container>

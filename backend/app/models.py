@@ -154,6 +154,17 @@ class UserSession(IdMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class IntegrationCredential(IdMixin, AuditMixin, Base):
+    __tablename__ = "integration_credential"
+    __table_args__ = (UniqueConstraint("household_id", "provider"),)
+
+    household_id: Mapped[str] = mapped_column(
+        ForeignKey("household.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    encrypted_value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class HouseholdMember(IdMixin, AuditMixin, Base):
     __tablename__ = "household_member"
 
@@ -302,6 +313,12 @@ class FoodRecord(IdMixin, AuditMixin, Base):
     __tablename__ = "food_record"
     __table_args__ = (UniqueConstraint("provider", "provider_record_id"),)
 
+    owner_household_id: Mapped[str | None] = mapped_column(
+        ForeignKey("household.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    source_food_record_id: Mapped[str | None] = mapped_column(
+        ForeignKey("food_record.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     provider: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     provider_record_id: Mapped[str] = mapped_column(String(120), nullable=False)
     dataset_version: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -325,6 +342,29 @@ class FoodNutrient(IdMixin, Base):
     qualifier: Mapped[str | None] = mapped_column(String(40))
 
     food_record: Mapped[FoodRecord] = relationship(back_populates="nutrients")
+
+
+class SavedFood(IdMixin, AuditMixin, Base):
+    __tablename__ = "saved_food"
+    __table_args__ = (
+        UniqueConstraint("household_id", "food_record_id"),
+        Index("ix_saved_food_household_name", "household_id", "display_name"),
+    )
+
+    household_id: Mapped[str] = mapped_column(
+        ForeignKey("household.id", ondelete="CASCADE"), index=True
+    )
+    food_record_id: Mapped[str] = mapped_column(
+        ForeignKey("food_record.id", ondelete="RESTRICT"), index=True
+    )
+    display_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    serving_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    serving_unit: Mapped[str | None] = mapped_column(String(20))
+    planner_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    planner_recipe_id: Mapped[str | None] = mapped_column(
+        ForeignKey("recipe.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class FoodAlias(IdMixin, Base):

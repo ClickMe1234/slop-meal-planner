@@ -1,4 +1,4 @@
-# Implementation status — 13 July 2026
+# Implementation status — 19 July 2026
 
 This file connects the product specification to the first runnable release.
 
@@ -7,17 +7,21 @@ This file connects the product specification to the first runnable release.
 1. Deploy the five-service Compose stack and create the owner.
 2. Choose calorie or macro targets and a hard tolerance during onboarding.
 3. Add a custom recipe or search/import a publisher recipe.
-4. Review serving yield and detected ingredient amounts/units.
-5. Use complete per-serving nutrition reported by the recipe website and mark
-   the recipe planner-ready.
-7. Select who attends each meal and when each meal gets a new cooked batch.
-8. Generate a multi-day plan from meal-tagged, planner-ready recipes.
-9. Review daily calories/macros, collapse days, swap a whole cooked batch, and
+4. Search or scan foods into the household ingredient library and optionally
+   add a measured quantity directly to pantry stock.
+5. Review serving yield, detected ingredient amounts/units, and nutrition
+   matches for a custom recipe.
+6. Use complete publisher-reported or ingredient-calculated per-serving
+   nutrition and mark the recipe planner-ready.
+7. Optionally expose a saved single-food serving as a tagged planner choice.
+8. Select who attends each meal and when each meal gets a new cooked batch.
+9. Generate a multi-day plan from meal-tagged, planner-ready choices.
+10. Review daily calories/macros, collapse days, swap a whole cooked batch, and
    add up to two batch-wide sides or snacks before accepting it atomically while
    reserving pantry stock and building shopping.
-10. Use the generated shopping list online or from its local offline copy.
-11. Explicitly add checked purchases to the pantry.
-12. Mark a cooked batch to consume its reservations.
+11. Use the generated shopping list online or from its local offline copy.
+12. Explicitly add checked purchases to the pantry.
+13. Mark a cooked batch to consume its reservations.
 
 ## Implemented as hard rules
 
@@ -43,16 +47,23 @@ This file connects the product specification to the first runnable release.
 - Optional ingredients default to excluded until explicitly included.
 - Pantry reservations and transactions are separate; acceptance does not
   pretend food has already been consumed.
-- Complete publisher-reported per-serving nutrition is attributed to its website
-  and is the only nutrition source admitted to automatic planning.
+- Complete publisher-reported or ingredient-calculated per-serving nutrition is
+  admitted to automatic planning with its source and dataset snapshot retained.
 - Shopping quantities marked “to taste/already stocked” can be excluded from
   shopping; unresolved quantities return an actionable recipe-review link.
-- Ingredient-to-food matching and calculated nutrition are parked.
+- Food records and private corrections are household-scoped where appropriate;
+  recipes and pantry lots cannot link to another household's private record.
+- Open Food Facts access is read-only, on-demand, rate-limited locally, and
+  recoverable when the external service is unavailable; transient failures are
+  retried and successful searches are cached briefly.
+- FoodData Central general-food search requires a private USDA API key, which an
+  owner can save encrypted under System settings; missing or exhausted
+  credentials are reported instead of appearing as empty results.
 - Great British Chefs discovery is disabled; Good Food and Allrecipes are active.
 
 ## Validation completed
 
-- 51 backend tests and 22 frontend tests pass.
+- 156 backend tests and 67 frontend tests pass.
 - The production frontend build and PWA manifest build pass.
 - Docker Desktop smoke test passed for the rebuilt Compose stack (PostgreSQL,
   Redis, web, worker and scheduler), including migrations, readiness, live
@@ -60,7 +71,10 @@ This file connects the product specification to the first runnable release.
 
 ## External work required by the operator
 
-- Supply legal food datasets; they are not redistributed in this repository.
+- Review the licence/attribution terms of any bulk food dataset the operator
+  chooses to load; the repository does not redistribute dataset contents.
+- Supply HTTPS if live phone-camera scanning is required on the LAN. Photo and
+  typed-barcode fallbacks work without camera permission.
 - Maintain source adapters when publishers change public markup or access rules.
 - Add the real Unraid hostname/IP to `ALLOWED_HOSTS`.
 - Schedule the documented nightly backup command.

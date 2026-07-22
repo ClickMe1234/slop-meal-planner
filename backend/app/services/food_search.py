@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from threading import Lock
+from time import monotonic
 
 import httpx
 from sqlalchemy.orm import Session
@@ -12,6 +14,24 @@ from .ingredients import food_search_phrase
 
 
 REQUIRED_NUTRIENTS = {"energy_kcal", "protein_g", "carbohydrate_g", "fat_g"}
+_rate_limit_lock = Lock()
+_rate_limited_until = 0.0
+
+
+class FoodDataCentralError(RuntimeError):
+    pass
+
+
+class FoodDataCentralConfigurationError(FoodDataCentralError):
+    pass
+
+
+class FoodDataCentralRateLimited(FoodDataCentralError):
+    pass
+
+
+class FoodDataCentralUnavailable(FoodDataCentralError):
+    pass
 
 
 def normalise_food_query(query: str) -> str:
@@ -33,26 +53,41 @@ def fetch_and_cache_usda_foods(
     calculations use the durable, versioned records in our own database.
     """
 
+    global _rate_limited_until
     cleaned = normalise_food_query(query)
     if len(cleaned) < 2:
         return 0
+    if not api_key.strip():
+        raise FoodDataCentralConfigurationError("A USDA FoodData Central API key has not been configured")
+    with _rate_limit_lock:
+        if monotonic() < _rate_limited_until:
+            raise FoodDataCentralRateLimited("The USDA FoodData Central quota is temporarily exhausted")
     owns_client = client is None
     http = client or httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0))
     try:
-        response = http.post(
-            f"{UsdaFoodDataCentralProvider.api_base_url}/foods/search",
-            params={"api_key": api_key},
-            json={
-                "query": cleaned,
-                "pageSize": page_size,
-                "dataType": ["Foundation", "SR Legacy"],
-                "sortBy": "dataType.keyword",
-                "sortOrder": "asc",
-            },
-            headers={"User-Agent": "Slop meal planner/0.1"},
-        )
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            response = http.post(
+                f"{UsdaFoodDataCentralProvider.api_base_url}/foods/search",
+                params={"api_key": api_key},
+                json={
+                    "query": cleaned,
+                    "pageSize": page_size,
+                    "dataType": ["Foundation", "SR Legacy", "Survey (FNDDS)"],
+                    "sortBy": "dataType.keyword",
+                    "sortOrder": "asc",
+                },
+                headers={"User-Agent": "SlopMealPlanner/0.9.0"},
+            )
+            if response.status_code == 429:
+                with _rate_limit_lock:
+                    _rate_limited_until = monotonic() + 300
+                raise FoodDataCentralRateLimited("The USDA FoodData Central quota is temporarily exhausted")
+            response.raise_for_status()
+            payload = response.json()
+        except FoodDataCentralError:
+            raise
+        except (httpx.HTTPError, ValueError) as exc:
+            raise FoodDataCentralUnavailable("USDA FoodData Central could not be reached") from exc
     finally:
         if owns_client:
             http.close()
