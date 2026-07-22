@@ -49,3 +49,20 @@ describe('API CSRF recovery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('saved food library', () => {
+  it('loads every page so client-side ingredient searching uses the whole household library', async () => {
+    const first = { id: 'food-1', display_name: 'Greek yoghurt' }
+    const second = { id: 'food-2', display_name: 'Baked beans' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ items: [first], total: 2 }))
+      .mockResolvedValueOnce(jsonResponse({ items: [second], total: 2 }))
+    const { api } = await import('./client')
+
+    await expect(api.listSavedFoods()).resolves.toEqual({ items: [first, second], total: 2 })
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/saved-foods?q=&page=1&page_size=100',
+      '/api/v1/saved-foods?q=&page=2&page_size=100',
+    ])
+  })
+})
