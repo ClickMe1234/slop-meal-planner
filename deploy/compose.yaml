@@ -12,8 +12,9 @@ x-application: &application
       VITE_DEMO_MODE: "false"
   restart: unless-stopped
   init: true
-  user: "${PUID:-99}:${PGID:-100}"
   environment:
+    PUID: ${PUID:-99}
+    PGID: ${PGID:-100}
     MEAL_PLANNER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     CELERY_BROKER_URL: redis://redis:6379/0
     CELERY_RESULT_BACKEND: redis://redis:6379/1
@@ -54,6 +55,8 @@ services:
     <<: *application
     command: ["web"]
     environment:
+      PUID: ${PUID:-99}
+      PGID: ${PGID:-100}
       MEAL_PLANNER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1

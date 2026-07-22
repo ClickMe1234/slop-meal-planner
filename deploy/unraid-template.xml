@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Meal Planner Web</Name>
-  <Repository>meal-planner:0.9.0</Repository>
+  <Repository>meal-planner:0.9.1</Repository>
   <Registry></Registry>
   <Network>meal-planner_internal</Network>
   <MyIP></MyIP>
@@ -13,7 +13,7 @@
   <Category>Productivity: Tools:</Category>
   <WebUI>http://[IP]:[PORT:8000]</WebUI>
   <Icon></Icon>
-  <ExtraParams>--init --user 99:100</ExtraParams>
+  <ExtraParams>--init</ExtraParams>
   <PostArgs>web</PostArgs>
   <CPUset></CPUset>
   <DateInstalled></DateInstalled>
@@ -22,6 +22,9 @@
   <Requires>PostgreSQL 17, Redis 7.4, and the worker/scheduler containers declared in deploy/compose.yaml.</Requires>
   <Config Name="Web UI" Target="8000" Default="8080" Mode="tcp" Description="LAN-only web port" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
   <Config Name="Application data" Target="/data" Default="/mnt/user/appdata/meal-planner/data" Mode="rw" Description="Custom images and exports" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/meal-planner/data</Config>
+  <Config Name="Backup data" Target="/backups" Default="/mnt/user/backups/meal-planner" Mode="rw" Description="Verified database and application-data archives" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/backups/meal-planner</Config>
+  <Config Name="Runtime user ID" Target="PUID" Default="99" Mode="" Description="Unraid nobody user ID" Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
+  <Config Name="Runtime group ID" Target="PGID" Default="100" Mode="" Description="Unraid users group ID" Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
   <Config Name="Database URL" Target="MEAL_PLANNER_DATABASE_URL" Default="" Mode="" Description="Internal PostgreSQL SQLAlchemy URL" Type="Variable" Display="always" Required="true" Mask="true"></Config>
   <Config Name="Celery broker" Target="CELERY_BROKER_URL" Default="redis://redis:6379/0" Mode="" Description="Internal Redis broker URL" Type="Variable" Display="advanced" Required="true" Mask="false">redis://redis:6379/0</Config>
   <Config Name="Celery results" Target="CELERY_RESULT_BACKEND" Default="redis://redis:6379/1" Mode="" Description="Internal Redis result URL" Type="Variable" Display="advanced" Required="true" Mask="false">redis://redis:6379/1</Config>

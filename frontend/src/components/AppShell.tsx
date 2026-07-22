@@ -28,9 +28,12 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
     return () => document.body.classList.remove('nav-is-open')
   }, [menuOpen])
   const logout = async () => {
-    if (!isDemoMode) await api.logout()
-    localStorage.removeItem('slop-demo-session')
-    navigate('/login')
+    try {
+      if (!isDemoMode) await api.logout()
+    } finally {
+      localStorage.removeItem('slop-demo-session')
+      navigate('/login')
+    }
   }
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
