@@ -3,9 +3,12 @@ import type { BackendPlanDetail } from '../api/client'
 import {
   attendanceKey,
   buildPlanSlots,
+  calorieBoostEntries,
+  calorieBoostKey,
   compareMealTypes,
   cookStartKey,
   hasLongBatch,
+  guestDayEntries,
   memberNutritionTotals,
   plannerDates,
   totalNutrition,
@@ -18,6 +21,17 @@ describe('planner helpers', () => {
       'lunch',
       'dinner',
       'snack',
+    ])
+  })
+  it('serialises only positive in-range day adjustments', () => {
+    const dates = plannerDates('2026-07-13', 2)
+    expect(calorieBoostEntries(dates, ['alex'], {
+      [calorieBoostKey('2026-07-13', 'alex')]: 1400,
+      [calorieBoostKey('2026-07-14', 'alex')]: 0,
+      [calorieBoostKey('2026-07-15', 'alex')]: 900,
+    })).toEqual([{ meal_date: '2026-07-13', member_id: 'alex', calories: 1400 }])
+    expect(guestDayEntries(dates, { '2026-07-13': 2, '2026-07-14': 0 })).toEqual([
+      { meal_date: '2026-07-13', guest_count: 2 },
     ])
   })
   it('builds dated attendance slots and starts a new recipe only on selected cook days', () => {

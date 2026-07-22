@@ -137,6 +137,83 @@ def test_recipe_meal_types_are_optional_filterable_and_required_by_planner(clien
     assert empty_attendance.json()["code"] == "VALIDATION_ERROR"
 
 
+def test_calorie_boosts_raise_daily_portions_and_guests_scale_the_batch(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id, calorie_target=500)
+    recipe = _create_recipe(client, owner, "Cycling day dinner", ["dinner"])
+
+    response = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={
+            "name": "Active day with guests",
+            "recipe_ids": [recipe["id"]],
+            "start_date": "2026-07-20",
+            "end_date": "2026-07-20",
+            "slots": [
+                {
+                    "meal_date": "2026-07-20",
+                    "meal_type": "dinner",
+                    "participant_member_ids": [member_id],
+                }
+            ],
+            "calorie_boosts": [
+                {
+                    "meal_date": "2026-07-20",
+                    "member_id": member_id,
+                    "calories": 500,
+                }
+            ],
+            "guest_days": [{"meal_date": "2026-07-20", "guest_count": 2}],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["calorie_boosts"] == [
+        {"meal_date": "2026-07-20", "member_id": member_id, "calories": "500"}
+    ]
+    assert response.json()["guest_days"] == [
+        {"meal_date": "2026-07-20", "guest_count": 2}
+    ]
+    detail = client.get(f"/api/v1/meal-plans/{response.json()['id']}").json()
+    occurrence = detail["occurrences"][0]
+    assert float(occurrence["portions"][0]["servings"]) == 2
+    assert float(occurrence["guest_servings"]) == 4
+    assert float(occurrence["batch_servings"]) == 6
+
+
+def test_calorie_boost_requires_a_calorie_target(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    target = client.put(
+        f"/api/v1/household-members/{member_id}/target",
+        headers=_headers(owner),
+        json={
+            "mode": "macros",
+            "protein_target_g": 30,
+            "carbohydrate_target_g": 50,
+            "fat_target_g": 20,
+            "tolerance_percent": 5,
+            "allocations": [{"meal_type": "dinner", "percentage": 100}],
+        },
+    )
+    assert target.status_code == 200, target.text
+    recipe = _create_recipe(client, owner, "Macro dinner", ["dinner"])
+
+    response = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={
+            "name": "Invalid boost",
+            "recipe_ids": [recipe["id"]],
+            "slots": [{"meal_date": "2026-07-20", "meal_type": "dinner", "participant_member_ids": [member_id]}],
+            "calorie_boosts": [{"meal_date": "2026-07-20", "member_id": member_id, "calories": 500}],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "CALORIE_BOOST_REQUIRES_CALORIE_TARGET"
+
+
 def test_recipe_ingredient_search_uses_current_saved_recipe_ingredients(client, owner):
     spinach = _create_recipe(
         client,
