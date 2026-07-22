@@ -31,6 +31,13 @@ function foodNutrients(food: BackendFood) {
   return Object.fromEntries(food.nutrients.map((item) => [item.code, item.amount ?? null])) as Record<NutrientCode, ApiDecimal | null>
 }
 
+export function filterSavedFoods(foods: BackendSavedFood[], query: string) {
+  const cleaned = normaliseFoodQuery(query).toLocaleLowerCase()
+  return cleaned
+    ? foods.filter((food) => food.display_name.toLocaleLowerCase().includes(cleaned))
+    : foods
+}
+
 function NutritionFacts({ nutrients, basisAmount, basisUnit }: { nutrients: Record<NutrientCode, ApiDecimal | null>; basisAmount: ApiDecimal; basisUnit: string }) {
   return (
     <div className="ingredient-nutrition" aria-label={`Nutrition per ${basisAmount}${basisUnit}`}>
@@ -437,10 +444,11 @@ export function IngredientsPage() {
   const resultsAreCurrent = submittedQuery === normalisedQuery && submittedQuery.length >= 2
 
   const library = useQuery({
-    queryKey: ['saved-foods', submittedQuery],
-    queryFn: () => api.listSavedFoods(submittedQuery),
+    queryKey: ['saved-foods'],
+    queryFn: () => api.listSavedFoods(),
     enabled: !isDemoMode,
   })
+  const visibleLibraryItems = filterSavedFoods(library.data?.items ?? [], normalisedQuery)
   const local = useQuery({
     queryKey: ['food-search', submittedQuery],
     queryFn: () => api.searchFoods(submittedQuery),
@@ -725,13 +733,13 @@ export function IngredientsPage() {
             <p className="eyebrow">Your library</p>
             <h2>Saved household ingredients</h2>
           </div>
-          <Badge tone="green">{library.data?.total ?? 0} saved</Badge>
+          <Badge tone="green">{normalisedQuery ? `${visibleLibraryItems.length} of ${library.data?.total ?? 0}` : library.data?.total ?? 0} saved</Badge>
         </div>
         {library.isLoading ? (
           <Loading label="Opening the library…" />
-        ) : library.data?.items.length ? (
+        ) : visibleLibraryItems.length ? (
           <div className="saved-food-grid">
-            {library.data.items.map((food) => (
+            {visibleLibraryItems.map((food) => (
               <Card className="saved-food-card" key={food.id}>
                 <div className="saved-food-title">
                   <div>
@@ -773,6 +781,8 @@ export function IngredientsPage() {
               </Card>
             ))}
           </div>
+        ) : normalisedQuery && library.data?.total ? (
+          <EmptyState icon={<Search />} title="No saved ingredients match" description="Try a shorter search, or save one of the nutrition matches above." />
         ) : (
           <EmptyState icon={<Wheat />} title="Your ingredient shelf is empty" description="Scan a barcode, choose a search result, or add the first nutrition label manually." action={<Button onClick={() => setManualOpen(true)}>Add an ingredient</Button>} />
         )}

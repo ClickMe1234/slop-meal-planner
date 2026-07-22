@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, type Location } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
 import { useTheme } from './lib/theme'
 import { ChangePasswordPage, LoginPage, OnboardingPage, SetupPage } from './pages/AuthPages'
 import { api, isDemoMode } from './api/client'
 import { Loading } from './components/ui'
-import { CustomRecipePage, ImportReviewPage, RecipeImportPage } from './pages/ImportPages'
+import { CustomRecipePage, ImportReviewDrawer, ImportReviewPage, RecipeImportPage } from './pages/ImportPages'
 import { PantryPage } from './pages/PantryPage'
 import { PlanPage } from './pages/PlanPage'
 import { PlanRecipePickerPage } from './pages/PlanRecipePickerPage'
@@ -17,7 +17,10 @@ import { IngredientsPage } from './pages/IngredientsPage'
 
 export default function App() {
   const { theme, setTheme } = useTheme()
-  return <Routes>
+  const location = useLocation()
+  const backgroundLocation = (location.state as { backgroundLocation?: Location } | null)?.backgroundLocation
+  return <>
+    <Routes location={backgroundLocation ?? location}>
     <Route path="/login" element={<LoginPage/>}/>
     <Route path="/setup" element={<SetupPage/>}/>
     <Route path="/change-password" element={<ChangePasswordPage/>}/>
@@ -43,7 +46,11 @@ export default function App() {
       <Route path="/settings/system" element={<SystemSettings/>}/>
     </Route>
     <Route path="*" element={<Navigate to={isDemoMode ? '/week' : '/login'} replace/>}/>
-  </Routes>
+    </Routes>
+    {backgroundLocation && <Routes>
+      <Route path="/imports/:jobId/review" element={<ImportReviewDrawer/>}/>
+    </Routes>}
+  </>
 }
 
 function ProtectedShell({ theme, setTheme }: { theme: ReturnType<typeof useTheme>['theme']; setTheme: ReturnType<typeof useTheme>['setTheme'] }) {

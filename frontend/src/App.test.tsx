@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
@@ -107,6 +107,34 @@ describe('App', () => {
 
     expect(await screen.findByText(/was saved for lunch/i)).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: /search recipes/i })).toBeInTheDocument()
+  })
+
+  it('reviews a problematic discovery import in a drawer without losing search context', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes']}><App/></MemoryRouter></QueryClientProvider>)
+
+    const search = screen.getByRole('textbox', { name: /search recipes/i })
+    await user.type(search, 'green')
+    await user.click(screen.getByRole('button', { name: /recipe filters/i }))
+    await user.click(screen.getByRole('checkbox', { name: 'Healthy' }))
+    const recipeCard = screen.getByRole('heading', { name: 'Fragrant green vegetable curry' }).closest('.recipe-card')
+    expect(recipeCard).not.toBeNull()
+    const saveRecipe = within(recipeCard as HTMLElement).getByRole('button', { name: 'Save recipe' })
+    await user.click(saveRecipe)
+    await user.click(screen.getByText('Select meal types'))
+    await user.click(screen.getByRole('checkbox', { name: 'Dinner' }))
+    await user.click(screen.getByRole('button', { name: 'Finish saving' }))
+
+    const drawer = await screen.findByRole('dialog', { name: 'Review imported recipe' })
+    expect(within(drawer).getByRole('heading', { name: 'Fragrant green vegetable curry' })).toBeInTheDocument()
+    expect(search).toHaveValue('green')
+    expect(screen.getByRole('checkbox', { name: 'Healthy' })).toBeChecked()
+
+    await user.click(within(drawer).getByRole('button', { name: 'Save recipe' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Review imported recipe' })).not.toBeInTheDocument())
+    expect(search).toHaveValue('green')
+    expect(screen.getByRole('checkbox', { name: 'Healthy' })).toBeChecked()
+    await waitFor(() => expect(saveRecipe).toHaveFocus())
   })
 
   it('warns until a custom recipe has a meal type', async () => {

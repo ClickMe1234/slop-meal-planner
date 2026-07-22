@@ -3,6 +3,13 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.9.2 - 2026-07-22
+
+- Keep the current Discover query, filters, results and scroll position in place while imported recipe ingredients are corrected in a contextual review drawer.
+- Preserve the existing full-page ingredient review for direct links, saved-recipe editing, Planning and Shopping flows.
+- Keep saved household ingredients visible and filter them immediately while ingredient searches are edited or submitted, including libraries larger than one API page.
+- Preserve Open Food Facts product images through saved ingredients so packaged foods can display their image when used by the meal planner.
+
 ## 0.9.1 - 2026-07-22
 
 - Make the sidebar sign-out control visible and reliable in dark mode, including when the server logout request fails.
