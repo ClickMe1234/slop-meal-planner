@@ -30,10 +30,6 @@ it is self-hosted, there is no subscription fee for the application.
 
 ## Features
 
-The screenshots below were captured from the built-in demo mode. They show the
-real responsive interface without requiring an account, database, or publisher
-access.
-
 ### Plan the week automatically
 
 ![Weekly meal plan](docs/screenshots/week.png)
