@@ -52,6 +52,7 @@ class PlanPortionVariable:
 
 
 PORTIONS = tuple(Decimal("0.5") + Decimal("0.25") * i for i in range(7))
+BOOST_PORTIONS = tuple(Decimal("0.5") + Decimal("0.25") * i for i in range(23))
 SIDE_PORTIONS = tuple(Decimal("0.25") + Decimal("0.25") * i for i in range(8))
 MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
 
