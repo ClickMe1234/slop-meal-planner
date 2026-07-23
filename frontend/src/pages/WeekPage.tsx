@@ -65,39 +65,39 @@ export type BatchWeightPortion = {
   guest?: boolean
 }
 
-export function batchWeightPortions(
-  occurrences: BackendPlanDetail['occurrences'],
-  batchId: string,
+export function guestCountForOccurrence(
+  plan: BackendPlanDetail['plan'],
+  occurrence: BackendPlanDetail['occurrences'][number],
+): number {
+  const guestDay = plan.guest_days?.find(item => item.meal_date === occurrence.meal_date)
+  if (!guestDay) return 0
+  if (guestDay.meal_types?.length && !guestDay.meal_types.includes(occurrence.meal_type)) return 0
+  return Number(guestDay.guest_count)
+}
+
+export function occurrenceWeightPortions(
+  occurrence: BackendPlanDetail['occurrences'][number],
   members: Array<{ id: string; name: string }> = [],
   currentMemberId?: string,
+  guestCount = 0,
 ): BatchWeightPortion[] {
-  const batchOccurrences = occurrences
-    .filter(item => item.batch_id === batchId)
-    .sort((left, right) => left.meal_date.localeCompare(right.meal_date))
-  const showDate = batchOccurrences.length > 1
-  return batchOccurrences.flatMap(occurrence => {
-    const dateLabel = showDate
-      ? new Date(`${occurrence.meal_date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
-      : undefined
-    const householdRows: BatchWeightPortion[] = occurrence.portions.map((portion, index) => ({
-      id: `${occurrence.id}:${portion.member_id}`,
-      memberId: portion.member_id,
-      name: members.find(member => member.id === portion.member_id)?.name ?? (portion.member_id === currentMemberId ? 'You' : `Person ${index + 1}`),
-      servings: Number(portion.servings),
-      detail: dateLabel,
-    }))
-    const guestServings = Number(occurrence.guest_servings ?? 0)
-    return guestServings > 0
-      ? [...householdRows, {
-          id: `${occurrence.id}:guests`,
-          memberId: 'guests',
-          name: 'Guests',
-          servings: guestServings,
-          detail: dateLabel,
-          guest: true,
-        }]
-      : householdRows
-  })
+  const householdRows: BatchWeightPortion[] = occurrence.portions.map((portion, index) => ({
+    id: `${occurrence.id}:${portion.member_id}`,
+    memberId: portion.member_id,
+    name: members.find(member => member.id === portion.member_id)?.name ?? (portion.member_id === currentMemberId ? 'You' : `Person ${index + 1}`),
+    servings: Number(portion.servings),
+  }))
+  const totalGuestServings = Number(occurrence.guest_servings ?? 0)
+  if (guestCount <= 0 || totalGuestServings <= 0) return householdRows
+  const servingsPerGuest = totalGuestServings / guestCount
+  const guestRows: BatchWeightPortion[] = Array.from({ length: guestCount }, (_, index) => ({
+    id: `${occurrence.id}:guest-${index + 1}`,
+    memberId: `guest-${index + 1}`,
+    name: `Guest ${index + 1}`,
+    servings: servingsPerGuest,
+    guest: true,
+  }))
+  return [...householdRows, ...guestRows]
 }
 
 export function BatchWeightControl({ servings, portions, savedWeight, draft, pending = false, onDraftChange, onSave, onClear }: {
@@ -340,7 +340,7 @@ function LiveWeekPage() {
               <div className="meal-actions"><CookControl cooked={cooked} pending={pendingBatches.includes(meal.batch_id)} onClick={() => toggleCooked(meal.batch_id, cooked)}/></div>
               {cooked && <BatchWeightControl
                 servings={Number(meal.batch_servings)}
-                portions={batchWeightPortions(detail.data.occurrences, meal.batch_id, members.data, memberId)}
+                portions={occurrenceWeightPortions(meal, members.data, memberId, guestCountForOccurrence(detail.data.plan, meal))}
                 savedWeight={meal.cooked_weight_grams == null ? undefined : Number(meal.cooked_weight_grams)}
                 draft={weightDrafts[meal.batch_id] ?? String(meal.cooked_weight_grams ?? '')}
                 pending={pendingWeights.includes(meal.batch_id)}
