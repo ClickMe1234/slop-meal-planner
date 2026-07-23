@@ -77,11 +77,14 @@ useful during the week.
 ### Generate a practical shopping list
 
 ![Shopping list](docs/screenshots/shopping.png)
-![Shopping list2](docs/screenshots/shopping2.png)
 
 Shopping quantities subtract usable pantry stock, round to practical units, and
 remain available offline. Items can be checked, renamed, shared, copied, or
 exported as text.
+
+![Shopping list2](docs/screenshots/shopping2.png)
+
+Fuzzy matching of shopping list to pantry ingredients supported!
 
 ## Changelog
 
