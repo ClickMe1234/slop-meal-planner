@@ -5,10 +5,13 @@ import pytest
 
 from app.services.planner import (
     ParticipantTarget,
+    PlanPortionVariable,
     PlannerInfeasibleError,
+    PORTIONS,
     RecipeCandidate,
     aggregate_nutrition_violations,
     choose_shared_recipe,
+    rebalance_plan_portions,
 )
 from app.services.shopping import round_purchase
 from app.services.pantry import balances, reserve_plan_batches
@@ -91,6 +94,50 @@ def test_daily_bounds_allow_meal_allocation_deviations_to_offset():
     assert aggregate_nutrition_violations(
         [breakfast, dinner], {"energy_kcal": Decimal("900")}
     )
+
+
+def test_rebalancing_is_stable_across_identical_days_regardless_of_record_ids():
+    nutrition = {
+        "breakfast": {"energy_kcal": Decimal("429"), "protein_g": Decimal("28")},
+        "lunch": {"energy_kcal": Decimal("402"), "protein_g": Decimal("22")},
+        "dinner": {"energy_kcal": Decimal("409"), "protein_g": Decimal("33")},
+        "snack": {"energy_kcal": Decimal("148"), "protein_g": Decimal("10")},
+    }
+    allocations = {"breakfast": 25, "lunch": 30, "dinner": 35, "snack": 10}
+    keys_by_date = {
+        "2026-07-23": {"breakfast": "a1", "lunch": "a2", "dinner": "a3", "snack": "a4"},
+        "2026-07-24": {"breakfast": "b4", "lunch": "b3", "dinner": "b2", "snack": "b1"},
+    }
+    variables = []
+    daily_targets = {}
+    for meal_date, keys in keys_by_date.items():
+        daily_targets[(meal_date, "alice")] = []
+        for meal_type in ("breakfast", "lunch", "dinner", "snack"):
+            daily_targets[(meal_date, "alice")].append(
+                ParticipantTarget(
+                    "alice", "calorie", Decimal(allocations[meal_type]), Decimal("2000"),
+                    None, None, None, tolerance_percent=Decimal("5"), protein_min_g=Decimal("120"),
+                )
+            )
+            variables.append(
+                PlanPortionVariable(
+                    key=keys[meal_type], member_id="alice", dates=(meal_date,),
+                    nutrition=nutrition[meal_type], current=Decimal("1"), allowed=PORTIONS,
+                    meal_type=meal_type,
+                )
+            )
+
+    portions = rebalance_plan_portions(
+        variables, daily_targets, enforce_nutrition_bounds=False
+    )
+
+    first_day = keys_by_date["2026-07-23"]
+    second_day = keys_by_date["2026-07-24"]
+    assert {
+        meal_type: portions[first_day[meal_type]] for meal_type in first_day
+    } == {
+        meal_type: portions[second_day[meal_type]] for meal_type in second_day
+    }
 
 
 def test_macro_minimum_has_ten_gram_daily_tolerance_and_readable_messages():

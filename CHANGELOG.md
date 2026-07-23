@@ -3,6 +3,13 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.10.0 - 2026-07-23
+
+- Guide new households through API-key setup, nutritional targets, household members, and meal allocations during onboarding.
+- Add calorie-boost days with meal-specific sliders so extra calories can be distributed across selected meals and reflected in planned portions.
+- Add guest days with meal-specific attendance, scale cooking batches using the largest household serving, and show each guest as a separate serving row.
+- Show selected-day portion weights in the week view, including calorie-boosted household servings and per-guest gram guidance.
+
 ## 0.9.2 - 2026-07-22
 
 - Keep the current Discover query, filters, results and scroll position in place while imported recipe ingredients are corrected in a contextual review drawer.

@@ -3,9 +3,16 @@ import type { BackendPlanDetail } from '../api/client'
 import {
   attendanceKey,
   buildPlanSlots,
+  calorieBoostEntries,
+  calorieBoostKey,
+  calorieBoostMealKey,
+  boostSharesFor,
   compareMealTypes,
   cookStartKey,
   hasLongBatch,
+  guestDayEntries,
+  guestMealKey,
+  rebalanceBoostShares,
   memberNutritionTotals,
   plannerDates,
   totalNutrition,
@@ -19,6 +26,27 @@ describe('planner helpers', () => {
       'dinner',
       'snack',
     ])
+  })
+  it('serialises only positive in-range day adjustments', () => {
+    const dates = plannerDates('2026-07-13', 2)
+    const slots = [{ meal_date: '2026-07-13', meal_type: 'dinner' as const, participant_member_ids: ['alex'], batch_key: 'dinner', food_safety_acknowledged: false }, { meal_date: '2026-07-13', meal_type: 'snack' as const, participant_member_ids: ['alex'], batch_key: 'snack', food_safety_acknowledged: false }]
+    expect(calorieBoostEntries(dates, ['alex'], {
+      [calorieBoostKey('2026-07-13', 'alex')]: 1400,
+      [calorieBoostKey('2026-07-14', 'alex')]: 0,
+      [calorieBoostKey('2026-07-15', 'alex')]: 900,
+    }, { [calorieBoostMealKey('2026-07-13', 'alex', 'snack')]: 100 }, slots)).toEqual([{ meal_date: '2026-07-13', member_id: 'alex', calories: 1400, meal_allocations: [{ meal_type: 'snack', percentage: 100 }] }])
+    expect(guestDayEntries(dates, { '2026-07-13': 2, '2026-07-14': 0 }, { [guestMealKey('2026-07-13', 'dinner')]: true }, slots)).toEqual([
+      { meal_date: '2026-07-13', guest_count: 2, meal_types: ['dinner'] },
+    ])
+  })
+  it('keeps calorie boost sliders balanced to 100 percent', () => {
+    const initial = boostSharesFor('2026-07-13', 'alex', ['dinner', 'snack'], {})
+    expect(initial).toMatchObject({ dinner: 0, snack: 100 })
+    expect(rebalanceBoostShares(initial, 'dinner', 40, ['dinner', 'snack'])).toMatchObject({ dinner: 40, snack: 60 })
+    expect(boostSharesFor('2026-07-13', 'alex', ['dinner'], {
+      [calorieBoostMealKey('2026-07-13', 'alex', 'dinner')]: 40,
+      [calorieBoostMealKey('2026-07-13', 'alex', 'snack')]: 60,
+    })).toMatchObject({ dinner: 100, snack: 0 })
   })
   it('builds dated attendance slots and starts a new recipe only on selected cook days', () => {
     const dates = plannerDates('2026-07-13', 4)
