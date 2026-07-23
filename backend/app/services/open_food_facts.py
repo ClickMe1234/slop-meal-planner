@@ -24,6 +24,8 @@ FIELDS = ",".join(
         "quantity",
         "serving_size",
         "serving_quantity",
+        "image_front_url",
+        "image_url",
         "nutriments",
         "last_modified_t",
     )

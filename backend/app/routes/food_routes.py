@@ -75,6 +75,7 @@ def _lookup_out(food: NormalizedFood) -> FoodLookupOut:
         serving_amount=_metadata_decimal(metadata, "serving_amount"),
         serving_unit=metadata.get("serving_unit"),
         source_url=metadata.get("source_url"),
+        image_url=metadata.get("image_url"),
         attribution=metadata.get("attribution"),
         warnings=warnings,
     )

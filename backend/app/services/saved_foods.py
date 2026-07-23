@@ -89,6 +89,7 @@ def saved_food_out(db: Session, saved: SavedFood) -> SavedFoodOut:
         package_amount=_metadata_decimal(metadata, "package_amount"),
         package_unit=metadata.get("package_unit"),
         source_url=metadata.get("source_url"),
+        image_url=metadata.get("image_url"),
         attribution=metadata.get("attribution"),
         warnings=warnings,
         version=saved.version,
@@ -154,6 +155,9 @@ def create_manual_record(
             "source_url": (
                 (source_record.metadata_json or {}).get("source_url") if source_record else None
             ),
+            "image_url": (
+                (source_record.metadata_json or {}).get("image_url") if source_record else None
+            ),
         },
     )
     db.add(record)
@@ -191,6 +195,7 @@ def sync_planner_food(
             "Confirm a serving and at least one meal type before enabling planning",
         )
     record = accessible_food_record(db, saved.food_record_id, saved.household_id)
+    metadata = record.metadata_json if isinstance(record.metadata_json, dict) else {}
     if not complete_nutrition(record):
         raise DomainError(
             "INCOMPLETE_NUTRITION",
@@ -206,6 +211,7 @@ def sync_planner_food(
             household_id=saved.household_id,
             title=saved.display_name,
             source_type="food",
+            image_url=metadata.get("image_url"),
             eligibility=RecipeEligibility.DRAFT.value,
         )
         db.add(recipe)
@@ -216,6 +222,7 @@ def sync_planner_food(
         latest = _latest_recipe_version(db, recipe.id)
         version_number = (latest.version_number if latest else 0) + 1
         recipe.title = saved.display_name
+        recipe.image_url = metadata.get("image_url")
         recipe.archived_at = None
         recipe.eligibility = RecipeEligibility.DRAFT.value
         recipe.version += 1

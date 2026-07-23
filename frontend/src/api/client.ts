@@ -126,6 +126,20 @@ async function listAllRecipes(query = '', mealType?: BackendMealType | BackendMe
   return { items, total }
 }
 
+async function listAllSavedFoods(query = ''): Promise<{ items: BackendSavedFood[]; total: number }> {
+  const items: BackendSavedFood[] = []
+  let page = 1
+  let total = 0
+  do {
+    const result = await request<{ items: BackendSavedFood[]; total: number }>(`/saved-foods?q=${encodeURIComponent(normaliseFoodQuery(query))}&page=${page}&page_size=100`)
+    total = result.total
+    if (!result.items.length) break
+    items.push(...result.items)
+    page += 1
+  } while (items.length < total)
+  return { items, total }
+}
+
 export const api = {
   setupStatus: () => request<{ setup_required: boolean }>('/auth/setup-status'),
   setup: async (payload: { setup_token: string; household_name: string; username: string; password: string }) => {
@@ -263,7 +277,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ query: normaliseFoodQuery(query), page }),
     }),
-  listSavedFoods: (query = '') => request<{ items: BackendSavedFood[]; total: number }>(`/saved-foods?q=${encodeURIComponent(normaliseFoodQuery(query))}&page_size=100`),
+  listSavedFoods: listAllSavedFoods,
   createSavedFood: (payload: BackendSavedFoodCreate) =>
     request<BackendSavedFood>('/saved-foods', {
       method: 'POST',
@@ -521,6 +535,7 @@ export interface BackendFoodLookup {
   serving_amount?: ApiDecimal
   serving_unit?: 'g' | 'ml'
   source_url?: string
+  image_url?: string
   attribution?: string
   warnings: string[]
 }
