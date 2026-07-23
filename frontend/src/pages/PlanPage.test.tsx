@@ -63,11 +63,40 @@ describe('PlanPage wizard', () => {
     expect(screen.getAllByRole('checkbox', { name: /you needs breakfast/i })).toHaveLength(7)
   })
 
+  it('collects exercise calories and guest places on special days', async () => {
+    const user = userEvent.setup()
+    renderPlanner()
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Number of days' }), { target: { value: '1' } })
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.click(screen.getByRole('button', { name: /continue/i }))
+
+    expect(screen.getByRole('heading', { name: 'Anything different this week?' })).toBeInTheDocument()
+    await user.type(screen.getByRole('spinbutton', { name: /you extra calories/i }), '1400')
+    const guestInput = screen.getByRole('spinbutton', { name: /guests/i })
+    await user.type(guestInput, '2')
+
+    expect(screen.getByRole('checkbox', { name: 'Dinner' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Breakfast' })).not.toBeChecked()
+    const dinnerShare = screen.getByRole('slider', { name: /you dinner boost share/i })
+    const snackShare = screen.getByRole('slider', { name: /you snack boost share/i })
+    expect(snackShare).toHaveValue('100')
+    fireEvent.change(dinnerShare, { target: { value: '40' } })
+    expect(dinnerShare).toHaveValue('40')
+    expect(snackShare).toHaveValue('60')
+
+    const boostSummary = screen.getByText((_, element) => element?.tagName === 'SMALL' && element.textContent === 'active-day boost')
+    const guestSummary = screen.getByText((_, element) => element?.tagName === 'SMALL' && element.textContent === 'guest places')
+    expect(boostSummary.parentElement).toHaveTextContent('1active-day boost')
+    expect(guestSummary.parentElement).toHaveTextContent('2guest places')
+  })
+
   it('imports pantry items by drag and drop and blocks unavailable must-use ingredients', async () => {
     const user = userEvent.setup()
     renderPlanner()
     const days = screen.getByRole('spinbutton', { name: 'Number of days' })
     fireEvent.change(days, { target: { value: '1' } })
+    await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
@@ -290,7 +319,7 @@ describe('PlanPage wizard', () => {
       await user.click(screen.getByRole('button', { name: 'Plan one fewer day' }))
     }
 
-    for (let step = 0; step < 5; step += 1) {
+    for (let step = 0; step < 6; step += 1) {
       await user.click(screen.getByRole('button', { name: /continue/i }))
     }
     await user.click(screen.getByRole('button', { name: /generate meal plan/i }))

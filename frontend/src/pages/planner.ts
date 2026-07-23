@@ -6,6 +6,10 @@ export const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'] as const
 export type MealType = typeof MEAL_TYPES[number]
 export type AttendanceOverrides = Record<string, boolean>
 export type CookStarts = Record<string, boolean>
+export type CalorieBoosts = Record<string, number>
+export type CalorieBoostMealShares = Record<string, number>
+export type GuestCounts = Record<string, number>
+export type GuestMeals = Record<string, boolean>
 
 export function compareMealTypes(left: string, right: string): number {
   const leftIndex = MEAL_TYPES.indexOf(left as MealType)
@@ -73,6 +77,113 @@ export function attendanceKey(date: string, mealType: MealType, memberId: string
 
 export function cookStartKey(date: string, mealType: MealType): string {
   return `${date}:${mealType}`
+}
+
+export function calorieBoostKey(date: string, memberId: string): string {
+  return `${date}:${memberId}`
+}
+
+export function calorieBoostMealKey(date: string, memberId: string, mealType: MealType): string {
+  return `${date}:${memberId}:${mealType}`
+}
+
+export function guestMealKey(date: string, mealType: MealType): string {
+  return `${date}:${mealType}`
+}
+
+export function defaultBoostShares(mealTypes: MealType[]): Record<MealType, number> {
+  const result = Object.fromEntries(MEAL_TYPES.map(mealType => [mealType, 0])) as Record<MealType, number>
+  const focus = mealTypes.includes('snack') ? 'snack' : mealTypes.at(-1)
+  if (focus) result[focus] = 100
+  return result
+}
+
+export function boostSharesFor(
+  date: string,
+  memberId: string,
+  mealTypes: MealType[],
+  shares: CalorieBoostMealShares,
+): Record<MealType, number> {
+  const stored = Object.fromEntries(MEAL_TYPES.map(mealType => [
+    mealType,
+    mealTypes.includes(mealType) ? Number(shares[calorieBoostMealKey(date, memberId, mealType)] ?? 0) : 0,
+  ])) as Record<MealType, number>
+  const total = Object.values(stored).reduce((sum, value) => sum + Math.max(0, value), 0)
+  if (!total) return defaultBoostShares(mealTypes)
+  const normalised = Object.fromEntries(MEAL_TYPES.map(mealType => [
+    mealType,
+    mealTypes.includes(mealType) ? Math.round(Math.max(0, stored[mealType]) * 100 / total) : 0,
+  ])) as Record<MealType, number>
+  const difference = 100 - Object.values(normalised).reduce((sum, value) => sum + value, 0)
+  const adjustmentMeal = [...mealTypes].sort((left, right) => normalised[right] - normalised[left])[0]
+  if (adjustmentMeal) normalised[adjustmentMeal] += difference
+  return normalised
+}
+
+export function rebalanceBoostShares(
+  current: Record<MealType, number>,
+  changedMeal: MealType,
+  nextValue: number,
+  activeMeals: MealType[],
+): Record<MealType, number> {
+  const result = { ...current }
+  const bounded = Math.max(0, Math.min(100, Math.round(nextValue)))
+  const delta = bounded - (result[changedMeal] ?? 0)
+  result[changedMeal] = bounded
+  const others = activeMeals.filter(mealType => mealType !== changedMeal)
+  if (delta > 0) {
+    let remaining = delta
+    for (const mealType of [...others].sort((left, right) => result[right] - result[left])) {
+      const amount = Math.min(result[mealType], remaining)
+      result[mealType] -= amount
+      remaining -= amount
+    }
+  } else if (delta < 0 && others.length) {
+    const recipient = others.includes('snack') ? 'snack' : others.at(-1) as MealType
+    result[recipient] += -delta
+  }
+  return result
+}
+
+export function calorieBoostEntries(
+  dates: PlannerDate[],
+  memberIds: string[],
+  boosts: CalorieBoosts,
+  shares: CalorieBoostMealShares = {},
+  slots: PlannerSlot[] = [],
+): Array<{ meal_date: string; member_id: string; calories: number; meal_allocations: Array<{ meal_type: MealType; percentage: number }> }> {
+  return dates.flatMap(date => memberIds.flatMap(memberId => {
+    const calories = Number(boosts[calorieBoostKey(date.iso, memberId)] ?? 0)
+    const mealTypes = MEAL_TYPES.filter(mealType => slots.some(slot => slot.meal_date === date.iso && slot.meal_type === mealType && slot.participant_member_ids.includes(memberId)))
+    const allocation = boostSharesFor(date.iso, memberId, mealTypes, shares)
+    return Number.isFinite(calories) && calories > 0
+      ? [{
+          meal_date: date.iso,
+          member_id: memberId,
+          calories,
+          meal_allocations: mealTypes.map(mealType => ({ meal_type: mealType, percentage: allocation[mealType] })).filter(item => item.percentage > 0),
+        }]
+      : []
+  }))
+}
+
+export function guestDayEntries(
+  dates: PlannerDate[],
+  guests: GuestCounts,
+  guestMeals: GuestMeals = {},
+  slots: PlannerSlot[] = [],
+): Array<{ meal_date: string; guest_count: number; meal_types: MealType[] }> {
+  return dates.flatMap(date => {
+    const guestCount = Math.floor(Number(guests[date.iso] ?? 0))
+    const plannedMeals = MEAL_TYPES.filter(mealType => slots.some(slot => slot.meal_date === date.iso && slot.meal_type === mealType))
+    const explicitlySelected = plannedMeals.filter(mealType => guestMeals[guestMealKey(date.iso, mealType)])
+    const mealTypes = explicitlySelected.length
+      ? explicitlySelected
+      : plannedMeals.includes('dinner') ? ['dinner' as MealType] : plannedMeals.slice(0, 1)
+    return Number.isFinite(guestCount) && guestCount > 0
+      ? [{ meal_date: date.iso, guest_count: guestCount, meal_types: mealTypes }]
+      : []
+  })
 }
 
 export function isAttending(
@@ -174,6 +285,7 @@ function nutritionValue(values: Record<string, number> | undefined, ...keys: str
 
 export function occurrenceServings(occurrence: BackendPlanDetail['occurrences'][number]): number {
   return occurrence.portions.reduce((sum, portion) => sum + Number(portion.servings || 0), 0)
+    + Number(occurrence.guest_servings || 0)
 }
 
 export function totalNutrition(occurrences: BackendPlanDetail['occurrences']): Nutrition {

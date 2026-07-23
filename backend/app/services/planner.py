@@ -47,11 +47,16 @@ class PlanPortionVariable:
     nutrition: dict[str, Decimal]
     current: Decimal
     allowed: tuple[Decimal, ...]
+    meal_type: str = ""
+    component_slot: int = 0
+    meal_target: ParticipantTarget | None = None
 
 
 PORTIONS = tuple(Decimal("0.5") + Decimal("0.25") * i for i in range(7))
+BOOST_PORTIONS = tuple(Decimal("0.5") + Decimal("0.25") * i for i in range(23))
 SIDE_PORTIONS = tuple(Decimal("0.25") + Decimal("0.25") * i for i in range(8))
 MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
+BOOSTED_MEAL_TARGET_WEIGHT = Decimal("10")
 
 
 class PlannerInfeasibleError(ValueError):
@@ -218,13 +223,22 @@ def _portion_plan_score(
     daily_targets: dict[tuple[str, str], list[ParticipantTarget]],
 ) -> tuple[Decimal, bool]:
     nutrition: dict[tuple[str, str], dict[str, Decimal]] = {}
+    meal_nutrition: dict[tuple[str, str, str], dict[str, Decimal]] = {}
+    meal_targets: dict[tuple[str, str, str], ParticipantTarget] = {}
     for variable in variables:
         portion = portions[variable.key]
         for meal_date in variable.dates:
             key = (meal_date, variable.member_id)
             totals = nutrition.setdefault(key, {})
+            meal_key = (meal_date, variable.member_id, variable.meal_type)
+            meal_totals = meal_nutrition.setdefault(meal_key, {})
             for nutrient, amount in variable.nutrition.items():
                 totals[nutrient] = totals.get(nutrient, Decimal("0")) + amount * portion
+                meal_totals[nutrient] = (
+                    meal_totals.get(nutrient, Decimal("0")) + amount * portion
+                )
+            if variable.meal_target is not None:
+                meal_targets[meal_key] = variable.meal_target
 
     score = Decimal("0")
     feasible = True
@@ -253,6 +267,17 @@ def _portion_plan_score(
                         value - Decimal(issue["high"])
                     ) / max(Decimal(issue["high"]), Decimal("1"))
 
+    # Explicit boost sliders are a distribution instruction, not merely a list
+    # of meals allowed to grow. Keep the daily nutrition bounds authoritative,
+    # while strongly preferring each selected meal's allocated calorie target.
+    for key, target in meal_targets.items():
+        actual = meal_nutrition.get(key, {})
+        for nutrient, target_value in _target_values(target).items():
+            value = actual.get(nutrient, Decimal("0"))
+            score += BOOSTED_MEAL_TARGET_WEIGHT * (
+                abs(value - target_value) / max(target_value, Decimal("1"))
+            )
+
     score += sum(
         (abs(portions[variable.key] - Decimal("1")) / Decimal("1000") for variable in variables),
         Decimal("0"),
@@ -268,10 +293,11 @@ def rebalance_plan_portions(
 ) -> dict[str, Decimal]:
     """Re-quantify fixed recipes together while respecting shared batch portions.
 
-    A variable is one batch/member serving amount and therefore applies to every
-    date on which that member eats from the batch. Several deterministic starts
-    make the discrete coordinate search resilient without making plan edits
-    depend on an optional external solver.
+    A variable is one occurrence/member serving amount. Several deterministic
+    starts make the discrete coordinate search resilient without making plan
+    edits depend on an optional external solver. Semantic meal ordering keeps
+    otherwise identical days stable instead of letting random record IDs decide
+    which of several near-equivalent portion combinations wins.
     """
     if not variables:
         return {}
@@ -295,7 +321,17 @@ def rebalance_plan_portions(
     best_portions: dict[str, Decimal] | None = None
     best_score: Decimal | None = None
     best_feasible = False
-    ordered = sorted(variables, key=lambda item: item.key)
+    meal_order = {"breakfast": 0, "lunch": 1, "dinner": 2, "snack": 3}
+    ordered = sorted(
+        variables,
+        key=lambda item: (
+            item.dates,
+            item.member_id,
+            meal_order.get(item.meal_type, len(meal_order)),
+            item.component_slot,
+            item.key,
+        ),
+    )
     for portions in starts:
         for _ in range(12):
             changed = False

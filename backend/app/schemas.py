@@ -447,6 +447,39 @@ class PlanSlotIn(APIModel):
     food_safety_acknowledged: bool = False
 
 
+class MealCalorieBoostAllocationIn(APIModel):
+    meal_type: MealType
+    percentage: int = Field(ge=0, le=100)
+
+
+class DayCalorieBoostIn(APIModel):
+    meal_date: date
+    member_id: str
+    calories: Decimal = Field(gt=0, le=10000)
+    meal_allocations: list[MealCalorieBoostAllocationIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_meal_allocations(self):
+        meal_types = [item.meal_type for item in self.meal_allocations]
+        if len(meal_types) != len(set(meal_types)):
+            raise ValueError("calorie boost meal types must be unique")
+        if self.meal_allocations and sum(item.percentage for item in self.meal_allocations) != 100:
+            raise ValueError("calorie boost meal allocations must total 100 percent")
+        return self
+
+
+class GuestDayIn(APIModel):
+    meal_date: date
+    guest_count: int = Field(gt=0, le=50)
+    meal_types: list[MealType] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_meal_types(self):
+        if len(self.meal_types) != len(set(self.meal_types)):
+            raise ValueError("guest meal types must be unique")
+        return self
+
+
 class PlanGenerateRequest(APIModel):
     name: str = Field(min_length=1, max_length=160)
     start_date: date | None = None
@@ -459,6 +492,8 @@ class PlanGenerateRequest(APIModel):
     must_use_ingredient_terms: list[str] = Field(default_factory=list)
     prefer_ingredient_terms: list[str] = Field(default_factory=list)
     exclude_ingredient_terms: list[str] = Field(default_factory=list)
+    calorie_boosts: list[DayCalorieBoostIn] = Field(default_factory=list)
+    guest_days: list[GuestDayIn] = Field(default_factory=list)
     ignore_nutrition_tolerances: bool = False
 
     @model_validator(mode="after")
@@ -473,6 +508,22 @@ class PlanGenerateRequest(APIModel):
                 for slot in self.slots
             ):
                 raise ValueError("every meal slot must be inside the planning period")
+            if any(
+                boost.meal_date < self.start_date or boost.meal_date > self.end_date
+                for boost in self.calorie_boosts
+            ):
+                raise ValueError("every calorie boost must be inside the planning period")
+            if any(
+                guest_day.meal_date < self.start_date or guest_day.meal_date > self.end_date
+                for guest_day in self.guest_days
+            ):
+                raise ValueError("every guest day must be inside the planning period")
+        boost_keys = [(boost.meal_date, boost.member_id) for boost in self.calorie_boosts]
+        if len(boost_keys) != len(set(boost_keys)):
+            raise ValueError("a member can only have one calorie boost per day")
+        guest_dates = [guest_day.meal_date for guest_day in self.guest_days]
+        if len(guest_dates) != len(set(guest_dates)):
+            raise ValueError("a date can only have one guest count")
         return self
 
 
@@ -483,6 +534,8 @@ class PlanOut(APIModel):
     end_date: date
     status: PlanStatus
     diagnostics: list[dict[str, Any]]
+    calorie_boosts: list[dict[str, Any]]
+    guest_days: list[dict[str, Any]]
     version: int
 
 

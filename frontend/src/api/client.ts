@@ -795,6 +795,8 @@ export interface BackendPlan {
   end_date: string
   status: 'draft' | 'generating' | 'ready' | 'accepted' | 'superseded'
   diagnostics: Array<Record<string, unknown>>
+  calorie_boosts?: Array<{ meal_date: string; member_id: string; calories: ApiDecimal; meal_allocations?: Array<{ meal_type: string; percentage: number }> }>
+  guest_days?: Array<{ meal_date: string; guest_count: number; meal_types?: string[] }>
   version: number
 }
 
@@ -807,6 +809,7 @@ export interface BackendPlanDetail {
     batch_id: string
     parent_batch_id?: string
     component_slot: number
+    guest_servings?: number
     recipe_id: string
     recipe_title: string
     source_url?: string

@@ -44,6 +44,7 @@ from ..services.planner import (
     ParticipantTarget,
     PlanPortionVariable,
     PlannerInfeasibleError,
+    BOOST_PORTIONS,
     PORTIONS,
     RecipeCandidate,
     SIDE_PORTIONS,
@@ -401,7 +402,12 @@ def _validate_mutable_plan_constraints(
 
 
 def _target_for(
-    db: Session, member_id: str, meal_type: str, household_id: str
+    db: Session,
+    member_id: str,
+    meal_type: str,
+    household_id: str,
+    daily_calorie_boost: Decimal = Decimal("0"),
+    meal_calorie_boost: Decimal = Decimal("0"),
 ) -> ParticipantTarget:
     member = db.get(HouseholdMember, member_id)
     if member is None or member.household_id != household_id or not member.active:
@@ -417,11 +423,25 @@ def _target_for(
     )
     if allocation is None:
         raise DomainError("MISSING_MEAL_ALLOCATION", f"No target allocation exists for {meal_type}")
+    if (daily_calorie_boost or meal_calorie_boost) and target.mode != "calorie":
+        raise DomainError(
+            "CALORIE_BOOST_REQUIRES_CALORIE_TARGET",
+            f"{member.name} uses macro targets, so a calorie boost cannot be applied",
+            422,
+        )
+    allocation_percentage = Decimal(allocation.percentage)
+    equivalent_daily_boost = daily_calorie_boost
+    if meal_calorie_boost:
+        equivalent_daily_boost += meal_calorie_boost * Decimal("100") / allocation_percentage
     return ParticipantTarget(
         member_id=member.id,
         mode=target.mode,
-        allocation=Decimal(allocation.percentage),
-        calorie_target=target.calorie_target,
+        allocation=allocation_percentage,
+        calorie_target=(
+            Decimal(target.calorie_target or 0) + equivalent_daily_boost
+            if target.mode == "calorie"
+            else target.calorie_target
+        ),
         protein_target_g=target.protein_target_g,
         carbohydrate_target_g=target.carbohydrate_target_g,
         fat_target_g=target.fat_target_g,
@@ -435,11 +455,38 @@ def _target_for(
     )
 
 
+def _calorie_boost_maps(
+    plan: MealPlan,
+) -> tuple[dict[tuple[str, str], Decimal], dict[tuple[str, str, str], Decimal]]:
+    daily: dict[tuple[str, str], Decimal] = {}
+    by_meal: dict[tuple[str, str, str], Decimal] = {}
+    for item in plan.calorie_boosts or []:
+        calories = Decimal(str(item["calories"]))
+        allocations = item.get("meal_allocations") or []
+        if not allocations:
+            daily[(item["meal_date"], item["member_id"])] = calories
+            continue
+        for allocation in allocations:
+            by_meal[(item["meal_date"], item["member_id"], allocation["meal_type"])] = (
+                calories * Decimal(str(allocation["percentage"])) / Decimal("100")
+            )
+    return daily, by_meal
+
+
+def _guest_count_map(plan: MealPlan) -> dict[tuple[str, str], int]:
+    result: dict[tuple[str, str], int] = {}
+    for item in plan.guest_days or []:
+        for meal_type in item.get("meal_types") or ["*"]:
+            result[(item["meal_date"], meal_type)] = int(item["guest_count"])
+    return result
+
+
 def _rebalance_plan(
     db: Session,
     plan: MealPlan,
     *,
     ignore_nutrition_tolerances: bool,
+    infeasible_detail: str = "The selected meal combination could not meet every daily nutrition target.",
 ) -> None:
     """Quantify every fixed recipe together after the plan composition changes."""
     batches = db.scalars(
@@ -448,6 +495,7 @@ def _rebalance_plan(
     variables: list[PlanPortionVariable] = []
     allocations_by_variable: dict[str, list[PortionAllocation]] = {}
     daily_targets: dict[tuple[str, str], list[ParticipantTarget]] = defaultdict(list)
+    daily_calorie_boosts, meal_calorie_boosts = _calorie_boost_maps(plan)
 
     for batch in batches:
         version = db.get(RecipeVersion, batch.recipe_version_id)
@@ -462,8 +510,6 @@ def _rebalance_plan(
             .where(MealOccurrence.batch_id == batch.id)
             .order_by(MealOccurrence.meal_date)
         ).all()
-        member_dates: dict[str, list[str]] = defaultdict(list)
-        member_allocations: dict[str, list[PortionAllocation]] = defaultdict(list)
         for occurrence in occurrences:
             allocations = db.scalars(
                 select(PortionAllocation).where(
@@ -472,30 +518,51 @@ def _rebalance_plan(
             ).all()
             for allocation in allocations:
                 date_text = occurrence.meal_date.isoformat()
-                member_dates[allocation.member_id].append(date_text)
-                member_allocations[allocation.member_id].append(allocation)
-                if batch.parent_batch_id is None:
-                    daily_targets[(date_text, allocation.member_id)].append(
-                        _target_for(
-                            db,
-                            allocation.member_id,
-                            occurrence.meal_type,
-                            plan.household_id,
-                        )
-                    )
-        for member_id, allocations in member_allocations.items():
-            key = f"{batch.id}:{member_id}"
-            variables.append(
-                PlanPortionVariable(
-                    key=key,
-                    member_id=member_id,
-                    dates=tuple(member_dates[member_id]),
-                    nutrition=nutrition,
-                    current=Decimal(allocations[0].servings),
-                    allowed=SIDE_PORTIONS if batch.parent_batch_id is not None else PORTIONS,
+                explicit_meal_boost = meal_calorie_boosts.get(
+                    (date_text, allocation.member_id, occurrence.meal_type),
+                    Decimal("0"),
                 )
-            )
-            allocations_by_variable[key] = allocations
+                participant_target = None
+                if batch.parent_batch_id is None:
+                    participant_target = _target_for(
+                        db,
+                        allocation.member_id,
+                        occurrence.meal_type,
+                        plan.household_id,
+                        daily_calorie_boosts.get(
+                            (date_text, allocation.member_id), Decimal("0")
+                        ),
+                        explicit_meal_boost,
+                    )
+                    daily_targets[(date_text, allocation.member_id)].append(
+                        participant_target
+                    )
+                key = f"{occurrence.id}:{allocation.member_id}"
+                variables.append(
+                    PlanPortionVariable(
+                        key=key,
+                        member_id=allocation.member_id,
+                        dates=(date_text,),
+                        nutrition=nutrition,
+                        current=Decimal(allocation.servings),
+                        allowed=(
+                            SIDE_PORTIONS
+                            if batch.parent_batch_id is not None
+                            else BOOST_PORTIONS
+                            if daily_calorie_boosts.get(
+                                (date_text, allocation.member_id), Decimal("0")
+                            ) > 0
+                            or explicit_meal_boost > 0
+                            else PORTIONS
+                        ),
+                        meal_type=occurrence.meal_type,
+                        component_slot=batch.component_slot,
+                        meal_target=(
+                            participant_target if explicit_meal_boost > 0 else None
+                        ),
+                    )
+                )
+                allocations_by_variable[key] = [allocation]
 
     portions = rebalance_plan_portions(
         variables, daily_targets, enforce_nutrition_bounds=False
@@ -527,7 +594,7 @@ def _rebalance_plan(
     if failures:
         raise DomainError(
             "NUTRITION_TARGET_INFEASIBLE",
-            "The selected meal combination could not meet every daily nutrition target.",
+            infeasible_detail,
             422,
             actions=[
                 {
@@ -542,17 +609,45 @@ def _rebalance_plan(
     for variable in variables:
         for allocation in allocations_by_variable[variable.key]:
             allocation.servings = portions[variable.key]
+    guest_counts = _guest_count_map(plan)
+    for occurrence in db.scalars(
+        select(MealOccurrence).where(MealOccurrence.meal_plan_id == plan.id)
+    ).all():
+        allocations = db.scalars(
+            select(PortionAllocation).where(
+                PortionAllocation.meal_occurrence_id == occurrence.id
+            )
+        ).all()
+        largest_household_portion = max(
+            (Decimal(allocation.servings) for allocation in allocations),
+            default=Decimal("0"),
+        )
+        occurrence.guest_servings = (
+            Decimal(
+                guest_counts.get(
+                    (occurrence.meal_date.isoformat(), occurrence.meal_type),
+                    guest_counts.get((occurrence.meal_date.isoformat(), "*"), 0),
+                )
+            )
+            * largest_household_portion
+        )
     for batch in batches:
         batch.servings = sum(
             (
-                Decimal(allocation.servings)
+                sum(
+                    (
+                        Decimal(allocation.servings)
+                        for allocation in db.scalars(
+                            select(PortionAllocation).where(
+                                PortionAllocation.meal_occurrence_id == occurrence.id
+                            )
+                        ).all()
+                    ),
+                    Decimal("0"),
+                )
+                + Decimal(occurrence.guest_servings)
                 for occurrence in db.scalars(
                     select(MealOccurrence).where(MealOccurrence.batch_id == batch.id)
-                ).all()
-                for allocation in db.scalars(
-                    select(PortionAllocation).where(
-                        PortionAllocation.meal_occurrence_id == occurrence.id
-                    )
                 ).all()
             ),
             Decimal("0"),
@@ -570,6 +665,49 @@ def generate_plan(
     slot_keys = [(slot.meal_date, slot.meal_type.casefold()) for slot in payload.slots]
     if len(set(slot_keys)) != len(slot_keys):
         raise DomainError("DUPLICATE_PLAN_SLOT", "A date and meal type can only be planned once")
+    participant_days = {
+        (slot.meal_date, member_id)
+        for slot in payload.slots
+        for member_id in slot.participant_member_ids
+    }
+    for boost in payload.calorie_boosts:
+        if (boost.meal_date, boost.member_id) not in participant_days:
+            raise DomainError(
+                "INVALID_CALORIE_BOOST",
+                "A calorie boost must belong to someone eating on that date",
+                422,
+            )
+        attended_meals = {
+            slot.meal_type
+            for slot in payload.slots
+            if slot.meal_date == boost.meal_date
+            and boost.member_id in slot.participant_member_ids
+        }
+        if any(item.meal_type not in attended_meals for item in boost.meal_allocations):
+            raise DomainError(
+                "INVALID_CALORIE_BOOST_MEAL",
+                "Calorie boosts can only be assigned to meals that person is eating",
+                422,
+            )
+    planned_dates = {slot.meal_date for slot in payload.slots}
+    for guest_day in payload.guest_days:
+        if guest_day.meal_date not in planned_dates:
+            raise DomainError(
+                "INVALID_GUEST_DAY",
+                "Guests can only be added to a date with at least one planned meal",
+                422,
+            )
+        planned_meals = {
+            slot.meal_type
+            for slot in payload.slots
+            if slot.meal_date == guest_day.meal_date
+        }
+        if any(meal_type not in planned_meals for meal_type in guest_day.meal_types):
+            raise DomainError(
+                "INVALID_GUEST_MEAL",
+                "Guests can only attend meals that are planned for that date",
+                422,
+            )
     recipe_conditions = [
         Recipe.household_id == context.user.household_id,
         Recipe.archived_at.is_(None),
@@ -597,6 +735,19 @@ def generate_plan(
     )
 
     dates = [slot.meal_date for slot in payload.slots]
+    daily_calorie_boosts: dict[tuple[str, str], Decimal] = {}
+    meal_calorie_boosts: dict[tuple[str, str, str], Decimal] = {}
+    for boost in payload.calorie_boosts:
+        date_text = boost.meal_date.isoformat()
+        if not boost.meal_allocations:
+            daily_calorie_boosts[(date_text, boost.member_id)] = Decimal(boost.calories)
+            continue
+        for allocation in boost.meal_allocations:
+            meal_calorie_boosts[(date_text, boost.member_id, allocation.meal_type)] = (
+                Decimal(boost.calories)
+                * Decimal(allocation.percentage)
+                / Decimal("100")
+            )
     grouped_slots: dict[str, list] = {}
     for index, slot in enumerate(payload.slots):
         key = slot.batch_key.strip() if slot.batch_key and slot.batch_key.strip() else f"slot-{index}"
@@ -646,6 +797,8 @@ def generate_plan(
         end_date=payload.end_date or max(dates),
         status=PlanStatus.GENERATING.value,
         diagnostics=diagnostics,
+        calorie_boosts=[boost.model_dump(mode="json") for boost in payload.calorie_boosts],
+        guest_days=[guest_day.model_dump(mode="json") for guest_day in payload.guest_days],
     )
     db.add(plan)
     db.flush()
@@ -683,7 +836,52 @@ def generate_plan(
             }
         )
         participants = [
-            _target_for(db, member_id, slot.meal_type, context.user.household_id)
+            _target_for(
+                db,
+                member_id,
+                slot.meal_type,
+                context.user.household_id,
+                sum(
+                    (
+                        daily_calorie_boosts.get(
+                            (grouped_slot.meal_date.isoformat(), member_id),
+                            Decimal("0"),
+                        )
+                        for grouped_slot in slots
+                        if member_id in grouped_slot.participant_member_ids
+                    ),
+                    Decimal("0"),
+                )
+                / max(
+                    1,
+                    sum(
+                        member_id in grouped_slot.participant_member_ids
+                        for grouped_slot in slots
+                    ),
+                ),
+                sum(
+                    (
+                        meal_calorie_boosts.get(
+                            (
+                                grouped_slot.meal_date.isoformat(),
+                                member_id,
+                                grouped_slot.meal_type,
+                            ),
+                            Decimal("0"),
+                        )
+                        for grouped_slot in slots
+                        if member_id in grouped_slot.participant_member_ids
+                    ),
+                    Decimal("0"),
+                )
+                / max(
+                    1,
+                    sum(
+                        member_id in grouped_slot.participant_member_ids
+                        for grouped_slot in slots
+                    ),
+                ),
+            )
             for member_id in member_ids
         ]
         if not participants:
@@ -810,8 +1008,22 @@ def generate_plan(
             db.add(occurrence)
             db.flush()
             for member_id in grouped_slot.participant_member_ids:
-                participant = next(
-                    item for item in participants if item.member_id == member_id
+                participant = _target_for(
+                    db,
+                    member_id,
+                    grouped_slot.meal_type,
+                    context.user.household_id,
+                    daily_calorie_boosts.get(
+                        (grouped_slot.meal_date.isoformat(), member_id), Decimal("0")
+                    ),
+                    meal_calorie_boosts.get(
+                        (
+                            grouped_slot.meal_date.isoformat(),
+                            member_id,
+                            grouped_slot.meal_type,
+                        ),
+                        Decimal("0"),
+                    ),
                 )
                 daily_key = (grouped_slot.meal_date, member_id)
                 daily_targets[daily_key].append(participant)
@@ -826,39 +1038,21 @@ def generate_plan(
                         servings=choice.portions[member_id],
                     )
                 )
-    if not payload.ignore_nutrition_tolerances:
-        failures: list[dict] = []
-        for (meal_date, member_id), targets in daily_targets.items():
-            violations = aggregate_nutrition_issues(
-                targets, daily_nutrition[(meal_date, member_id)]
-            )
-            if violations:
-                member = db.get(HouseholdMember, member_id)
-                failures.append({
-                    "date": meal_date.isoformat(),
-                    "member": member.name if member else member_id,
-                    "violations": violations,
-                })
-        if failures:
-            raise DomainError(
-                "NUTRITION_TARGET_INFEASIBLE",
-                "The available recipes could not meet every daily nutrition target.",
-                422,
-                actions=[
-                    {
-                        "kind": "retry_best_effort",
-                        "label": "Continue anyway",
-                        "suggestion": "Choose the closest daily plan without enforcing nutrition tolerances.",
-                    }
-                ],
-                issues=failures,
-            )
     if remaining_must_use or remaining_must_use_terms:
         raise DomainError(
             "MUST_USE_INGREDIENT_INFEASIBLE",
             "No feasible selected recipe covers every must-use ingredient",
             422,
         )
+    # Test and production sessions may disable autoflush. Persist the final
+    # occurrence allocations before the whole-plan rebalancer queries them.
+    db.flush()
+    _rebalance_plan(
+        db,
+        plan,
+        ignore_nutrition_tolerances=payload.ignore_nutrition_tolerances,
+        infeasible_detail="The available recipes could not meet every daily nutrition target.",
+    )
     plan.diagnostics = list(diagnostics)
     flag_modified(plan, "diagnostics")
     plan.status = PlanStatus.READY.value
@@ -916,6 +1110,7 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
                 "batch_id": batch.id,
                 "parent_batch_id": batch.parent_batch_id,
                 "component_slot": occurrence.component_slot,
+                "guest_servings": occurrence.guest_servings,
                 "recipe_id": recipe.id,
                 "recipe_title": recipe.title,
                 "source_url": recipe.source_url,

@@ -417,6 +417,8 @@ class MealPlan(IdMixin, AuditMixin, Base):
     status: Mapped[str] = mapped_column(String(30), default=PlanStatus.DRAFT.value)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     diagnostics: Mapped[list] = mapped_column(JSON, default=list)
+    calorie_boosts: Mapped[list] = mapped_column(JSON, default=list)
+    guest_days: Mapped[list] = mapped_column(JSON, default=list)
 
 
 class MealBatch(IdMixin, Base):
@@ -447,6 +449,9 @@ class MealOccurrence(IdMixin, AuditMixin, Base):
     component_slot: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     unplanned_allowance: Mapped[bool] = mapped_column(Boolean, default=False)
+    guest_servings: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("0"), server_default="0", nullable=False
+    )
 
 
 class PortionAllocation(IdMixin, Base):
