@@ -7,17 +7,17 @@ Current release: **0.10.0**. See the [latest release notes](#changelog) or the
 
 ## About
 
-In food, *slop* means a thin, often unappetising liquid or semi-liquid food.
-Online, *AI slop* describes low-quality content produced by AI, usually in
-large quantities. See the [dictionary definition of slop](https://www.merriam-webster.com/dictionary/slop)
-and the [Cambridge definition of AI slop](https://dictionary.cambridge.org/us/dictionary/english/ai-slop).
+- Slop:
+  - A thin, often unappetising liquid or semi-liquid food [dictionary definition](https://www.merriam-webster.com/dictionary/slop).
+  - Low-quality content produced by AI, usually in
+large quantities [Cambridge definition](https://dictionary.cambridge.org/us/dictionary/english/ai-slop).
 
 Slop is a **100% AI-coded replacement for MyFitnessPal and Mealie**. The name
 is a deliberate play on those two meanings: this is meal-planning software
 made with AI, for turning a messy collection of recipes into an organised week
 of food.
 
-I generated this project because MyFitnessPal is expensive and its recipe
+I created this project because MyFitnessPal is expensive and its recipe
 selection is limited. Mealie is a great self-hosted recipe catalogue, but
 adding recipes takes work and it does not automatically plan a week with a
 shopping list. Slop is designed to close that gap.
@@ -77,6 +77,7 @@ useful during the week.
 ### Generate a practical shopping list
 
 ![Shopping list](docs/screenshots/shopping.png)
+![Shopping list2](docs/screenshots/shopping2.png)
 
 Shopping quantities subtract usable pantry stock, round to practical units, and
 remain available offline. Items can be checked, renamed, shared, copied, or
