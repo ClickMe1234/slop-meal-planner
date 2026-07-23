@@ -56,9 +56,53 @@ function CookControl({ cooked, pending = false, onClick }: { cooked: boolean; pe
   </button>
 }
 
+export type BatchWeightPortion = {
+  id?: string
+  memberId: string
+  name: string
+  servings: number
+  detail?: string
+  guest?: boolean
+}
+
+export function batchWeightPortions(
+  occurrences: BackendPlanDetail['occurrences'],
+  batchId: string,
+  members: Array<{ id: string; name: string }> = [],
+  currentMemberId?: string,
+): BatchWeightPortion[] {
+  const batchOccurrences = occurrences
+    .filter(item => item.batch_id === batchId)
+    .sort((left, right) => left.meal_date.localeCompare(right.meal_date))
+  const showDate = batchOccurrences.length > 1
+  return batchOccurrences.flatMap(occurrence => {
+    const dateLabel = showDate
+      ? new Date(`${occurrence.meal_date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+      : undefined
+    const householdRows: BatchWeightPortion[] = occurrence.portions.map((portion, index) => ({
+      id: `${occurrence.id}:${portion.member_id}`,
+      memberId: portion.member_id,
+      name: members.find(member => member.id === portion.member_id)?.name ?? (portion.member_id === currentMemberId ? 'You' : `Person ${index + 1}`),
+      servings: Number(portion.servings),
+      detail: dateLabel,
+    }))
+    const guestServings = Number(occurrence.guest_servings ?? 0)
+    return guestServings > 0
+      ? [...householdRows, {
+          id: `${occurrence.id}:guests`,
+          memberId: 'guests',
+          name: 'Guests',
+          servings: guestServings,
+          detail: dateLabel,
+          guest: true,
+        }]
+      : householdRows
+  })
+}
+
 export function BatchWeightControl({ servings, portions, savedWeight, draft, pending = false, onDraftChange, onSave, onClear }: {
   servings: number
-  portions: Array<{ memberId: string; name: string; servings: number }>
+  portions: BatchWeightPortion[]
   savedWeight?: number
   draft: string
   pending?: boolean
@@ -75,8 +119,8 @@ export function BatchWeightControl({ servings, portions, savedWeight, draft, pen
     <label className="batch-weight__input"><span className="sr-only">Total cooked batch weight</span><span className="input-suffix"><input type="number" min="1" step="1" inputMode="numeric" placeholder="Total weight" aria-label="Total cooked batch weight" value={draft} onChange={event => onDraftChange(event.target.value)}/><span>g</span></span></label>
     <output className="batch-weight__result" aria-live="polite">
       <span>Portion guide</span>
-      <div className="batch-weight__portions">{portions.map(portion => <div className="batch-weight__portion" key={portion.memberId}>
-        <div><b>{portion.name}</b><small>{portion.servings} {portion.servings === 1 ? 'serving' : 'servings'}</small></div>
+      <div className="batch-weight__portions">{portions.map(portion => <div className={`batch-weight__portion${portion.guest ? ' is-guest' : ''}`} key={portion.id ?? portion.memberId}>
+        <div><b>{portion.name}</b><small>{portion.detail && `${portion.detail} · `}{portion.servings} {portion.servings === 1 ? 'serving' : 'servings'}</small></div>
         <strong>{gramsPerServing === undefined ? '—' : `${Math.round(gramsPerServing * portion.servings)} g`}</strong>
       </div>)}</div>
       <small>{servings} {servings === 1 ? 'serving' : 'servings'} in the batch</small>
@@ -85,15 +129,16 @@ export function BatchWeightControl({ servings, portions, savedWeight, draft, pen
   </form>
 }
 
-function NutritionCard({ totals, calorieTarget, macroTargets }: {
+function NutritionCard({ totals, calorieTarget, macroTargets, calorieBoost = 0 }: {
   totals: NutritionTotals
   calorieTarget: number
   macroTargets?: { protein: number; carbs: number; fat: number }
+  calorieBoost?: number
 }) {
   const percentage = calorieTarget > 0 ? Math.round(totals.calories / calorieTarget * 100) : 0
   return <Card className="nutrition-card">
     <div className="nutrition-card__heading">
-      <div><span>Today’s progress</span><h2>Daily nutrition</h2></div>
+      <div><span>Today’s progress</span><h2>Daily nutrition</h2>{calorieBoost > 0 && <small className="nutrition-boost-note">Includes +{calorieBoost.toLocaleString()} kcal boost</small>}</div>
       <strong className="nutrition-percent">{percentage}% <small>of target</small></strong>
     </div>
     <NutritionRings
@@ -179,6 +224,10 @@ function occurrenceNutrition(item: BackendPlanDetail['occurrences'][number], mem
   }
 }
 
+export function calorieBoostForDate(plan: BackendPlanDetail['plan'], mealDate: string, memberId?: string): number {
+  return Number(plan.calorie_boosts?.find(boost => boost.meal_date === mealDate && boost.member_id === memberId)?.calories ?? 0)
+}
+
 function LiveWeekPage() {
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState(0)
@@ -207,9 +256,13 @@ function LiveWeekPage() {
     const nutrition = occurrenceNutrition(item, memberId)
     return { calories: sum.calories + nutrition.calories, protein: sum.protein + nutrition.protein, carbs: sum.carbs + nutrition.carbs, fat: sum.fat + nutrition.fat }
   }, emptyNutrition())
-  const targetCalories = target.data?.mode === 'calorie'
+  const baseTargetCalories = target.data?.mode === 'calorie'
     ? Number(target.data.calorie_target ?? 0)
     : Number(target.data?.protein_target_g ?? 0) * 4 + Number(target.data?.carbohydrate_target_g ?? 0) * 4 + Number(target.data?.fat_target_g ?? 0) * 9
+  const calorieBoost = target.data?.mode === 'calorie'
+    ? calorieBoostForDate(detail.data.plan, date, memberId)
+    : 0
+  const targetCalories = baseTargetCalories + calorieBoost
   const macroTargets = {
     protein: Number(target.data?.protein_target_g ?? target.data?.protein_min_g ?? 130),
     carbs: Number(target.data?.carbohydrate_target_g ?? target.data?.carbohydrate_min_g ?? 225),
@@ -287,11 +340,7 @@ function LiveWeekPage() {
               <div className="meal-actions"><CookControl cooked={cooked} pending={pendingBatches.includes(meal.batch_id)} onClick={() => toggleCooked(meal.batch_id, cooked)}/></div>
               {cooked && <BatchWeightControl
                 servings={Number(meal.batch_servings)}
-                portions={meal.portions.map((portion, index) => ({
-                  memberId: portion.member_id,
-                  name: members.data?.find(member => member.id === portion.member_id)?.name ?? (portion.member_id === memberId ? 'You' : `Person ${index + 1}`),
-                  servings: Number(portion.servings),
-                }))}
+                portions={batchWeightPortions(detail.data.occurrences, meal.batch_id, members.data, memberId)}
                 savedWeight={meal.cooked_weight_grams == null ? undefined : Number(meal.cooked_weight_grams)}
                 draft={weightDrafts[meal.batch_id] ?? String(meal.cooked_weight_grams ?? '')}
                 pending={pendingWeights.includes(meal.batch_id)}
@@ -303,7 +352,7 @@ function LiveWeekPage() {
           })}</div>
         </section>)}</div>
       </section>
-      <aside className="day-summary"><NutritionCard totals={totals} calorieTarget={targetCalories} macroTargets={macroTargets}/></aside>
+      <aside className="day-summary"><NutritionCard totals={totals} calorieTarget={targetCalories} macroTargets={macroTargets} calorieBoost={calorieBoost}/></aside>
     </div>
   </div>
 }

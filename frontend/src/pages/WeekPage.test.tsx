@@ -3,7 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { BatchWeightControl, WeekPage } from './WeekPage'
+import type { BackendPlanDetail } from '../api/client'
+import { BatchWeightControl, WeekPage, batchWeightPortions, calorieBoostForDate } from './WeekPage'
 
 function renderWeek() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -80,5 +81,41 @@ describe('WeekPage', () => {
     expect(screen.getByText('502 g')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Update' }))
     expect(onSave).toHaveBeenCalledOnce()
+  })
+
+  it('reconciles a multi-day batch across household portions, boosts and guests', () => {
+    const occurrences = [
+      {
+        id: 'thursday-dinner', meal_date: '2026-07-23', meal_type: 'dinner', batch_id: 'batch', component_slot: 0,
+        recipe_id: 'cod', recipe_title: 'Cod', batch_servings: 12, guest_servings: 4,
+        portions: [{ member_id: 'alice', servings: 2 }, { member_id: 'zach', servings: 2 }],
+      },
+      {
+        id: 'friday-dinner', meal_date: '2026-07-24', meal_type: 'dinner', batch_id: 'batch', component_slot: 0,
+        recipe_id: 'cod', recipe_title: 'Cod', batch_servings: 12, guest_servings: 0,
+        portions: [{ member_id: 'alice', servings: 2 }, { member_id: 'zach', servings: 2 }],
+      },
+    ] satisfies BackendPlanDetail['occurrences']
+    const portions = batchWeightPortions(occurrences, 'batch', [
+      { id: 'alice', name: 'Alice' }, { id: 'zach', name: 'Zach' },
+    ], 'zach')
+
+    expect(portions.reduce((sum, portion) => sum + portion.servings, 0)).toBe(12)
+    expect(portions.find(portion => portion.guest)).toMatchObject({ name: 'Guests', servings: 4 })
+
+    render(<BatchWeightControl servings={12} portions={portions} draft="1200" onDraftChange={() => undefined} onSave={() => undefined} onClear={() => undefined}/>)
+    const guestRow = screen.getByText('Guests').closest('.batch-weight__portion') as HTMLElement
+    expect(guestRow).toHaveTextContent(/Thu,? 23 Jul · 4 servings/)
+    expect(guestRow).toHaveTextContent('400 g')
+  })
+
+  it('adds the current member calorie boost to the week-view target', () => {
+    const plan = {
+      id: 'plan', name: 'Week', start_date: '2026-07-23', end_date: '2026-07-24', status: 'ready' as const,
+      diagnostics: [], version: 1,
+      calorie_boosts: [{ meal_date: '2026-07-24', member_id: 'zach', calories: '1400' }],
+    }
+    expect(1750 + calorieBoostForDate(plan, '2026-07-24', 'zach')).toBe(3150)
+    expect(calorieBoostForDate(plan, '2026-07-24', 'alice')).toBe(0)
   })
 })

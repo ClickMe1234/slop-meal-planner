@@ -303,11 +303,14 @@ button.tag { cursor: pointer; font: inherit; }
 .batch-weight__result>span { font-weight:700;letter-spacing:.06em;text-transform:uppercase; }
 .batch-weight__portions { display:grid;gap:5px;margin:3px 0; }
 .batch-weight__portion { align-items:center;display:grid;gap:10px;grid-template-columns:minmax(0,1fr) auto; }
+.batch-weight__portion.is-guest { background:color-mix(in srgb,var(--warm-soft) 58%,transparent);border:1px solid color-mix(in srgb,var(--warm) 22%,var(--border));border-radius:8px;margin-inline:-7px;padding:6px 7px; }
+.batch-weight__portion.is-guest b:after { background:var(--warm);border-radius:999px;color:var(--surface);content:'visitor';font-family:inherit;font-size:.48rem;font-weight:900;letter-spacing:.05em;margin-left:6px;padding:2px 5px;text-transform:uppercase;vertical-align:1px; }
 .batch-weight__portion>div { display:grid;min-width:0; }
 .batch-weight__portion b { font-size:.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .batch-weight__portion strong { color:var(--primary);font-family:'Fraunces',Georgia,serif;font-size:1.15rem;line-height:1;white-space:nowrap; }
 .batch-weight__actions { align-items:center;display:flex;gap:3px;justify-content:flex-end; }
 .batch-weight__actions .button { font-size:.68rem;min-height:36px;padding-inline:11px; }
+.nutrition-boost-note { color:var(--primary);display:block;font-size:.62rem;font-weight:800;margin-top:3px; }
 .day-summary { display:grid; gap:16px; position:sticky; top:25px; }
 .day-summary>.card { padding:22px; }
 .nutrition-card { overflow:hidden;position:relative; }
