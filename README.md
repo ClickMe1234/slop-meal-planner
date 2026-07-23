@@ -1,15 +1,190 @@
 # Slop Meal Planner
 
-Slop is a private, self-hosted household meal planner. It imports real
-recipes, plans meals against per-person nutrition targets, reserves pantry
-stock, and produces an offline-capable shopping list.
+> A free, self-hosted meal planner for real households.
 
-The production target is an Unraid server on a trusted LAN. The repository also
-includes a demo mode so the complete responsive light/dark interface can be
-evaluated without accounts, a database, or publisher access.
+Current release: **0.10.0**. See the [latest release notes](#changelog) or the
+[full changelog](CHANGELOG.md).
 
-Current release: **0.10.0**. See [CHANGELOG.md](CHANGELOG.md) for the complete
-release history.
+## About
+
+In food, *slop* means a thin, often unappetising liquid or semi-liquid food.
+Online, *AI slop* describes low-quality content produced by AI, usually in
+large quantities. See the [dictionary definition of slop](https://www.merriam-webster.com/dictionary/slop)
+and the [Cambridge definition of AI slop](https://dictionary.cambridge.org/us/dictionary/english/ai-slop).
+
+Slop is a **100% AI-coded replacement for MyFitnessPal and Mealie**. The name
+is a deliberate play on those two meanings: this is meal-planning software
+made with AI, for turning a messy collection of recipes into an organised week
+of food.
+
+I generated this project because MyFitnessPal is expensive and its recipe
+selection is limited. Mealie is a great self-hosted recipe catalogue, but
+adding recipes takes work and it does not automatically plan a week with a
+shopping list. Slop is designed to close that gap.
+
+It connects to two of the biggest recipe websites, [Allrecipes](https://www.allrecipes.com/)
+and [BBC Good Food](https://www.bbcgoodfood.com/), and automates bringing those
+recipes into a household library. It then plans meals against nutrition
+targets, accounts for pantry stock, and builds a practical shopping list. Since
+it is self-hosted, there is no subscription fee for the application.
+
+## Features
+
+The screenshots below were captured from the built-in demo mode. They show the
+real responsive interface without requiring an account, database, or publisher
+access.
+
+### Plan the week automatically
+
+![Weekly meal plan](docs/screenshots/week.png)
+
+The week view puts every planned meal, portion, batch, leftover, and nutrition
+summary in one place. Plans can be regenerated while keeping meals that you
+have already chosen.
+
+### Work through constraints step by step
+
+![Automatic planning wizard](docs/screenshots/plan.png)
+
+The planning flow takes dates, household members, attendance, special days,
+cook days, and ingredient preferences into account before showing a reviewable
+plan.
+
+### Discover and import recipes
+
+![Recipe discovery](docs/screenshots/recipes.png)
+
+Search Good Food and Allrecipes from one catalogue, filter by meal type or
+source, import a URL, and review nutrition, servings, tags, and ambiguous
+ingredients before a recipe becomes eligible for automatic planning.
+
+### Keep nutrition data reusable
+
+![Household ingredients](docs/screenshots/ingredients.png)
+
+Search general nutrition records, look up packaged products with Open Food
+Facts, scan a barcode, or enter a label manually. Saved household ingredients
+can be reused in recipes, planning, and pantry stock.
+
+### Track pantry stock and reservations
+
+![Pantry inventory](docs/screenshots/pantry.png)
+
+Pantry quantities are reserved when a plan is accepted and deducted when food
+is cooked. Use-soon, low-stock, expiry, and staple flags make the inventory
+useful during the week.
+
+### Generate a practical shopping list
+
+![Shopping list](docs/screenshots/shopping.png)
+
+Shopping quantities subtract usable pantry stock, round to practical units, and
+remain available offline. Items can be checked, renamed, shared, copied, or
+exported as text.
+
+## Changelog
+
+### 0.10.0 - 2026-07-23
+
+- Add onboarding for API-key setup, nutrition targets, household members, and
+  meal allocations.
+- Add calorie-boost days with meal-specific sliders and portion-aware plans.
+- Add guest days with meal-specific attendance and batch scaling based on the
+  largest household serving.
+- Show selected-day portion weights in the week view, including calorie boosts
+  and per-guest guidance.
+
+See [CHANGELOG.md](CHANGELOG.md) for the complete release history.
+
+## Installation
+
+### Try the demo locally
+
+The demo is the quickest way to evaluate the interface. It uses seeded sample
+data and does not need an account, database, or API keys.
+
+Requirements: Python 3.12+ and Node 22+.
+
+```sh
+git clone https://github.com/ClickMe1234/slop-meal-planner.git
+cd slop-meal-planner/frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. The Vite development server runs in demo mode by
+default.
+
+### Self-host with Docker Compose
+
+The supported production deployment is Docker Compose on an Unraid server or
+another trusted home-LAN machine. Docker Compose v2 and Git are required.
+
+```sh
+git clone https://github.com/ClickMe1234/slop-meal-planner.git
+cd slop-meal-planner
+cp deploy/.env.example deploy/.env
+```
+
+Generate three different secrets and put them in `deploy/.env` as
+`POSTGRES_PASSWORD`, `SECRET_KEY`, and `SETUP_TOKEN`:
+
+```sh
+openssl rand -hex 32
+openssl rand -hex 32
+openssl rand -hex 32
+```
+
+Before starting the stack, set at least `APPDATA_ROOT`, `BACKUP_ROOT`,
+`ALLOWED_HOSTS`, and an immutable `APP_VERSION` in `deploy/.env`. On Unraid,
+the usual paths are `/mnt/user/appdata/meal-planner` and
+`/mnt/user/backups/meal-planner`.
+
+Validate the configuration and start all five services:
+
+```sh
+docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
+docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --build postgres redis web worker scheduler
+docker compose --env-file deploy/.env -f deploy/compose.yaml ps
+```
+
+Open `http://<your-host>:8080`. On the first run, use the private
+`SETUP_TOKEN` from `deploy/.env` to create the owner account. Do not expose the
+web port through router forwarding. For the complete Unraid setup, HTTPS
+barcode-scanning notes, backups, restore procedures, upgrades, and
+troubleshooting, read [deploy/README.md](deploy/README.md).
+
+### Developer setup on Windows
+
+From the repository root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".\backend[dev,workers]"
+Set-Location frontend
+npm.cmd install
+npm.cmd run build
+Set-Location ..
+```
+
+Run the API with its local SQLite development default:
+
+```powershell
+Set-Location backend
+..\.venv\Scripts\alembic.exe -c alembic.ini upgrade head
+..\.venv\Scripts\uvicorn.exe app.main:app --reload
+```
+
+In a second terminal, run the PWA against the live API:
+
+```powershell
+Set-Location frontend
+$env:VITE_DEMO_MODE='false'
+npm.cmd run dev
+```
+
+For UI-only evaluation, omit `VITE_DEMO_MODE=false` and use the demo setup
+above.
 
 ## Implemented features
 
@@ -122,61 +297,6 @@ decision record live in
 [docs/product-discovery-and-research.md](docs/product-discovery-and-research.md).
 The end-to-end implementation checklist is in
 [docs/implementation-status.md](docs/implementation-status.md).
-
-## Recommended: run on Unraid
-
-Follow [deploy/README.md](deploy/README.md). In outline:
-
-```sh
-cp deploy/.env.example deploy/.env
-# Replace every placeholder secret and add the Unraid hostname/IP to ALLOWED_HOSTS.
-docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
-docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --build postgres redis web worker scheduler
-```
-
-Open `http://<unraid-host>:8080`. On first run, use the `SETUP_TOKEN` from the
-private `deploy/.env` file to create the owner. Production images compile the UI
-with `VITE_DEMO_MODE=false`.
-
-Live barcode camera access is a browser secure-context feature. It works on
-`localhost`, but a LAN hostname/IP needs HTTPS from a trusted reverse proxy or
-Tailscale certificate. On plain HTTP, barcode photos and typed numbers remain
-available. Set `COOKIE_SECURE=true` when HTTPS is enabled.
-
-Only port 8080 is published. Do not expose it through router port forwarding;
-use Tailscale later if remote access is needed.
-
-## Developer setup on Windows
-
-Python 3.12+ and Node 22+ are expected.
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".\backend[dev,workers]"
-Set-Location frontend
-npm.cmd install
-npm.cmd run build
-Set-Location ..
-```
-
-Run the API with its local SQLite development default:
-
-```powershell
-Set-Location backend
-..\.venv\Scripts\alembic.exe -c alembic.ini upgrade head
-..\.venv\Scripts\uvicorn.exe app.main:app --reload
-```
-
-In a second terminal, run the PWA against the live API:
-
-```powershell
-Set-Location frontend
-$env:VITE_DEMO_MODE='false'
-npm.cmd run dev
-```
-
-For UI-only evaluation, omit `VITE_DEMO_MODE=false`; demo mode requires no
-accounts, database, or publisher access.
 
 ## Nutrition data
 
