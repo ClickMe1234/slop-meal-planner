@@ -44,6 +44,7 @@ from ..services.planner import (
     ParticipantTarget,
     PlanPortionVariable,
     PlannerInfeasibleError,
+    BOOST_PORTIONS,
     PORTIONS,
     RecipeCandidate,
     SIDE_PORTIONS,
@@ -544,6 +545,14 @@ def _rebalance_plan(
                         allowed=(
                             SIDE_PORTIONS
                             if batch.parent_batch_id is not None
+                            else BOOST_PORTIONS
+                            if daily_calorie_boosts.get(
+                                (date_text, allocation.member_id), Decimal("0")
+                            ) > 0
+                            or meal_calorie_boosts.get(
+                                (date_text, allocation.member_id, occurrence.meal_type),
+                                Decimal("0"),
+                            ) > 0
                             else PORTIONS
                         ),
                         meal_type=occurrence.meal_type,
