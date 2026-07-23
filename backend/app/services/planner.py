@@ -47,6 +47,8 @@ class PlanPortionVariable:
     nutrition: dict[str, Decimal]
     current: Decimal
     allowed: tuple[Decimal, ...]
+    meal_type: str = ""
+    component_slot: int = 0
 
 
 PORTIONS = tuple(Decimal("0.5") + Decimal("0.25") * i for i in range(7))
@@ -268,10 +270,11 @@ def rebalance_plan_portions(
 ) -> dict[str, Decimal]:
     """Re-quantify fixed recipes together while respecting shared batch portions.
 
-    A variable is one batch/member serving amount and therefore applies to every
-    date on which that member eats from the batch. Several deterministic starts
-    make the discrete coordinate search resilient without making plan edits
-    depend on an optional external solver.
+    A variable is one occurrence/member serving amount. Several deterministic
+    starts make the discrete coordinate search resilient without making plan
+    edits depend on an optional external solver. Semantic meal ordering keeps
+    otherwise identical days stable instead of letting random record IDs decide
+    which of several near-equivalent portion combinations wins.
     """
     if not variables:
         return {}
@@ -295,7 +298,17 @@ def rebalance_plan_portions(
     best_portions: dict[str, Decimal] | None = None
     best_score: Decimal | None = None
     best_feasible = False
-    ordered = sorted(variables, key=lambda item: item.key)
+    meal_order = {"breakfast": 0, "lunch": 1, "dinner": 2, "snack": 3}
+    ordered = sorted(
+        variables,
+        key=lambda item: (
+            item.dates,
+            item.member_id,
+            meal_order.get(item.meal_type, len(meal_order)),
+            item.component_slot,
+            item.key,
+        ),
+    )
     for portions in starts:
         for _ in range(12):
             changed = False

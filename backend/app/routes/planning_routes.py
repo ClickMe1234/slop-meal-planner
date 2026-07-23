@@ -546,6 +546,8 @@ def _rebalance_plan(
                             if batch.parent_batch_id is not None
                             else PORTIONS
                         ),
+                        meal_type=occurrence.meal_type,
+                        component_slot=batch.component_slot,
                     )
                 )
                 allocations_by_variable[key] = [allocation]
