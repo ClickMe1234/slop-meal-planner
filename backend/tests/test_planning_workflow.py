@@ -234,6 +234,65 @@ def test_day_adjustments_apply_only_to_selected_meals(client, owner):
     assert float(occurrences["snack"]["guest_servings"]) == 0
 
 
+def test_calorie_boost_is_distributed_using_meal_sliders(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    target = client.put(
+        f"/api/v1/household-members/{member_id}/target",
+        headers=_headers(owner),
+        json={
+            "mode": "calorie",
+            "calorie_target": 1000,
+            "tolerance_percent": 5,
+            "allocations": [
+                {"meal_type": "breakfast", "percentage": 30},
+                {"meal_type": "lunch", "percentage": 30},
+                {"meal_type": "snack", "percentage": 40},
+            ],
+        },
+    )
+    assert target.status_code == 200, target.text
+    recipes = [
+        _create_recipe(client, owner, "Boost breakfast", ["breakfast"]),
+        _create_recipe(client, owner, "Boost lunch", ["lunch"]),
+        _create_recipe(client, owner, "Boost snack", ["snack"]),
+    ]
+
+    response = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={
+            "name": "Distributed cycling boost",
+            "recipe_ids": [recipe["id"] for recipe in recipes],
+            "slots": [
+                {
+                    "meal_date": "2026-07-20",
+                    "meal_type": meal_type,
+                    "participant_member_ids": [member_id],
+                }
+                for meal_type in ("breakfast", "lunch", "snack")
+            ],
+            "calorie_boosts": [{
+                "meal_date": "2026-07-20",
+                "member_id": member_id,
+                "calories": 1400,
+                "meal_allocations": [
+                    {"meal_type": "breakfast", "percentage": 30},
+                    {"meal_type": "lunch", "percentage": 30},
+                    {"meal_type": "snack", "percentage": 40},
+                ],
+            }],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    detail = client.get(f"/api/v1/meal-plans/{response.json()['id']}").json()
+    servings = {
+        occurrence["meal_type"]: float(occurrence["portions"][0]["servings"])
+        for occurrence in detail["occurrences"]
+    }
+    assert servings == {"breakfast": 1.5, "lunch": 1.5, "snack": 2.0}
+
+
 def test_large_calorie_boost_can_exceed_the_standard_two_serving_limit(client, owner):
     member_id = client.get("/api/v1/auth/me").json()["member_id"]
     target = client.put(

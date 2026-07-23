@@ -518,21 +518,24 @@ def _rebalance_plan(
             ).all()
             for allocation in allocations:
                 date_text = occurrence.meal_date.isoformat()
+                explicit_meal_boost = meal_calorie_boosts.get(
+                    (date_text, allocation.member_id, occurrence.meal_type),
+                    Decimal("0"),
+                )
+                participant_target = None
                 if batch.parent_batch_id is None:
+                    participant_target = _target_for(
+                        db,
+                        allocation.member_id,
+                        occurrence.meal_type,
+                        plan.household_id,
+                        daily_calorie_boosts.get(
+                            (date_text, allocation.member_id), Decimal("0")
+                        ),
+                        explicit_meal_boost,
+                    )
                     daily_targets[(date_text, allocation.member_id)].append(
-                        _target_for(
-                            db,
-                            allocation.member_id,
-                            occurrence.meal_type,
-                            plan.household_id,
-                            daily_calorie_boosts.get(
-                                (date_text, allocation.member_id), Decimal("0")
-                            ),
-                            meal_calorie_boosts.get(
-                                (date_text, allocation.member_id, occurrence.meal_type),
-                                Decimal("0"),
-                            ),
-                        )
+                        participant_target
                     )
                 key = f"{occurrence.id}:{allocation.member_id}"
                 variables.append(
@@ -549,14 +552,14 @@ def _rebalance_plan(
                             if daily_calorie_boosts.get(
                                 (date_text, allocation.member_id), Decimal("0")
                             ) > 0
-                            or meal_calorie_boosts.get(
-                                (date_text, allocation.member_id, occurrence.meal_type),
-                                Decimal("0"),
-                            ) > 0
+                            or explicit_meal_boost > 0
                             else PORTIONS
                         ),
                         meal_type=occurrence.meal_type,
                         component_slot=batch.component_slot,
+                        meal_target=(
+                            participant_target if explicit_meal_boost > 0 else None
+                        ),
                     )
                 )
                 allocations_by_variable[key] = [allocation]
