@@ -38,6 +38,13 @@ The week view puts every planned meal, portion, batch, leftover, and nutrition
 summary in one place. Plans can be regenerated while keeping meals that you
 have already chosen.
 
+
+### Serving suggestions
+
+![Weekly meal plan](docs/screenshots/servings.png)
+
+Enter the total weight of what you cooked and see how much to give each person in the house based on nutitional goals.
+
 ### Work through constraints step by step
 
 ![Automatic planning wizard](docs/screenshots/plan.png)
