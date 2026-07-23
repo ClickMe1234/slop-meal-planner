@@ -8,7 +8,7 @@ The production target is an Unraid server on a trusted LAN. The repository also
 includes a demo mode so the complete responsive light/dark interface can be
 evaluated without accounts, a database, or publisher access.
 
-Current release: **0.9.1**. See [CHANGELOG.md](CHANGELOG.md) for the complete
+Current release: **0.10.0**. See [CHANGELOG.md](CHANGELOG.md) for the complete
 release history.
 
 ## Implemented features
