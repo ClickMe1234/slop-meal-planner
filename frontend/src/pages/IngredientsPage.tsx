@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Barcode, BookOpenCheck, ExternalLink, PackagePlus, Pencil, Plus, Search, Trash2, Wheat, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { api, type ApiDecimal, ApiError, isDemoMode, normaliseFoodQuery, type BackendFood, type BackendFoodLookup, type BackendMealType, type BackendSavedFood, type NutrientCode } from '../api/client'
 import { BarcodeScanner } from '../components/BarcodeScanner'
 import { FoodSearchSources, type FoodSearchSourceSelection } from '../components/FoodSearchSources'
@@ -29,6 +29,57 @@ function errorMessage(reason: unknown, fallback: string) {
 
 function foodNutrients(food: BackendFood) {
   return Object.fromEntries(food.nutrients.map((item) => [item.code, item.amount ?? null])) as Record<NutrientCode, ApiDecimal | null>
+}
+
+type MotionPoint = { x: number; y: number }
+type IngredientMotion = {
+  id: number
+  kind: 'library' | 'pantry'
+  name: string
+  from: MotionPoint
+  to: MotionPoint
+}
+
+function elementCentre(element: Element | null): MotionPoint {
+  const rect = element?.getBoundingClientRect()
+  if (!rect || (!rect.width && !rect.height)) return { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+}
+
+function visiblePantryLink(): Element | null {
+  return Array.from(document.querySelectorAll('a[href="/pantry"]')).find((element) => {
+    const rect = element.getBoundingClientRect()
+    return rect.width > 0 && rect.height > 0
+  }) ?? null
+}
+
+function ActionFlight({ motion, onDone }: { motion: IngredientMotion; onDone: () => void }) {
+  useEffect(() => {
+    const timeout = window.setTimeout(onDone, 950)
+    return () => window.clearTimeout(timeout)
+  }, [motion.id, onDone])
+
+  const style = {
+    left: motion.from.x,
+    top: motion.from.y,
+    '--flight-x': `${motion.to.x - motion.from.x}px`,
+    '--flight-y': `${motion.to.y - motion.from.y}px`,
+    '--flight-mid-x': `${(motion.to.x - motion.from.x) * 0.62}px`,
+    '--flight-mid-y': `${(motion.to.y - motion.from.y) * 0.62 - 42}px`,
+  } as CSSProperties
+  return (
+    <div className={`ingredient-action-flight ingredient-action-flight--${motion.kind}`} style={style} aria-hidden onAnimationEnd={onDone}>
+      {motion.kind === 'library' ? <BookOpenCheck /> : <PackagePlus />}
+      <span>{motion.name}</span>
+    </div>
+  )
+}
+
+export function filterSavedFoods(foods: BackendSavedFood[], query: string) {
+  const cleaned = normaliseFoodQuery(query).toLocaleLowerCase()
+  return cleaned
+    ? foods.filter((food) => food.display_name.toLocaleLowerCase().includes(cleaned))
+    : foods
 }
 
 function NutritionFacts({ nutrients, basisAmount, basisUnit }: { nutrients: Record<NutrientCode, ApiDecimal | null>; basisAmount: ApiDecimal; basisUnit: string }) {
@@ -69,8 +120,9 @@ function Dialog({ title, onClose, children, wide = false }: { title: string; onC
   )
 }
 
-function PantryDialog({ target, onClose }: { target: PantryTarget; onClose: () => void }) {
+export function PantryDialog({ target, onClose, onAdded }: { target: PantryTarget; onClose: () => void; onAdded: (name: string, origin: MotionPoint) => void }) {
   const queryClient = useQueryClient()
+  const submitOrigin = useRef<MotionPoint | null>(null)
   const packageKnown = Boolean(target.packageAmount && target.packageUnit)
   const [packages, setPackages] = useState('1')
   const [quantity, setQuantity] = useState(String(target.packageAmount ?? 1))
@@ -92,6 +144,7 @@ function PantryDialog({ target, onClose }: { target: PantryTarget; onClose: () =
       }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['pantry'] })
+      onAdded(target.name, submitOrigin.current ?? elementCentre(null))
       onClose()
     },
     onError: (reason) => setError(errorMessage(reason, 'The pantry quantity could not be added.')),
@@ -102,6 +155,7 @@ function PantryDialog({ target, onClose }: { target: PantryTarget; onClose: () =
         className="form-stack"
         onSubmit={(event) => {
           event.preventDefault()
+          submitOrigin.current = elementCentre(event.currentTarget.querySelector('[data-pantry-submit]'))
           mutation.mutate()
         }}
       >
@@ -151,7 +205,7 @@ function PantryDialog({ target, onClose }: { target: PantryTarget; onClose: () =
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={mutation.isPending}>
+          <Button data-pantry-submit disabled={mutation.isPending}>
             <PackagePlus size={18} />
             {mutation.isPending ? 'Adding…' : 'Add quantity'}
           </Button>
@@ -161,8 +215,9 @@ function PantryDialog({ target, onClose }: { target: PantryTarget; onClose: () =
   )
 }
 
-function ManualFoodDialog({ onClose }: { onClose: () => void }) {
+function ManualFoodDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (food: BackendSavedFood, origin: MotionPoint) => void }) {
   const queryClient = useQueryClient()
+  const submitOrigin = useRef<MotionPoint | null>(null)
   const [name, setName] = useState('')
   const [basisAmount, setBasisAmount] = useState('100')
   const [basisUnit, setBasisUnit] = useState<'g' | 'ml'>('g')
@@ -186,8 +241,9 @@ function ManualFoodDialog({ onClose }: { onClose: () => void }) {
           unit: code === 'energy_kcal' ? 'kcal' : 'g',
         })),
       }),
-    onSuccess: async () => {
+    onSuccess: async (saved) => {
       await queryClient.invalidateQueries({ queryKey: ['saved-foods'] })
+      onSaved(saved, submitOrigin.current ?? elementCentre(null))
       onClose()
     },
     onError: (reason) => setError(errorMessage(reason, 'The ingredient could not be saved.')),
@@ -198,6 +254,7 @@ function ManualFoodDialog({ onClose }: { onClose: () => void }) {
         className="form-stack"
         onSubmit={(event) => {
           event.preventDefault()
+          submitOrigin.current = elementCentre(event.currentTarget.querySelector('[data-save-ingredient]'))
           mutation.mutate()
         }}
       >
@@ -248,7 +305,7 @@ function ManualFoodDialog({ onClose }: { onClose: () => void }) {
           <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={mutation.isPending}>{mutation.isPending ? 'Saving…' : 'Save ingredient'}</Button>
+          <Button data-save-ingredient disabled={mutation.isPending}><BookOpenCheck size={17} />{mutation.isPending ? 'Saving…' : 'Save ingredient'}</Button>
         </div>
       </form>
     </Dialog>
@@ -382,7 +439,7 @@ function EditFoodDialog({ food, onClose }: { food: BackendSavedFood; onClose: ()
   )
 }
 
-function LookupCard({ food, onSave, onPantry, saving }: { food: BackendFoodLookup; onSave: () => void; onPantry: () => void; saving: boolean }) {
+export function LookupCard({ food, onSave, onPantry, saving }: { food: BackendFoodLookup; onSave: (origin: MotionPoint) => void; onPantry: () => void; saving: boolean }) {
   return (
     <Card className="ingredient-result-card">
       <div className="ingredient-result-heading">
@@ -400,7 +457,7 @@ function LookupCard({ food, onSave, onPantry, saving }: { food: BackendFoodLooku
         </small>
       ))}
       <div className="ingredient-card-actions">
-        <Button variant="secondary" disabled={saving} onClick={onSave}>
+        <Button disabled={saving} onClick={(event) => onSave(elementCentre(event.currentTarget))}>
           <BookOpenCheck size={17} />
           Save
         </Button>
@@ -420,6 +477,9 @@ function LookupCard({ food, onSave, onPantry, saving }: { food: BackendFoodLooku
 
 export function IngredientsPage() {
   const queryClient = useQueryClient()
+  const librarySection = useRef<HTMLElement>(null)
+  const motionSequence = useRef(0)
+  const savedHighlightTimer = useRef<number | null>(null)
   const [query, setQuery] = useState('')
   const [barcode, setBarcode] = useState('')
   const [lookup, setLookup] = useState<BackendFoodLookup | null>(null)
@@ -431,16 +491,40 @@ export function IngredientsPage() {
   const [pantryTarget, setPantryTarget] = useState<PantryTarget | null>(null)
   const [editing, setEditing] = useState<BackendSavedFood | null>(null)
   const [savingKey, setSavingKey] = useState('')
+  const [motion, setMotion] = useState<IngredientMotion | null>(null)
+  const [recentSavedId, setRecentSavedId] = useState('')
   const [searchSources, setSearchSources] = useState<FoodSearchSourceSelection>({ general: true, packaged: true })
   const [submittedQuery, setSubmittedQuery] = useState('')
   const normalisedQuery = normaliseFoodQuery(query)
   const resultsAreCurrent = submittedQuery === normalisedQuery && submittedQuery.length >= 2
 
+  useEffect(() => () => {
+    if (savedHighlightTimer.current) window.clearTimeout(savedHighlightTimer.current)
+  }, [])
+
+  const launchMotion = (kind: IngredientMotion['kind'], name: string, from: MotionPoint) => {
+    const target = kind === 'library' ? librarySection.current?.querySelector('.section-heading') ?? null : visiblePantryLink()
+    const rawDestination = elementCentre(target)
+    const to = {
+      x: Math.max(28, Math.min(window.innerWidth - 28, rawDestination.x)),
+      y: Math.max(28, Math.min(window.innerHeight - 28, rawDestination.y)),
+    }
+    motionSequence.current += 1
+    setMotion({ id: motionSequence.current, kind, name, from, to })
+  }
+  const celebrateSaved = (saved: BackendSavedFood, origin: MotionPoint) => {
+    setRecentSavedId(saved.id)
+    launchMotion('library', saved.display_name, origin)
+    if (savedHighlightTimer.current) window.clearTimeout(savedHighlightTimer.current)
+    savedHighlightTimer.current = window.setTimeout(() => setRecentSavedId(''), 1800)
+  }
+
   const library = useQuery({
-    queryKey: ['saved-foods', submittedQuery],
-    queryFn: () => api.listSavedFoods(submittedQuery),
+    queryKey: ['saved-foods'],
+    queryFn: () => api.listSavedFoods(),
     enabled: !isDemoMode,
   })
+  const visibleLibraryItems = filterSavedFoods(library.data?.items ?? [], normalisedQuery)
   const local = useQuery({
     queryKey: ['food-search', submittedQuery],
     queryFn: () => api.searchFoods(submittedQuery),
@@ -491,7 +575,7 @@ export function IngredientsPage() {
       packageAmount: saved.package_amount,
       packageUnit: saved.package_unit,
     })
-  const saveLookup = async (food: BackendFoodLookup, addToPantry: boolean) => {
+  const saveLookup = async (food: BackendFoodLookup, addToPantry: boolean, origin?: MotionPoint) => {
     setSavingKey(food.provider_record_id)
     setMessage('')
     try {
@@ -505,12 +589,14 @@ export function IngredientsPage() {
       await queryClient.invalidateQueries({ queryKey: ['saved-foods'] })
       setMessage(`${saved.display_name} is in your ingredient library.`)
       if (addToPantry) openPantry(saved)
+      else celebrateSaved(saved, origin ?? elementCentre(null))
     } catch (reason) {
       if (reason instanceof ApiError && reason.code === 'INGREDIENT_ALREADY_SAVED') {
         const all = await api.listSavedFoods('')
         const saved = all.items.find((item) => item.barcode === food.barcode)
         if (saved) {
           if (addToPantry) openPantry(saved)
+          else celebrateSaved(saved, origin ?? elementCentre(null))
           setMessage(`${saved.display_name} is already in your ingredient library.`)
           return
         }
@@ -520,7 +606,7 @@ export function IngredientsPage() {
       setSavingKey('')
     }
   }
-  const saveLocal = async (food: BackendFood, addToPantry: boolean) => {
+  const saveLocal = async (food: BackendFood, addToPantry: boolean, origin?: MotionPoint) => {
     setSavingKey(food.id)
     try {
       let saved = library.data?.items.find((item) => item.food_record_id === food.id)
@@ -533,12 +619,14 @@ export function IngredientsPage() {
       await queryClient.invalidateQueries({ queryKey: ['saved-foods'] })
       setMessage(`${saved.display_name} is in your ingredient library.`)
       if (addToPantry) openPantry(saved)
+      else celebrateSaved(saved, origin ?? elementCentre(null))
     } catch (reason) {
       if (reason instanceof ApiError && reason.code === 'INGREDIENT_ALREADY_SAVED') {
         const all = await api.listSavedFoods('')
         const saved = all.items.find((item) => item.food_record_id === food.id)
         if (saved) {
           if (addToPantry) openPantry(saved)
+          else celebrateSaved(saved, origin ?? elementCentre(null))
           setMessage(`${saved.display_name} is already in your ingredient library.`)
           return
         }
@@ -645,7 +733,7 @@ export function IngredientsPage() {
               <h2>We found this product</h2>
             </div>
           </div>
-          <LookupCard food={lookup} saving={savingKey === lookup.provider_record_id} onSave={() => void saveLookup(lookup, false)} onPantry={() => void saveLookup(lookup, true)} />
+          <LookupCard food={lookup} saving={savingKey === lookup.provider_record_id} onSave={(origin) => void saveLookup(lookup, false, origin)} onPantry={() => void saveLookup(lookup, true)} />
         </section>
       )}
       {searchSources.packaged && resultsAreCurrent && packagedQuery === submittedQuery && (packagedSearch.isPending || packagedSearch.isSuccess) && (
@@ -662,7 +750,7 @@ export function IngredientsPage() {
           ) : packagedResults.length ? (
             <div className="ingredient-results-grid">
               {packagedResults.map((food) => (
-                <LookupCard key={food.provider_record_id} food={food} saving={savingKey === food.provider_record_id} onSave={() => void saveLookup(food, false)} onPantry={() => void saveLookup(food, true)} />
+                <LookupCard key={food.provider_record_id} food={food} saving={savingKey === food.provider_record_id} onSave={(origin) => void saveLookup(food, false, origin)} onPantry={() => void saveLookup(food, true)} />
               ))}
             </div>
           ) : (
@@ -698,7 +786,8 @@ export function IngredientsPage() {
                   </div>
                   <NutritionFacts nutrients={foodNutrients(food)} basisAmount={food.basis_amount} basisUnit={food.basis_unit} />
                   <div className="ingredient-card-actions">
-                    <Button variant="secondary" disabled={savingKey === food.id} onClick={() => void saveLocal(food, false)}>
+                    <Button disabled={savingKey === food.id} onClick={(event) => void saveLocal(food, false, elementCentre(event.currentTarget))}>
+                      <BookOpenCheck size={17} />
                       Save
                     </Button>
                     <Button disabled={savingKey === food.id} onClick={() => void saveLocal(food, true)}>
@@ -719,20 +808,20 @@ export function IngredientsPage() {
         </section>
       )}
 
-      <section className="ingredient-section">
+      <section ref={librarySection} className={`ingredient-section saved-library-section${motion?.kind === 'library' ? ' saved-library-section--receiving' : ''}`}>
         <div className="section-heading">
           <div>
             <p className="eyebrow">Your library</p>
             <h2>Saved household ingredients</h2>
           </div>
-          <Badge tone="green">{library.data?.total ?? 0} saved</Badge>
+          <Badge tone="green">{normalisedQuery ? `${visibleLibraryItems.length} of ${library.data?.total ?? 0}` : library.data?.total ?? 0} saved</Badge>
         </div>
         {library.isLoading ? (
           <Loading label="Opening the library…" />
-        ) : library.data?.items.length ? (
+        ) : visibleLibraryItems.length ? (
           <div className="saved-food-grid">
-            {library.data.items.map((food) => (
-              <Card className="saved-food-card" key={food.id}>
+            {visibleLibraryItems.map((food) => (
+              <Card className={`saved-food-card${recentSavedId === food.id ? ' saved-food-card--new' : ''}`} key={food.id}>
                 <div className="saved-food-title">
                   <div>
                     <Badge tone={food.planner_enabled ? 'green' : undefined}>{food.planner_enabled ? 'Planner ready' : food.provider.replaceAll('_', ' ')}</Badge>
@@ -773,13 +862,16 @@ export function IngredientsPage() {
               </Card>
             ))}
           </div>
+        ) : normalisedQuery && library.data?.total ? (
+          <EmptyState icon={<Search />} title="No saved ingredients match" description="Try a shorter search, or save one of the nutrition matches above." />
         ) : (
           <EmptyState icon={<Wheat />} title="Your ingredient shelf is empty" description="Scan a barcode, choose a search result, or add the first nutrition label manually." action={<Button onClick={() => setManualOpen(true)}>Add an ingredient</Button>} />
         )}
       </section>
 
-      {manualOpen && <ManualFoodDialog onClose={() => setManualOpen(false)} />}
-      {pantryTarget && <PantryDialog target={pantryTarget} onClose={() => setPantryTarget(null)} />}
+      {motion && <ActionFlight motion={motion} onDone={() => setMotion(null)} />}
+      {manualOpen && <ManualFoodDialog onClose={() => setManualOpen(false)} onSaved={(saved, origin) => { setMessage(`${saved.display_name} is in your ingredient library.`); celebrateSaved(saved, origin) }} />}
+      {pantryTarget && <PantryDialog target={pantryTarget} onClose={() => setPantryTarget(null)} onAdded={(name, origin) => launchMotion('pantry', name, origin)} />}
       {editing && <EditFoodDialog food={editing} onClose={() => setEditing(null)} />}
     </div>
   )

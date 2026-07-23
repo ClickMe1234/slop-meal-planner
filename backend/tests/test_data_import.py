@@ -92,6 +92,7 @@ def test_open_food_facts_provider_normalises_package_and_serving_units():
             "product_quantity": 1.5,
             "product_quantity_unit": "l",
             "serving_size": "250 ml",
+            "image_front_url": "https://images.openfoodfacts.org/images/products/12345678/front_en.3.400.jpg",
             "nutriments": {
                 "energy-kcal_100g": 42,
                 "proteins_100g": 0,
@@ -105,6 +106,7 @@ def test_open_food_facts_provider_normalises_package_and_serving_units():
     assert food.metadata["package_unit"] == "ml"
     assert food.metadata["serving_amount"] == "250"
     assert food.metadata["source_url"].endswith("/12345678")
+    assert food.metadata["image_url"] == "https://images.openfoodfacts.org/images/products/12345678/front_en.3.400.jpg"
 
 
 def test_persistence_upsert_replaces_old_nutrients_and_records_provenance(db):

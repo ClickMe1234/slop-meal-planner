@@ -312,6 +312,7 @@ class FoodLookupOut(APIModel):
     serving_amount: Decimal | None = None
     serving_unit: Literal["g", "ml"] | None = None
     source_url: str | None = None
+    image_url: str | None = None
     attribution: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
@@ -403,6 +404,7 @@ class SavedFoodOut(APIModel):
     package_amount: Decimal | None = None
     package_unit: str | None = None
     source_url: str | None = None
+    image_url: str | None = None
     attribution: str | None = None
     warnings: list[str] = Field(default_factory=list)
     version: int
