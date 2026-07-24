@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.1 - 2026-07-24
+
+- Combine shopping-list ingredients by their reviewed display identity so
+  equivalent recipe requirements such as `beetroot` and `raw beetroot` are
+  added together.
+- Suggest strong fuzzy pantry matches even when equivalent ingredients use
+  different nutrition records, including `protein powder` and
+  `vanilla protein powder`.
+- Refresh pantry match suggestions immediately after adding pantry stock.
+
 ## 1.0.0 - 2026-07-24
 
 - Promote the application and deployment metadata to the first stable release.
