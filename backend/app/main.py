@@ -9,12 +9,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import get_settings
-from .db import engine
 from .errors import DomainError
+from .health import check_database, check_redis
 from .routes.auth_routes import router as auth_router
 from .routes.discovery_routes import close_discovery_client, router as discovery_router
 from .routes.food_routes import router as food_router
@@ -35,7 +34,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="Meal Planner API",
-        version="0.9.2",
+        version=os.getenv("APP_VERSION", "0.11.0"),
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
         lifespan=lifespan,
@@ -61,11 +60,10 @@ def create_app() -> FastAPI:
 
     @app.get(f"{prefix}/health/ready", tags=["system"])
     def ready() -> dict[str, str]:
-        try:
-            with engine.connect() as connection:
-                connection.execute(text("SELECT 1"))
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail="Database is unavailable") from exc
+        if not check_database():
+            raise HTTPException(status_code=503, detail="Database is unavailable")
+        if not check_redis():
+            raise HTTPException(status_code=503, detail="Redis is unavailable")
         return {"status": "ready"}
 
     @app.exception_handler(DomainError)

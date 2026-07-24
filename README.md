@@ -2,7 +2,7 @@
 
 > A free, self-hosted meal planner for real households.
 
-Current release: **0.10.0**. See the [latest release notes](#changelog) or the
+Current release: **0.11.0**. See the [latest release notes](#changelog) or the
 [full changelog](CHANGELOG.md).
 
 ## About
@@ -91,6 +91,13 @@ Fuzzy matching of shopping list to pantry ingredients supported!
 
 ## Changelog
 
+### 0.11.0 - 2026-07-24
+
+- Add a production Unraid WebGUI deployment using the public immutable GHCR image.
+- Run the web server, worker, and scheduler under one supervised container with
+  friendly PostgreSQL/Redis configuration, readiness checks, and bundled backup/restore roles.
+- Keep the five-service Compose deployment available as an alternative.
+
 ### 0.10.0 - 2026-07-23
 
 - Add onboarding for API-key setup, nutrition targets, household members, and
@@ -122,44 +129,64 @@ npm run dev
 Open `http://localhost:5173`. The Vite development server runs in demo mode by
 default.
 
-### Self-host with Docker Compose
+### Production install through the Unraid WebGUI
 
-The supported production deployment is Docker Compose on an Unraid server or
-another trusted home-LAN machine. Docker Compose v2 and Git are required.
+Unraid is the primary production path. This uses one Slop container and
+separately installed PostgreSQL and Redis containers; no Git checkout or Docker
+Compose Manager is required for the application container.
+
+1. Install or identify standalone PostgreSQL 15–18 and Redis 7.2/7.4 first.
+   Create a dedicated `meal_planner` database and role, and reserve Redis
+   logical databases `0` and `1`. Publish their ports for the zero-CLI Bridge
+   setup, or use the safer user-defined Docker bridge described in
+   [`deploy/README.md`](deploy/README.md).
+2. Generate three independent values with `openssl rand -hex 32`: a PostgreSQL
+   password, `MEAL_PLANNER_SECRET_KEY`, and `MEAL_PLANNER_SETUP_TOKEN`.
+3. In Unraid Apps, choose **Add Container** and use the exact values in
+   [`deploy/unraid-template.xml`](deploy/unraid-template.xml):
+   `ghcr.io/clickme1234/slop-meal-planner:0.11.0` as Repository, `Bridge` as
+   Network Type, `Shell` as the console shell, Privileged off, and `--init` as
+   Extra Parameters. The Repository is a Docker image reference, not the GitHub
+   source URL. Leave Post Arguments blank.
+4. Add the Web UI Port mapping `8080:8000` (the host side may be changed), map
+   `/mnt/user/appdata/slop-meal-planner/data` to `/data`, and map
+   `/mnt/user/backups/slop-meal-planner` to `/backups`.
+5. Add the visible PostgreSQL, Redis, secret, host, cookie, timezone, PUID, and
+   PGID variables. Set `MEAL_PLANNER_ALLOWED_HOSTS` to the actual Unraid LAN IP,
+   hostnames, and any reverse-proxy name used by household devices. Keep
+   `MEAL_PLANNER_COOKIE_SECURE=false` for direct HTTP; set it to `true` only
+   behind HTTPS.
+6. Start PostgreSQL and Redis before Slop. Slop still retries dependencies for
+   up to 120 seconds, then runs migrations once and starts its web, worker, and
+   scheduler processes. Open the selected host port and use the setup token to
+   create the owner.
+
+The image supports optional advanced full-URL overrides for existing deployments
+and safely encodes reserved characters, IPv6 hosts, and Redis ACL credentials.
+Only one `all` container should run because multiple Celery Beat schedulers
+would duplicate scheduled work. Do not forward the application, PostgreSQL, or
+Redis ports from the router to the internet.
+
+See [`deploy/README.md`](deploy/README.md) for the complete field table,
+networking choices, backups, restore, upgrades, and troubleshooting.
+
+### Self-host with Docker Compose (alternative)
+
+The existing five-service Compose deployment remains supported for Unraid
+Docker Compose Manager and other trusted home-LAN machines. It runs web,
+worker, scheduler, PostgreSQL, and Redis separately.
 
 ```sh
 git clone https://github.com/ClickMe1234/slop-meal-planner.git
 cd slop-meal-planner
 cp deploy/.env.example deploy/.env
-```
-
-Generate three different secrets and put them in `deploy/.env` as
-`POSTGRES_PASSWORD`, `SECRET_KEY`, and `SETUP_TOKEN`:
-
-```sh
-openssl rand -hex 32
-openssl rand -hex 32
-openssl rand -hex 32
-```
-
-Before starting the stack, set at least `APPDATA_ROOT`, `BACKUP_ROOT`,
-`ALLOWED_HOSTS`, and an immutable `APP_VERSION` in `deploy/.env`. On Unraid,
-the usual paths are `/mnt/user/appdata/meal-planner` and
-`/mnt/user/backups/meal-planner`.
-
-Validate the configuration and start all five services:
-
-```sh
 docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
 docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --build postgres redis web worker scheduler
-docker compose --env-file deploy/.env -f deploy/compose.yaml ps
 ```
 
-Open `http://<your-host>:8080`. On the first run, use the private
-`SETUP_TOKEN` from `deploy/.env` to create the owner account. Do not expose the
-web port through router forwarding. For the complete Unraid setup, HTTPS
-barcode-scanning notes, backups, restore procedures, upgrades, and
-troubleshooting, read [deploy/README.md](deploy/README.md).
+Generate independent PostgreSQL, application, and setup secrets before
+starting, keep `APP_VERSION` immutable, and follow the Compose backup/restore
+workflow in [`deploy/README.md`](deploy/README.md).
 
 ### Developer setup on Windows
 

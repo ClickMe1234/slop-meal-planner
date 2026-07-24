@@ -46,6 +46,11 @@ done
 )
 pg_restore --list "$backup_dir/database.dump" >/dev/null
 
+# Inspect the tar archive before changing either the database or application
+# data.  Backups created by Slop use paths below `.`; the validator rejects
+# traversal, absolute paths, unsafe links, and special files.
+python -m app.restore_validation "$backup_dir/data.tar.gz"
+
 echo "Restoring database $PGDATABASE from $backup_dir"
 psql --dbname=postgres --set=ON_ERROR_STOP=1 --command="
   SELECT pg_terminate_backend(pid)
@@ -64,6 +69,6 @@ pg_restore \
 echo "Restoring application files"
 mkdir -p "$DATA_DIR"
 find "$DATA_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-tar -xzf "$backup_dir/data.tar.gz" -C "$DATA_DIR"
+tar -xzf "$backup_dir/data.tar.gz" --no-same-owner --no-overwrite-dir -C "$DATA_DIR"
 
 echo "Restore completed successfully"
