@@ -1,5 +1,11 @@
 # Repository contribution instructions
 
+## Canonical checkout
+
+- This checkout at `C:\GitHub\slop-meal-planner\` is the only active project repository.
+- Perform all development, branch creation, commits, pulls, and pushes from this checkout only.
+- Before committing or pushing, verify that `git rev-parse --show-toplevel` resolves to `C:\GitHub\slop-meal-planner` and that `git remote get-url origin` returns `https://github.com/ClickMe1234/slop-meal-planner.git`.
+
 ## Release metadata
 
 - Every pull request intended for merge must include a Semantic Versioning bump appropriate to its scope.

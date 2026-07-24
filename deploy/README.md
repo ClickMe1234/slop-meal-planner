@@ -33,7 +33,7 @@ In **Apps → Add Container**, use these main fields:
 | Field | Value |
 | --- | --- |
 | Name | `Slop Meal Planner` |
-| Repository | `ghcr.io/clickme1234/slop-meal-planner:0.11.0` |
+| Repository | `ghcr.io/clickme1234/slop-meal-planner:0.12.0` |
 | Network Type | `Bridge` |
 | Console shell | `Shell` / `sh` |
 | Privileged | Off |
@@ -45,8 +45,8 @@ The Repository field is a Docker image reference, not the GitHub source URL.
 No Label or Device entries are required. The GHCR package must be public so
 Unraid can pull it anonymously.
 
-For the `v0.11.0` release, verify once that
-`ghcr.io/clickme1234/slop-meal-planner:0.11.0` is public and that an
+For the `v0.12.0` release, verify once that
+`ghcr.io/clickme1234/slop-meal-planner:0.12.0` is public and that an
 unauthenticated `docker pull` succeeds. Later releases are not complete until
 the same anonymous-pull check passes for their immutable tag.
 
@@ -144,6 +144,26 @@ The image bundles PostgreSQL 18.4 `pg_dump`, `pg_restore`, `psql`, `dropdb`, and
 `createdb` clients for supported PostgreSQL 15–18 servers. The backup script
 finishes an `.incomplete` directory only after archive readability and checksums
 are valid. Schedule the backup role with Unraid User Scripts if desired.
+
+### Selective restore
+
+For a migration into an existing installation, open **Settings > Data & Backup**
+and choose **Restore selected data**. Select a backup folder, inspect its
+contents, choose the source household, and tick the domains to import. Recipes
+and their linked nutrition records, saved ingredients, pantry, shopping lists,
+plans, household settings, and user accounts can be selected independently.
+
+Selective restore merges missing records into the current household and keeps
+matching records already present. Active sessions and encrypted integration
+credentials are never imported, so the target installation's login and secret
+configuration remain in place. The feature can inspect older database archives;
+the imported copy is migrated inside a temporary database before it is read.
+
+The PostgreSQL account used by Slop must be allowed to create and drop a
+temporary database for this operation. If the target uses a restricted
+application role, grant that capability temporarily or perform the operation
+with the database administrator account, then restore the normal application
+credentials afterward. This is separate from the destructive full restore below.
 
 ### Restore
 

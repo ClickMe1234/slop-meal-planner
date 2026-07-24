@@ -65,6 +65,26 @@ class IntegrationCredentialUpdate(APIModel):
     api_key: str = Field(min_length=8, max_length=200, pattern=r"^\S+$")
 
 
+RestoreComponent = Literal[
+    "household",
+    "users",
+    "recipes",
+    "ingredients",
+    "pantry",
+    "shopping",
+    "plans",
+]
+
+
+class RestorePreviewRequest(APIModel):
+    archive: str = Field(min_length=1, max_length=80)
+    source_household_id: str | None = None
+
+
+class RestoreRequest(RestorePreviewRequest):
+    components: list[RestoreComponent] = Field(min_length=1, max_length=7)
+
+
 class MemberCreate(APIModel):
     name: str = Field(min_length=1, max_length=120)
 

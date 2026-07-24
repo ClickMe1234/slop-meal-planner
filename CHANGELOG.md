@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0 - 2026-07-24
+
+- Add owner-only selective backup restore from Settings → Data & backup.
+- Preview database archives, choose a source household, and import recipes, ingredients, pantry, shopping lists, plans, household settings, or user accounts independently.
+- Keep active sessions and encrypted integration credentials out of selective restores, merge matching records safely, and support older backup schemas through temporary migrations.
+
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
