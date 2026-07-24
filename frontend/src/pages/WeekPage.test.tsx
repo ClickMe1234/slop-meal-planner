@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { BackendPlanDetail } from '../api/client'
-import { BatchWeightControl, WeekPage, calorieBoostForDate, guestCountForOccurrence, occurrenceWeightPortions } from './WeekPage'
+import { BatchWeightControl, WeekPage, calorieBoostForDate, editPlanPath, guestCountForOccurrence, occurrenceWeightPortions } from './WeekPage'
 
 function renderWeek() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -12,6 +12,10 @@ function renderWeek() {
 }
 
 describe('WeekPage', () => {
+  it('builds a direct edit-workflow link for the current plan', () => {
+    expect(editPlanPath('plan with/slash')).toBe('/plan?plan=plan%20with%2Fslash&edit=setup')
+  })
+
   it('starts daily nutrition at zero and adds a recipe when it is marked cooked', async () => {
     const user = userEvent.setup()
     renderWeek()
