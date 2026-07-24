@@ -1,257 +1,199 @@
-# Meal Planner deployment and operations
+# Slop deployment and operations
 
-The supported production deployment is the five-service Docker Compose stack in
-[`compose.yaml`](compose.yaml):
+The primary production path is the Unraid **Add Container** WebGUI using the
+public immutable image. PostgreSQL and Redis are installed separately. The
+existing five-service Compose stack remains supported as an alternative.
 
-- `web`: FastAPI, the built React PWA, and database migrations.
-- `worker`: background imports, nutrition jobs, and planning work.
-- `scheduler`: scheduled maintenance and recurring jobs.
-- `postgres`: authoritative application data.
-- `redis`: the worker queue and disposable job results.
+## Unraid WebGUI installation
 
-Only the web port is published. PostgreSQL and Redis are reachable only on the
-private Compose network. The application is designed for a trusted home LAN; it
-must not be forwarded directly to the internet.
+### Install dependencies first
 
-## 1. Prepare an Unraid installation
+Install or identify standalone PostgreSQL 15–18 and Redis 7.2/7.4. Create a
+dedicated PostgreSQL database and role for Slop, normally `meal_planner`, and
+reserve two unused Redis logical databases, normally `0` for the broker and `1`
+for results. Existing services are supported if Slop can reach their host/IP
+and port. Redis Cluster and Sentinel URL shapes are not supported.
 
-Install Docker Compose Manager (or use Unraid's terminal with Docker Compose
-v2), copy this repository to a stable location, and open a terminal in the
-repository root.
+Generate three independent random values and keep them in a password manager:
 
-Create the configuration file:
+```sh
+openssl rand -hex 32  # PostgreSQL password
+openssl rand -hex 32  # MEAL_PLANNER_SECRET_KEY
+openssl rand -hex 32  # MEAL_PLANNER_SETUP_TOKEN
+```
+
+The application secret must be preserved permanently. Rotating it makes
+encrypted integration credentials unreadable. The setup token is used to
+create the first owner and should remain available for disaster recovery.
+
+### Add the application container
+
+In **Apps → Add Container**, use these main fields:
+
+| Field | Value |
+| --- | --- |
+| Name | `Slop Meal Planner` |
+| Repository | `ghcr.io/clickme1234/slop-meal-planner:0.11.0` |
+| Network Type | `Bridge` |
+| Console shell | `Shell` / `sh` |
+| Privileged | Off |
+| Extra Parameters | `--init` |
+| Post Arguments | Blank (the image defaults to `all`) |
+| Web UI | `http://[IP]:[PORT:8000]/` |
+
+The Repository field is a Docker image reference, not the GitHub source URL.
+No Label or Device entries are required. The GHCR package must be public so
+Unraid can pull it anonymously.
+
+For the `v0.11.0` release, verify once that
+`ghcr.io/clickme1234/slop-meal-planner:0.11.0` is public and that an
+unauthenticated `docker pull` succeeds. Later releases are not complete until
+the same anonymous-pull check passes for their immutable tag.
+
+Add these Port and Path entries through **Add another Port or Path**:
+
+| Type | Name | Container target | Default host value | Mode |
+| --- | --- | --- | --- | --- |
+| Port | Web UI | `8000` | `8080` | TCP |
+| Path | Application data | `/data` | `/mnt/user/appdata/slop-meal-planner/data` | Read/Write |
+| Path | Backups | `/backups` | `/mnt/user/backups/slop-meal-planner` | Read/Write |
+
+Only the host side of the Web UI port may be changed. Keep the container port
+at `8000`; the frontend is same-origin and needs no URL change. The container
+targets `/data` and `/backups` are persistent contracts.
+
+Add these always-visible Variables. The variable target is the exact value in
+the second column:
+
+| Name | Target | Default / guidance |
+| --- | --- | --- |
+| PostgreSQL host | `POSTGRES_HOST` | Unraid LAN IP, hostname, or reachable container name |
+| PostgreSQL port | `POSTGRES_PORT` | `5432` |
+| PostgreSQL database | `POSTGRES_DB` | `meal_planner` |
+| PostgreSQL user | `POSTGRES_USER` | `meal_planner` |
+| PostgreSQL password | `POSTGRES_PASSWORD` | Strong random value; masked |
+| Redis host | `REDIS_HOST` | Unraid LAN IP, hostname, or reachable container name |
+| Redis port | `REDIS_PORT` | `6379` |
+| Redis password | `REDIS_PASSWORD` | Strong value when Redis is LAN-published; masked |
+| Application secret | `MEAL_PLANNER_SECRET_KEY` | Independent random value ≥32 characters; masked |
+| Setup token | `MEAL_PLANNER_SETUP_TOKEN` | Independent random value ≥32 characters; masked |
+| Allowed hosts | `MEAL_PLANNER_ALLOWED_HOSTS` | Actual LAN IPs, hostnames, and proxy names |
+| Secure cookies | `MEAL_PLANNER_COOKIE_SECURE` | `false` for direct HTTP; `true` behind HTTPS |
+| Timezone | `TZ` | `Europe/London`; application timezone is derived from it |
+| Runtime user | `PUID` | `99` |
+| Runtime group | `PGID` | `100` |
+
+The template also exposes these advanced Variables for TLS, ACLs, retention,
+food providers, and existing connection URLs:
+
+| Target | Default |
+| --- | --- |
+| `POSTGRES_SSLMODE` | `prefer` |
+| `REDIS_USERNAME` | blank |
+| `REDIS_TLS` | `false` |
+| `REDIS_BROKER_DB` / `REDIS_RESULT_DB` | `0` / `1` (must differ) |
+| `MEAL_PLANNER_DATABASE_URL` | blank, masked override |
+| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | blank, masked overrides |
+| `LOG_LEVEL` | `INFO` |
+| `RETAIN_DAILY` / `RETAIN_WEEKLY` / `RETAIN_MONTHLY` | `14` / `8` / `12` |
+| `MEAL_PLANNER_USDA_API_KEY` | blank, masked |
+| `MEAL_PLANNER_REMOTE_FOOD_SEARCH_ENABLED` | `true` |
+| `MEAL_PLANNER_OPEN_FOOD_FACTS_ENABLED` | `true` |
+| `MEAL_PLANNER_OPEN_FOOD_FACTS_TIMEOUT_SECONDS` | `10` |
+
+When a full URL override is non-empty it wins over its friendly fields. The
+launcher validates supported standalone URLs, encodes credentials, and parses
+the PostgreSQL override back into `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+`PGPASSWORD`, and `PGSSLMODE` for backup/restore. Internal variables such as
+`DATA_DIR`, `BACKUP_ROOT`, `FRONTEND_DIST_DIR`, `RUN_MIGRATIONS`, and
+`CELERY_BEAT_SCHEDULE` are intentionally not GUI fields.
+
+Start PostgreSQL and Redis before Slop. Slop retries dependency startup for up
+to 120 seconds, then migrates once and starts one web server, one Celery worker,
+and one Celery Beat scheduler. If any process fails, the container exits so
+Unraid can restart the complete unit. Open the chosen host port and use the
+setup token to create the owner.
+
+### Networking choices
+
+The zero-CLI path puts all three containers on the default Bridge network. Give
+PostgreSQL and Redis chosen host ports and set `POSTGRES_HOST` and `REDIS_HOST`
+to the Unraid server's LAN IP. This is convenient but publishes those services
+to the LAN. Use strong credentials, do not forward any port from the router,
+and do not expose the server outside the trusted LAN.
+
+For stronger isolation, create one user-defined Docker bridge once, attach all
+three containers to it, use the PostgreSQL and Redis container names with their
+internal ports, and leave their host ports unpublished. User-defined bridges
+provide container-name resolution and better isolation. This advanced option
+requires the normal one-time Docker network setup; the application itself still
+uses the same variables.
+
+## Operations
+
+### Backups
+
+Create a verified backup from **Settings → Data & Backup**. It contains:
+
+- `database.dump`, a PostgreSQL custom-format archive;
+- `data.tar.gz`, the `/data` application files;
+- `manifest.txt`, application and schema metadata; and
+- `SHA256SUMS`, checksums for all three files.
+
+The image bundles PostgreSQL 18.4 `pg_dump`, `pg_restore`, `psql`, `dropdb`, and
+`createdb` clients for supported PostgreSQL 15–18 servers. The backup script
+finishes an `.incomplete` directory only after archive readability and checksums
+are valid. Schedule the backup role with Unraid User Scripts if desired.
+
+### Restore
+
+Stop the Slop container. Edit the same container and set Post Arguments once to:
+
+```text
+restore --confirm /backups/<daily|weekly|monthly>/<timestamp>
+```
+
+Apply/start it once, verify that the container exits successfully, then clear
+Post Arguments and start the normal `all` command. The restore verifies
+checksums, PostgreSQL archive readability, tar readability, and safe data paths
+before changing the database or `/data`; it never restarts application
+processes automatically. Existing databases may require temporary
+database-admin `POSTGRES_USER`/`POSTGRES_PASSWORD` values for the destructive
+recreate step. Do not restore while another Slop application container is
+running.
+
+### Upgrades and rollback
+
+Before an upgrade, create and verify a backup. Edit the immutable Repository tag
+to the desired release, pull/apply the image, and verify `/api/v1/health/ready`.
+Never roll back only the image after a database migration; restore the matching
+pre-upgrade backup before returning to an older image.
+
+`/api/v1/health/live` checks only that the process is running. Readiness checks
+PostgreSQL and every configured Redis endpoint with short timeouts. Redis is
+skipped only for local SQLite development when no Redis URL is configured.
+
+## Compose alternative
+
+Compose remains a five-service deployment: `web`, `worker`, `scheduler`,
+`postgres`, and `redis`. The documented baseline is PostgreSQL `17.10-bookworm`
+and Redis `7.4.9-alpine`; no PostgreSQL major-version data migration is
+performed.
 
 ```sh
 cp deploy/.env.example deploy/.env
-```
-
-Generate independent secrets. These commands print values; paste each value
-into its matching field in `deploy/.env` and do not save the terminal output in
-the repository:
-
-```sh
-openssl rand -hex 32
-openssl rand -hex 32
-openssl rand -hex 32
-```
-
-Use them for:
-
-1. `POSTGRES_PASSWORD`
-2. `SECRET_KEY`
-3. `SETUP_TOKEN`
-
-Keep the PostgreSQL password URL-safe because Compose embeds it in an internal
-connection URL. Hex output from the command above is safe. Set:
-
-- `APPDATA_ROOT=/mnt/user/appdata/meal-planner`
-- `BACKUP_ROOT=/mnt/user/backups/meal-planner`
-- `ALLOWED_HOSTS` to the Unraid hostname/IP and names used by household devices.
-- `WEB_PORT` to the desired LAN port (default `8080`).
-- `APP_VERSION` to an immutable release such as `0.10.0`; never use `latest`.
-- `OPEN_FOOD_FACTS_ENABLED=true` to permit read-only packaged-product lookup,
-  or `false` to disable that external service. The timeout defaults to eight
-  seconds.
-
-Create the host folders before first startup:
-
-```sh
-mkdir -p /mnt/user/appdata/meal-planner/data
-mkdir -p /mnt/user/appdata/meal-planner/postgres
-mkdir -p /mnt/user/appdata/meal-planner/redis
-mkdir -p /mnt/user/backups/meal-planner
-chown -R 99:100 /mnt/user/appdata/meal-planner/data
-chown -R 99:100 /mnt/user/backups/meal-planner
-```
-
-Validate and start the stack:
-
-```sh
 docker compose --env-file deploy/.env -f deploy/compose.yaml config --quiet
 docker compose --env-file deploy/.env -f deploy/compose.yaml up -d --build postgres redis web worker scheduler
-docker compose --env-file deploy/.env -f deploy/compose.yaml ps
 ```
 
-Open `http://<unraid-host>:8080`. The first-owner setup screen asks for the
-`SETUP_TOKEN`. After the owner exists, keep the token in the protected `.env`
-file for disaster recovery, but it cannot create a second owner.
-
-For a developer workstation, change `APPDATA_ROOT` to `./.runtime` and
-`BACKUP_ROOT` to `./backups`. Compose resolves these from the `deploy` directory.
-On Linux, also set `PUID` and `PGID` to the
-output of `id -u` and `id -g`.
-
-### HTTPS for live barcode scanning
-
-Browsers expose the live camera only in a secure context. `localhost` is treated
-as secure during development, but a phone opening a plain LAN URL such as
-`http://meal-planner:8080` cannot use live scan. Put the web service behind a
-trusted HTTPS reverse proxy or use a Tailscale certificate, add that hostname to
-`ALLOWED_HOSTS`, and set `COOKIE_SECURE=true`. Barcode photos and typed barcode
-numbers remain available without camera access.
-
-Open Food Facts access is read-only and requires outbound HTTPS from the `web`
-container. No Open Food Facts login or API key is required. Selected product
-records and their source attribution are stored in PostgreSQL and therefore in
-normal application backups.
-
-General-food search uses USDA FoodData Central. Household owners can enter a
-free private key in **Settings → System** after deployment. Alternatively,
-create a key at `https://fdc.nal.usda.gov/api-key-signup.html` and set `USDA_API_KEY` in
-`deploy/.env`. Do not rely on `DEMO_KEY` outside initial exploration: its shared
-quota is only 30 requests per hour and 50 per day. Keep a private key in the
-ignored `.env` file and never commit it.
-
-## 2. Routine commands
-
-Run commands from the repository root:
-
-```sh
-# Status and health
-docker compose --env-file deploy/.env -f deploy/compose.yaml ps
-
-# Application logs (secrets are deliberately not logged)
-docker compose --env-file deploy/.env -f deploy/compose.yaml logs -f --tail=200 web worker scheduler
-
-# Restart application processes without touching data services
-docker compose --env-file deploy/.env -f deploy/compose.yaml restart web worker scheduler
-
-# Stop the stack without deleting bind-mounted data
-docker compose --env-file deploy/.env -f deploy/compose.yaml down
-```
-
-Liveness and readiness URLs are:
-
-```text
-http://<unraid-host>:8080/api/v1/health/live
-http://<unraid-host>:8080/api/v1/health/ready
-```
-
-`live` confirms the process is running. `ready` confirms dependencies are ready
-and is the endpoint used by Docker health checks.
-
-## 3. Backups
-
-A backup contains:
-
-- `database.dump`: PostgreSQL custom-format archive.
-- `data.tar.gz`: custom images and application files.
-- `manifest.txt`: application/schema metadata.
-- `SHA256SUMS`: integrity checks for all three files.
-
-Create one manually:
+Run a Compose backup with:
 
 ```sh
 docker compose --env-file deploy/.env -f deploy/compose.yaml --profile maintenance run --rm backup
 ```
 
-Schedule that command nightly using the Unraid User Scripts plugin. The job is
-classified as:
-
-- `monthly` on the first day of a month (12 retained by default).
-- `weekly` on Sunday (8 retained by default).
-- `daily` otherwise (14 retained by default).
-
-The backup is written to an `.incomplete` directory and is made visible only
-after `pg_restore` can read the dump and checksums have been generated. Keep an
-additional copy on another physical device; Unraid parity is not a backup.
-
-### Test a restore
-
-List backup folders under the configured `BACKUP_ROOT`, then run:
-
-```sh
-sh deploy/scripts/restore-stack.sh daily/20260712-020000
-```
-
-Replace the example with an existing tier/timestamp. The wrapper:
-
-1. Stops web, worker, and scheduler.
-2. Verifies all backup checksums.
-3. Terminates database connections and recreates the application database.
-4. Replaces `/data` with the archived application files.
-5. Starts the stack only after a successful restore.
-
-This is intentionally destructive and requires the exact backup path. If a
-restore fails, application services remain stopped so the failure can be
-investigated without writing into a partial database.
-
-## 4. Upgrade and rollback
-
-Before every upgrade:
-
-```sh
-docker compose --env-file deploy/.env -f deploy/compose.yaml --profile maintenance run --rm backup
-```
-
-Then set an immutable `APP_VERSION` in `deploy/.env` and run:
-
-```sh
-docker compose --env-file deploy/.env -f deploy/compose.yaml build --pull
-docker compose --env-file deploy/.env -f deploy/compose.yaml up -d postgres redis web worker scheduler
-docker compose --env-file deploy/.env -f deploy/compose.yaml ps
-```
-
-The web entrypoint obtains a PostgreSQL advisory lock before running Alembic, so
-only one process can migrate at a time. Startup fails rather than serving a
-partially migrated application. Worker and scheduler wait for healthy web.
-
-Do not roll back only the image after a database migration. Restore the
-pre-upgrade backup, set the prior `APP_VERSION`, then start the prior image.
-
-## 5. Security notes
-
-- Never commit `deploy/.env`; it is ignored by Git and Docker build context.
-- Do not publish ports `5432` or `6379`.
-- Do not expose the web port through router port forwarding.
-- `COOKIE_SECURE=false` is necessary for plain HTTP on a LAN. Change it to
-  `true` if a trusted local reverse proxy or Tailscale supplies HTTPS.
-- Open Food Facts product data is community-contributed. Slop displays its
-  attribution and source link; operators redistributing extracted data should
-  review the Open Food Facts ODbL/database-contents licence obligations.
-- Add every actual hostname to `ALLOWED_HOSTS`; do not use `*`.
-- The application containers run as Unraid's `nobody:users` (`99:100`) by
-  default and have no Docker socket or privileged mode.
-- Database and Redis images use exact version tags. Review release notes before
-  changing a major version.
-
-## 6. Troubleshooting
-
-### Web is unhealthy
-
-```sh
-docker compose --env-file deploy/.env -f deploy/compose.yaml logs --tail=200 postgres web
-```
-
-Typical causes are an incorrectly URL-encoded PostgreSQL password, an invalid
-bind-folder owner, a missing required secret, or a failed migration.
-
-### Worker is not processing jobs
-
-```sh
-docker compose --env-file deploy/.env -f deploy/compose.yaml logs --tail=200 redis worker
-docker compose --env-file deploy/.env -f deploy/compose.yaml restart worker
-```
-
-Redis queue data is operational state, not authoritative household data. Do not
-restore an old Redis directory alongside a newer PostgreSQL backup.
-
-### Permission error under `/data`
-
-```sh
-chown -R 99:100 /mnt/user/appdata/meal-planner/data
-docker compose --env-file deploy/.env -f deploy/compose.yaml restart web worker scheduler
-```
-
-### PostgreSQL major-version upgrade
-
-Never point a new PostgreSQL major version at an old data directory. Create a
-verified application backup, deploy the new PostgreSQL major version with an
-empty data directory, and restore through the maintenance job.
-
-## 7. Unraid XML template
-
-`unraid-template.xml` documents the application-container fields used by Unraid
-Community Applications. It represents only `web`; PostgreSQL, Redis, worker and
-scheduler are still required. For that reason, Docker Compose Manager is the
-supported one-click stack and the XML is not a replacement for `compose.yaml`.
+For a restore, use `deploy/scripts/restore-stack.sh <tier>/<timestamp>`. It
+stops web, worker, and scheduler, validates the archive, restores the database
+and `/data`, and starts the application only after a successful restore. Keep an
+additional backup copy on another physical device; Unraid parity is not a
+backup.

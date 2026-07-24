@@ -3,6 +3,14 @@
 Every pull request that changes the application release updates `VERSION` and
 adds an entry here. Versions follow Semantic Versioning.
 
+## 0.11.0 - 2026-07-24
+
+- Add the production Unraid WebGUI deployment with the public immutable GHCR image.
+- Run Uvicorn, one Celery worker, and one Celery Beat scheduler under a supervised `all` runtime.
+- Add friendly PostgreSQL/Redis fields, encoded URL overrides, dependency readiness checks, and 120-second startup retries.
+- Bundle PostgreSQL 18.4 backup/restore client tools and add safe restore archive preflight.
+- Keep the five-service Compose deployment as an alternative and update its PostgreSQL/Redis baselines to 17.10/7.4.9.
+
 ## 0.10.0 - 2026-07-23
 
 - Guide new households through API-key setup, nutritional targets, household members, and meal allocations during onboarding.

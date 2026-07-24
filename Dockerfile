@@ -2,9 +2,9 @@
 
 ARG NODE_IMAGE=node:22.18.0-bookworm-slim
 ARG PYTHON_IMAGE=python:3.12.11-slim-bookworm
-ARG POSTGRES_IMAGE=postgres:17.5-bookworm
+ARG POSTGRES_TOOLS_IMAGE=postgres:18.4-bookworm
 
-FROM ${POSTGRES_IMAGE} AS postgres-tools
+FROM ${POSTGRES_TOOLS_IMAGE} AS postgres-tools
 
 FROM ${NODE_IMAGE} AS frontend-build
 WORKDIR /build/frontend
@@ -59,18 +59,26 @@ RUN apt-get update && \
     mkdir -p /app/backend /app/frontend/dist /data && \
     chown -R mealplanner:mealplanner /app /data
 
-# Debian Bookworm's default client is PostgreSQL 15.  Use the PostgreSQL 17
-# utility that matches the database image so in-app backups cannot fail with a
-# server/client version mismatch.
-COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_dump /usr/local/bin/pg_dump
-COPY --from=postgres-tools /usr/lib/postgresql/17/bin/pg_restore /usr/local/bin/pg_restore
+# Bundle PostgreSQL 18.4 client utilities.  pg_dump/pg_restore can work with
+# supported PostgreSQL 15-18 servers, while the database containers retain
+# their own lifecycle and major-version data directories.
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_dump /usr/local/bin/pg_dump
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/pg_restore /usr/local/bin/pg_restore
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/psql /usr/local/bin/psql
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/dropdb /usr/local/bin/dropdb
+COPY --from=postgres-tools /usr/lib/postgresql/18/bin/createdb /usr/local/bin/createdb
+COPY --from=postgres-tools /usr/lib/x86_64-linux-gnu/libpq.so.5.18 /usr/local/lib/libpq.so.5.18
+RUN ln -s libpq.so.5.18 /usr/local/lib/libpq.so.5 && ldconfig
 
 COPY --from=python-build /opt/venv /opt/venv
 COPY --chown=mealplanner:mealplanner backend/ /app/backend/
 COPY --from=frontend-build --chown=mealplanner:mealplanner /build/frontend/dist/ /app/frontend/dist/
 COPY --chown=mealplanner:mealplanner deploy/docker/entrypoint.sh /usr/local/bin/meal-planner-entrypoint
+COPY --chown=mealplanner:mealplanner deploy/docker/launcher.py /opt/meal-planner/launcher.py
 COPY --chown=mealplanner:mealplanner deploy/scripts/backup.sh /opt/meal-planner/backup.sh
-RUN chmod 0555 /usr/local/bin/meal-planner-entrypoint /opt/meal-planner/backup.sh
+COPY --chown=mealplanner:mealplanner deploy/scripts/restore.sh /opt/meal-planner/restore.sh
+RUN chmod 0555 /usr/local/bin/meal-planner-entrypoint /opt/meal-planner/launcher.py \
+    /opt/meal-planner/backup.sh /opt/meal-planner/restore.sh
 
 WORKDIR /app/backend
 EXPOSE 8000
@@ -79,4 +87,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"]
 
 ENTRYPOINT ["meal-planner-entrypoint"]
-CMD ["web"]
+CMD ["all"]
