@@ -6,6 +6,7 @@ import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader } from '..
 import { demoRecipes, demoWeek } from '../data/demo'
 import { api, isDemoMode, type BackendPlanDetail } from '../api/client'
 import { compareMealTypes } from './planner'
+import { safeExternalUrl, safeImageUrl } from '../lib/safeUrls'
 
 type NutritionTotals = { calories: number; protein: number; carbs: number; fat: number }
 const emptyNutrition = (): NutritionTotals => ({ calories: 0, protein: 0, carbs: 0, fat: 0 })
@@ -15,8 +16,9 @@ export function WeekPage() {
 }
 
 function RecipePreview({ imageUrl }: { imageUrl?: string }) {
+  const safeUrl = safeImageUrl(imageUrl)
   return <div className="meal-preview" aria-hidden="true">
-    {imageUrl ? <img src={imageUrl} alt=""/> : <ChefHat/>}
+    {safeUrl ? <img src={safeUrl} alt=""/> : <ChefHat/>}
   </div>
 }
 
@@ -38,8 +40,9 @@ function groupByMealType<T>(items: T[], key: (item: T) => string) {
 }
 
 function RecipeTitle({ title, sourceUrl }: { title: string; sourceUrl?: string }) {
-  return sourceUrl && sourceUrl !== '#'
-    ? <h3><a href={sourceUrl} target="_blank" rel="noreferrer">{title}<ExternalLink size={14}/></a></h3>
+  const safeUrl = safeExternalUrl(sourceUrl)
+  return safeUrl
+    ? <h3><a href={safeUrl} target="_blank" rel="noopener noreferrer">{title}<ExternalLink size={14}/></a></h3>
     : <h3>{title}</h3>
 }
 

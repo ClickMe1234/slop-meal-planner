@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import logging
+import re
 from threading import Lock
 from time import monotonic
 
@@ -16,6 +18,23 @@ from .ingredients import food_search_phrase
 REQUIRED_NUTRIENTS = {"energy_kcal", "protein_g", "carbohydrate_g", "fat_g"}
 _rate_limit_lock = Lock()
 _rate_limited_until = 0.0
+_API_KEY_PATTERN = re.compile(r"(?i)([?&]api_key=)[^&\s]+")
+
+
+class _ApiKeyRedactionFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        def redact(value: object) -> object:
+            return _API_KEY_PATTERN.sub(r"\1[REDACTED]", value) if isinstance(value, str) else value
+
+        record.msg = redact(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact(value) for value in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {key: redact(value) for key, value in record.args.items()}
+        return True
+
+
+logging.getLogger("httpx").addFilter(_ApiKeyRedactionFilter())
 
 
 class FoodDataCentralError(RuntimeError):
@@ -76,7 +95,7 @@ def fetch_and_cache_usda_foods(
                     "sortBy": "dataType.keyword",
                     "sortOrder": "asc",
                 },
-                headers={"User-Agent": "SlopMealPlanner/0.12.0"},
+                headers={"User-Agent": "SlopMealPlanner/1.0.0"},
             )
             if response.status_code == 429:
                 with _rate_limit_lock:

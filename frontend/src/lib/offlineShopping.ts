@@ -165,6 +165,22 @@ export function saveOfflineShoppingContext(context: OfflineShoppingContext): voi
   localStorage.setItem(contextFallbackKey, JSON.stringify(context))
 }
 
+export async function clearOfflineShoppingData(): Promise<void> {
+  localStorage.removeItem(shoppingFallbackKey)
+  localStorage.removeItem(mutationFallbackKey)
+  localStorage.removeItem(contextFallbackKey)
+  if (!('indexedDB' in window)) return
+  const db = await openDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction([shoppingStoreName, mutationStoreName], 'readwrite')
+    transaction.objectStore(shoppingStoreName).clear()
+    transaction.objectStore(mutationStoreName).clear()
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(transaction.error)
+  })
+  db.close()
+}
+
 export function shoppingAsText(items: ShoppingItem[]): string {
   const grouped = items
     .filter(item => !item.checked)

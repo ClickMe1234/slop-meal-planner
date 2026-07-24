@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Slop Meal Planner</Name>
-  <Repository>ghcr.io/clickme1234/slop-meal-planner:0.12.0</Repository>
+  <Repository>ghcr.io/clickme1234/slop-meal-planner:1.0.0</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>Bridge</Network>
   <MyIP></MyIP>
@@ -11,15 +11,15 @@
   <Project>https://github.com/ClickMe1234/slop-meal-planner</Project>
   <Overview>Production Slop Meal Planner application. This image runs the web server, Celery worker, and scheduler together. Install PostgreSQL and Redis separately first; the Repository value is the public Docker image, not the GitHub source URL.</Overview>
   <Category>Productivity: Tools:</Category>
-  <WebUI>http://[IP]:[PORT:8000]/</WebUI>
+  <WebUI>https://[IP]:[PORT:8000]/</WebUI>
   <Icon></Icon>
-  <ExtraParams>--init</ExtraParams>
+  <ExtraParams>--init --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m --security-opt no-new-privileges --cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID</ExtraParams>
   <PostArgs></PostArgs>
   <CPUset></CPUset>
   <DateInstalled></DateInstalled>
   <DonateText></DonateText>
   <DonateLink></DonateLink>
-  <Requires>PostgreSQL 15-18 and standalone Redis 7.2/7.4 installed separately. Use one Slop container because Celery Beat must run once.</Requires>
+  <Requires>PostgreSQL 15-18, Redis 7.2/7.4, and an HTTPS reverse proxy or authenticated private overlay. Use one Slop container because Celery Beat must run once.</Requires>
   <Config Name="Web UI" Target="8000" Default="8080" Mode="tcp" Description="Choose the LAN host port. Keep the container target at 8000." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
   <Config Name="Application data" Target="/data" Default="/mnt/user/appdata/slop-meal-planner/data" Mode="rw" Description="Persistent application files. The container target must remain /data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/slop-meal-planner/data</Config>
   <Config Name="Backups" Target="/backups" Default="/mnt/user/backups/slop-meal-planner" Mode="rw" Description="Verified database and application-data archives. The container target must remain /backups." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/backups/slop-meal-planner</Config>
@@ -34,7 +34,8 @@
   <Config Name="Application secret key" Target="MEAL_PLANNER_SECRET_KEY" Default="" Mode="" Description="Independent random value of at least 32 characters. Preserve it permanently because rotating it makes encrypted integration credentials unreadable." Type="Variable" Display="always" Required="true" Mask="true"></Config>
   <Config Name="Setup token" Target="MEAL_PLANNER_SETUP_TOKEN" Default="" Mode="" Description="Independent random value of at least 32 characters used to create the first owner." Type="Variable" Display="always" Required="true" Mask="true"></Config>
   <Config Name="Allowed hosts" Target="MEAL_PLANNER_ALLOWED_HOSTS" Default="localhost,127.0.0.1" Mode="" Description="Comma-separated actual LAN IPs, hostnames, and reverse-proxy names used to open Slop." Type="Variable" Display="always" Required="true" Mask="false">localhost,127.0.0.1</Config>
-  <Config Name="Secure cookies" Target="MEAL_PLANNER_COOKIE_SECURE" Default="false" Mode="" Description="Keep false for direct HTTP. Set true only behind trusted HTTPS." Type="Variable" Display="always" Required="true" Mask="false">false</Config>
+  <Config Name="Secure cookies" Target="MEAL_PLANNER_COOKIE_SECURE" Default="true" Mode="" Description="Required for the supported HTTPS deployment. Do not expose passwords or sessions over direct LAN HTTP." Type="Variable" Display="always" Required="true" Mask="false">true</Config>
+  <Config Name="HSTS" Target="MEAL_PLANNER_HSTS_ENABLED" Default="true" Mode="" Description="Send Strict-Transport-Security in the supported HTTPS deployment." Type="Variable" Display="always" Required="true" Mask="false">true</Config>
   <Config Name="Timezone" Target="TZ" Default="Europe/London" Mode="" Description="IANA timezone. The application timezone is derived from this value." Type="Variable" Display="always" Required="true" Mask="false">Europe/London</Config>
   <Config Name="Runtime user ID" Target="PUID" Default="99" Mode="" Description="Unraid nobody user ID." Type="Variable" Display="always" Required="true" Mask="false">99</Config>
   <Config Name="Runtime group ID" Target="PGID" Default="100" Mode="" Description="Unraid users group ID." Type="Variable" Display="always" Required="true" Mask="false">100</Config>

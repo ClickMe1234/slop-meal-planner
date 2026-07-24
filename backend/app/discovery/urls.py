@@ -106,3 +106,40 @@ def validate_fetch_url(
     if not addresses or any(not _is_public_address(address) for address in addresses):
         raise UnsafeUrlError("The URL resolves to a local or non-public network address")
     return canonical
+
+
+def resolve_fetch_url(
+    url: str,
+    *,
+    resolver: Callable[[str], Iterable[str]] | None = None,
+    allowed_hosts: set[str] | None = None,
+) -> tuple[str, tuple[str, ...]]:
+    """Validate a fetch URL and return the exact public addresses to pin.
+
+    Callers must connect to one of the returned addresses without resolving the
+    hostname again. This closes the DNS validation/connection race that a
+    rebinding name could otherwise exploit.
+    """
+
+    canonical = canonicalize_url(url)
+    host = urlsplit(canonical).hostname or ""
+    if allowed_hosts is not None and host not in {_normalise_host(x) for x in allowed_hosts}:
+        raise UnsafeUrlError("The URL host is not allowed for this source")
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        addresses = (str(literal),)
+    elif resolver is not None:
+        addresses = tuple(dict.fromkeys(resolver(host)))
+    else:
+        try:
+            addresses = tuple(
+                dict.fromkeys(row[4][0] for row in socket.getaddrinfo(host, None))
+            )
+        except OSError as exc:
+            raise UnsafeUrlError("The URL hostname could not be resolved") from exc
+    if not addresses or any(not _is_public_address(address) for address in addresses):
+        raise UnsafeUrlError("The URL resolves to a local or non-public network address")
+    return canonical, addresses

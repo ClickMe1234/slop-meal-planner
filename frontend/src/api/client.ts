@@ -174,7 +174,11 @@ export const api = {
     return result
   },
   logout: async () => {
-    await request<void>('/auth/logout', { method: 'POST' })
+    try {
+      await request<void>('/auth/logout', { method: 'POST' })
+    } catch (reason) {
+      if (!(reason instanceof ApiError) || reason.status !== 401) throw reason
+    }
     csrfToken = null
     sessionStorage.removeItem(csrfStorageKey)
   },

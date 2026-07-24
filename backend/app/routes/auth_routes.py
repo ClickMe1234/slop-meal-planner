@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
+from collections import defaultdict, deque
 import secrets
+import threading
+import time
 
-from fastapi import APIRouter, Depends, Response
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Request, Response
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..auth import (
@@ -30,6 +33,38 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+_login_lock = threading.Lock()
+_login_attempts: dict[str, deque[float]] = defaultdict(deque)
+_password_verifiers = threading.BoundedSemaphore(value=4)
+_dummy_password_hash = hash_password("not-a-real-account-password-value")
+
+
+def reset_login_security_state() -> None:
+    with _login_lock:
+        _login_attempts.clear()
+
+
+def _rate_limit_login(source: str, username: str) -> None:
+    settings = get_settings()
+    now = time.monotonic()
+    window_start = now - settings.login_rate_window_seconds
+    keys = (
+        (f"source:{source}", settings.login_rate_limit_per_source),
+        (f"account:{username}", settings.login_rate_limit_per_account),
+    )
+    with _login_lock:
+        for key, limit in keys:
+            attempts = _login_attempts[key]
+            while attempts and attempts[0] < window_start:
+                attempts.popleft()
+            if len(attempts) >= limit:
+                raise DomainError(
+                    "LOGIN_RATE_LIMITED",
+                    "Too many sign-in attempts. Wait before trying again.",
+                    429,
+                )
+        for key, _ in keys:
+            _login_attempts[key].append(now)
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -54,7 +89,7 @@ def setup_status(db: Session = Depends(get_db)) -> dict[str, bool]:
 def setup(payload: SetupRequest, response: Response, db: Session = Depends(get_db)):
     if (db.scalar(select(func.count(User.id))) or 0) > 0:
         raise DomainError("ALREADY_CONFIGURED", "The owner account already exists", 409)
-    if payload.setup_token != get_settings().setup_token:
+    if not secrets.compare_digest(payload.setup_token, get_settings().setup_token):
         raise DomainError("INVALID_SETUP_TOKEN", "The setup token is invalid", 403)
     household = Household(name=payload.household_name, timezone=get_settings().timezone)
     db.add(household)
@@ -78,10 +113,26 @@ def setup(payload: SetupRequest, response: Response, db: Session = Depends(get_d
 
 
 @router.post("/login", response_model=AuthOut)
-def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
+def login(
+    payload: LoginRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
     username = payload.username.strip().lower()
+    source = request.client.host if request.client else "unknown"
+    _rate_limit_login(source, username)
     user = db.scalar(select(User).where(func.lower(User.username) == username))
-    if user is None or not user.active or not verify_password(payload.password, user.password_hash):
+    if not _password_verifiers.acquire(timeout=0.25):
+        raise DomainError("LOGIN_BUSY", "Sign-in is temporarily busy. Try again shortly.", 503)
+    try:
+        password_valid = verify_password(
+            payload.password,
+            user.password_hash if user is not None else _dummy_password_hash,
+        )
+    finally:
+        _password_verifiers.release()
+    if user is None or not user.active or not password_valid:
         raise DomainError("INVALID_CREDENTIALS", "Username or password is incorrect", 401)
     raw_token, csrf = create_session(db, user)
     db.commit()
@@ -141,6 +192,12 @@ def change_password(
     context.user.password_hash = hash_password(payload.new_password)
     context.user.must_change_password = False
     context.user.version += 1
+    db.execute(
+        delete(UserSession).where(
+            UserSession.user_id == context.user.id,
+            UserSession.id != context.session.id,
+        )
+    )
     db.commit()
 
 

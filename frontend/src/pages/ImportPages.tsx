@@ -9,6 +9,7 @@ import { UsdaKeyGuidance } from '../components/UsdaKeyGuidance'
 import { Badge, Button, Card, Notice, PageHeader, ProgressBar } from '../components/ui'
 import { MealTypePicker, normaliseRecipeMealTypes, type RecipeMealType } from '../components/MealTypePicker'
 import { api, ApiError, isDemoMode, normaliseFoodQuery, type ApiDecimal, type BackendFood, type BackendFoodLookup, type BackendRecipeDetail, type NutrientCode } from '../api/client'
+import { openExternalUrl, safeExternalUrl } from '../lib/safeUrls'
 
 const INGREDIENT_UNITS = ['g', 'kg', 'mg', 'ml', 'l', 'tsp', 'tbsp', 'cup', 'clove', 'small', 'medium', 'large', 'item', 'slice', 'bunch', 'handful', 'can', 'tin', 'jar', 'packet', 'pack', 'bottle', 'sprig', 'stalk', 'head', 'fillet', 'piece', 'pinch', 'dash', 'splash']
 const MASS_FACTORS: Record<string, number> = {
@@ -358,7 +359,7 @@ export function RecipeImportPage() {
           <div>
             <p>We do not store the publisher's instructions. You will always cook from the original page.</p>
             <div className="button-row">
-              <Button variant="secondary" onClick={() => window.open(url)}>
+              <Button variant="secondary" disabled={!safeExternalUrl(url)} onClick={() => openExternalUrl(url)}>
                 <ExternalLink size={17} />
                 View source
               </Button>
@@ -891,7 +892,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
         description={publisherPreview ? `Nutrition is reported by ${publisherName} and will be used for planning when meal types are selected.` : `Nutrition from ${publisherName} is unavailable for this recipe.`}
         actions={
           recipe.data.source_url ? (
-            <Button variant="secondary" onClick={() => window.open(recipe.data.source_url)}>
+            <Button variant="secondary" disabled={!safeExternalUrl(recipe.data.source_url)} onClick={() => openExternalUrl(recipe.data.source_url)}>
               <ExternalLink />
               Original recipe
             </Button>

@@ -135,7 +135,7 @@ def supervise(environment: Mapping[str, str] | None = None) -> int:
         signal.SIGINT: signal.signal(signal.SIGINT, request_shutdown),
     }
     commands = {
-        "web": ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
+        "web": ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-server-header"],
         "worker": ["celery", "-A", "app.worker.celery_app", "worker", "--loglevel", source.get("LOG_LEVEL", "INFO")],
         "scheduler": [
             "celery",
@@ -192,7 +192,7 @@ def main(arguments: list[str] | None = None) -> int:
             return supervise(environment)
         if role == "web":
             return subprocess.run(
-                ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", *arguments],
+                ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-server-header", *arguments],
                 cwd=BACKEND_ROOT,
                 env=dict(environment),
                 check=False,
