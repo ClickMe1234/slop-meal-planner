@@ -81,7 +81,14 @@ def reserve_plan_batches(db: Session, household_id: str, batches: list[MealBatch
         for ingredient in version.ingredients:
             if not ingredient.included or not ingredient.food_record_id:
                 continue
-            if ingredient.quantity_grams is not None:
+            if (
+                ingredient.shopping_measurement_overridden
+                and ingredient.quantity is not None
+                and ingredient.unit
+            ):
+                required = Decimal(ingredient.quantity) * scale
+                unit = canonical_quantity_unit(ingredient.unit)
+            elif ingredient.quantity_grams is not None:
                 required, unit = Decimal(ingredient.quantity_grams) * scale, "g"
             elif ingredient.quantity is not None and ingredient.unit:
                 required = Decimal(ingredient.quantity) * scale

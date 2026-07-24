@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.0 - 2026-07-24
+
+- Debounce saved and remote recipe searches while keeping the customise page
+  and its previous results mounted.
+- Open generated shopping ingredients to see the saved recipes, ingredient
+  rows, plan quantities, and meal dates that contributed them.
+- Combine recipe-backed shopping lines and standardise their recipe-facing
+  names and units, requesting explicit equivalents when a conversion is not
+  safe to calculate.
+- Prefill the planner from ready or accepted plans and generate an editable
+  replacement without changing the accepted plan first.
+- Repoint uncooked current-plan batches to revised recipe versions and rebuild
+  pantry reservations and the active shopping list atomically.
+
 ## 1.0.1 - 2026-07-24
 
 - Combine shopping-list ingredients by their reviewed display identity so

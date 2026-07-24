@@ -20,11 +20,7 @@ from ..models import (
     FoodRecord,
     Job,
     JobStatus,
-    MealBatch,
-    MealPlan,
     RecipeTag,
-    PantryReservation,
-    PlanStatus,
     Recipe,
     RecipeEligibility,
     RecipeIngredient,
@@ -32,7 +28,6 @@ from ..models import (
     RecipePublisherTag,
     RecipeVersion,
     PublisherMetadataStatus,
-    ShoppingList,
 )
 from ..schemas import (
     FoodRecordCreate,
@@ -43,6 +38,7 @@ from ..schemas import (
     RecipeCreate,
     RecipeDetail,
     RecipeIngredientIn,
+    RecipePlanSyncOut,
     RecipeReviewUpdate,
     RecipeSummary,
 )
@@ -63,7 +59,7 @@ from ..services.ingredients import PARSER_VERSION, parse_ingredient
 from ..services.integration_credentials import effective_usda_key
 from ..services.regional_ingredients import convert_ingredient_text, equivalent_terms, query_for_locale
 from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
-from ..services.pantry import reserve_plan_batches
+from ..services.recipe_plan_sync import sync_recipe_versions_to_current_plans
 from ..services.saved_foods import accessible_food_record
 
 router = APIRouter(tags=["recipes and food data"])
@@ -545,74 +541,6 @@ def create_recipe(
     return _recipe_detail(db, recipe, context.user.ingredient_locale)
 
 
-def _resync_plan_batches_after_review(
-    db: Session,
-    household_id: str,
-    previous_version_id: str,
-    next_version_id: str,
-) -> None:
-    """Move editable plans to the reviewed version without touching completed shopping."""
-
-    batches = db.scalars(
-        select(MealBatch)
-        .join(MealPlan, MealPlan.id == MealBatch.meal_plan_id)
-        .where(
-            MealBatch.recipe_version_id == previous_version_id,
-            MealPlan.household_id == household_id,
-            MealPlan.status.in_([PlanStatus.READY.value, PlanStatus.ACCEPTED.value]),
-        )
-    ).all()
-    plan_ids = sorted({batch.meal_plan_id for batch in batches})
-    plans = {
-        plan.id: plan
-        for plan in db.scalars(
-            select(MealPlan)
-            .where(MealPlan.id.in_(plan_ids))
-            .order_by(MealPlan.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).all()
-    }
-    # A replacement may have completed while this review waited for a plan
-    # lock. Refresh the batches and only move those still using the reviewed
-    # version so the newer choice is never overwritten.
-    batch_ids = [batch.id for batch in batches]
-    batches = db.scalars(
-        select(MealBatch)
-        .where(
-            MealBatch.id.in_(batch_ids),
-            MealBatch.recipe_version_id == previous_version_id,
-        )
-        .execution_options(populate_existing=True)
-    ).all()
-    reserve_again: list[MealBatch] = []
-    changed_plans: set[str] = set()
-    for batch in batches:
-        plan = plans.get(batch.meal_plan_id)
-        if plan is None or plan.status not in {
-            PlanStatus.READY.value,
-            PlanStatus.ACCEPTED.value,
-        }:
-            continue
-        if plan.status == PlanStatus.ACCEPTED.value:
-            has_shopping_list = db.scalar(
-                select(ShoppingList.id).where(ShoppingList.meal_plan_id == plan.id).limit(1)
-            )
-            if has_shopping_list:
-                continue
-            db.execute(
-                delete(PantryReservation).where(PantryReservation.meal_batch_id == batch.id)
-            )
-            reserve_again.append(batch)
-        batch.recipe_version_id = next_version_id
-        changed_plans.add(plan.id)
-    for plan_id in changed_plans:
-        plans[plan_id].version += 1
-    if reserve_again:
-        db.flush()
-        reserve_plan_batches(db, household_id, reserve_again)
-
-
 @router.get("/recipes/{recipe_id}", response_model=RecipeDetail)
 def get_recipe(
     recipe_id: str,
@@ -694,15 +622,24 @@ def save_recipe_review(
     elif publisher_values(next_version) is not None:
         recipe.eligibility = RecipeEligibility.PLANNER_READY.value
     recipe.version += 1
-    _resync_plan_batches_after_review(
+    sync = sync_recipe_versions_to_current_plans(
         db,
         context.user.household_id,
-        previous.id,
-        next_version.id,
+        {previous.id: next_version.id},
     )
     db.commit()
     db.refresh(recipe)
-    return _recipe_detail(db, recipe, context.user.ingredient_locale)
+    detail = _recipe_detail(db, recipe, context.user.ingredient_locale)
+    return detail.model_copy(
+        update={
+            "plan_sync": RecipePlanSyncOut(
+                plans_updated=sync.plans_updated,
+                shopping_list_rebuilt=sync.shopping_list_rebuilt,
+                shopping_list_id=sync.shopping_list_id,
+                cooked_batches_unchanged=sync.cooked_batches_unchanged,
+            )
+        }
+    )
 
 
 @router.post("/recipes/{recipe_id}/calculate", response_model=NutritionCalculationOut)

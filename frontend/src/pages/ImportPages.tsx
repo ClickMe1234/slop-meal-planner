@@ -732,6 +732,8 @@ interface ImportedIngredientRow {
   optional: boolean
   needs_review: boolean
   shopping_excluded: boolean
+  shopping_measurement_overridden: boolean
+  shopping_group_key?: string
 }
 
 function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: ImportReviewPresentationProps = {}) {
@@ -786,6 +788,8 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
         optional: item.optional,
         needs_review: item.needs_review,
         shopping_excluded: item.shopping_excluded ?? false,
+        shopping_measurement_overridden: item.shopping_measurement_overridden ?? false,
+        shopping_group_key: item.shopping_group_key,
       })),
     )
   }, [recipe.data, suggestedMealTypes.join(',')])
@@ -836,6 +840,8 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
             needs_review: false,
             food_record_id: row.food_record_id,
             shopping_excluded: row.shopping_excluded,
+            shopping_measurement_overridden: row.shopping_measurement_overridden,
+            shopping_group_key: row.shopping_group_key,
           }
         }),
       }
@@ -933,6 +939,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
                             update(index, {
                               food_phrase: event.target.value,
                               needs_review: false,
+                              shopping_group_key: undefined,
                             })
                           }
                         />
@@ -951,6 +958,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
                             update(index, {
                               amount: event.target.value,
                               quantity_grams: gramsFor(event.target.value, row.unit) || row.quantity_grams,
+                              shopping_measurement_overridden: true,
                             })
                           }
                         />
@@ -965,6 +973,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
                             update(index, {
                               unit: event.target.value,
                               quantity_grams: gramsFor(row.amount, event.target.value),
+                              shopping_measurement_overridden: true,
                             })
                           }
                           placeholder="e.g. tbsp, clove, large"

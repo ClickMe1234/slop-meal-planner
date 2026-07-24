@@ -41,11 +41,114 @@ export interface IngredientChoice {
 
 export type IngredientGuidance = Record<'must' | 'prefer' | 'exclude', IngredientChoice[]>
 
+export interface PlannerSetup {
+  startDate: string
+  days: number
+  selectedMemberIds: string[]
+  attendance: AttendanceOverrides
+  cookStarts: CookStarts
+  foodSafetyAcknowledged: boolean
+  calorieBoosts: CalorieBoosts
+  calorieBoostShares: CalorieBoostMealShares
+  guestCounts: GuestCounts
+  guestMeals: GuestMeals
+  ingredientGuidance: IngredientGuidance
+}
+
 export const emptyIngredientGuidance = (): IngredientGuidance => ({
   must: [],
   prefer: [],
   exclude: [],
 })
+
+export function plannerSetupFromPlan(detail: BackendPlanDetail): PlannerSetup {
+  const main = detail.occurrences.filter(item => item.component_slot === 0)
+  const selectedMemberIds = Array.from(new Set(
+    main.flatMap(item => item.portions.map(portion => portion.member_id)),
+  ))
+  const dates = plannerDates(
+    detail.plan.start_date,
+    Math.max(1, Math.round((
+      new Date(`${detail.plan.end_date}T12:00:00`).getTime()
+      - new Date(`${detail.plan.start_date}T12:00:00`).getTime()
+    ) / (24 * 60 * 60 * 1000)) + 1),
+  )
+  const attendance: AttendanceOverrides = {}
+  for (const date of dates) {
+    for (const mealType of MEAL_TYPES) {
+      const occurrence = main.find(item => item.meal_date === date.iso && item.meal_type === mealType)
+      for (const memberId of selectedMemberIds) {
+        if (!occurrence?.portions.some(portion => portion.member_id === memberId)) {
+          attendance[attendanceKey(date.iso, mealType, memberId)] = false
+        }
+      }
+    }
+  }
+  const batchDates = new Map<string, { mealType: MealType; dates: string[] }>()
+  for (const occurrence of main) {
+    if (!MEAL_TYPES.includes(occurrence.meal_type as MealType)) continue
+    const batch = batchDates.get(occurrence.batch_id) ?? {
+      mealType: occurrence.meal_type as MealType,
+      dates: [],
+    }
+    batch.dates.push(occurrence.meal_date)
+    batchDates.set(occurrence.batch_id, batch)
+  }
+  const cookStarts: CookStarts = {}
+  let foodSafetyAcknowledged = false
+  for (const batch of batchDates.values()) {
+    const ordered = [...batch.dates].sort()
+    cookStarts[cookStartKey(ordered[0], batch.mealType)] = true
+    const start = new Date(`${ordered[0]}T12:00:00`).getTime()
+    const end = new Date(`${ordered.at(-1)}T12:00:00`).getTime()
+    if (end - start > 2 * 24 * 60 * 60 * 1000) foodSafetyAcknowledged = true
+  }
+  const calorieBoosts: CalorieBoosts = {}
+  const calorieBoostShares: CalorieBoostMealShares = {}
+  for (const boost of detail.plan.calorie_boosts ?? []) {
+    calorieBoosts[calorieBoostKey(boost.meal_date, boost.member_id)] = Number(boost.calories)
+    for (const allocation of boost.meal_allocations ?? []) {
+      if (MEAL_TYPES.includes(allocation.meal_type as MealType)) {
+        calorieBoostShares[calorieBoostMealKey(boost.meal_date, boost.member_id, allocation.meal_type as MealType)] = allocation.percentage
+      }
+    }
+  }
+  const guestCounts: GuestCounts = {}
+  const guestMeals: GuestMeals = {}
+  for (const day of detail.plan.guest_days ?? []) {
+    guestCounts[day.meal_date] = day.guest_count
+    for (const mealType of day.meal_types ?? []) {
+      if (MEAL_TYPES.includes(mealType as MealType)) {
+        guestMeals[guestMealKey(day.meal_date, mealType as MealType)] = true
+      }
+    }
+  }
+  const diagnostic = detail.plan.diagnostics.find(item => item.code === 'GENERATION_GUIDANCE') ?? {}
+  const guidance = (key: string): IngredientChoice[] => (
+    Array.isArray(diagnostic[key]) ? diagnostic[key] : []
+  ).filter((value): value is string => typeof value === 'string').map(term => ({
+    id: `restored:${term}`,
+    term,
+    name: capitalise(term),
+  }))
+  return {
+    startDate: detail.plan.start_date,
+    days: dates.length,
+    selectedMemberIds,
+    attendance,
+    cookStarts,
+    foodSafetyAcknowledged,
+    calorieBoosts,
+    calorieBoostShares,
+    guestCounts,
+    guestMeals,
+    ingredientGuidance: {
+      must: guidance('must_use_ingredient_terms'),
+      prefer: guidance('prefer_ingredient_terms'),
+      exclude: guidance('exclude_ingredient_terms'),
+    },
+  }
+}
 
 export function capitalise(value: string): string {
   return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value

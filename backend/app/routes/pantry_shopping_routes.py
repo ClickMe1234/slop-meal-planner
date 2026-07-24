@@ -1,4 +1,5 @@
 from decimal import Decimal
+import uuid
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -7,7 +8,19 @@ from sqlalchemy.orm import Session
 from ..auth import AuthContext, get_auth_context, require_csrf
 from ..db import get_db
 from ..errors import ConflictError, DomainError, NotFoundError
-from ..models import Household, MealBatch, MealPlan, PantryLot, PlanStatus, ShoppingItem, ShoppingList
+from ..models import (
+    FoodRecord,
+    Household,
+    MealBatch,
+    MealPlan,
+    PantryLot,
+    PlanStatus,
+    Recipe,
+    RecipeIngredient,
+    RecipeVersion,
+    ShoppingItem,
+    ShoppingList,
+)
 from ..schemas import (
     PantryAdjustment,
     PantryBatchDeleteOut,
@@ -19,10 +32,15 @@ from ..schemas import (
     PantryMatchSuggestion,
     ShoppingBuildRequest,
     ShoppingItemCreate,
+    ShoppingItemSourcesOut,
     ShoppingItemNameUpdate,
     ShoppingItemOut,
     ShoppingItemPatch,
     ShoppingListOut,
+    ShoppingIngredientChangeOut,
+    ShoppingIngredientChangePreviewOut,
+    ShoppingIngredientChangePreviewRequest,
+    ShoppingIngredientChangeRequest,
     ShoppingPantryMatchOut,
     ShoppingPantryMatchRequest,
     ShoppingPantryReviewOut,
@@ -38,12 +56,17 @@ from ..services.quantities import (
     round_quantity,
 )
 from ..services.shopping import build_shopping_list
+from ..services.recipe_plan_sync import (
+    clone_recipe_version_for_shopping,
+    sync_recipe_versions_to_current_plans,
+)
 from ..services.regional_ingredients import convert_ingredient_text
 from ..services.saved_foods import accessible_food_record
 from ..services.measurement_conversion import (
     available_display_units,
     convert_quantity_to_unit,
     measurement_dimension,
+    resolve_measurement_profile,
 )
 
 router = APIRouter(tags=["pantry and shopping"])
@@ -369,6 +392,14 @@ def _shopping_item_data(
         pantry_unit_conflicts=conflicts,
         pantry_match_suggestions=match_suggestions,
         pantry_confirmed_matches=confirmed_matches,
+        source_count=len(item.source_ingredients or []),
+        recipe_count=len(
+            {
+                str(source.get("recipe_id"))
+                for source in item.source_ingredients or []
+                if source.get("recipe_id")
+            }
+        ),
     )
     return data
 
@@ -516,6 +547,433 @@ def active_list(
     if shopping_list is None:
         raise NotFoundError("Active shopping list")
     return _shopping_out(db, shopping_list, context.user.ingredient_locale)
+
+
+def _shopping_item_sources(
+    db: Session,
+    shopping_list: ShoppingList,
+    items: list[ShoppingItem],
+) -> tuple[list[dict[str, object]], dict[str, RecipeIngredient]]:
+    raw_sources = [
+        source
+        for item in items
+        for source in (item.source_ingredients or [])
+        if isinstance(source, dict)
+    ]
+    if any(
+        bool(source.get("cooked"))
+        or bool(
+            source.get("batch_id")
+            and (batch := db.get(MealBatch, str(source["batch_id"]))) is not None
+            and batch.cooked_at is not None
+        )
+        for source in raw_sources
+    ):
+        raise DomainError(
+            "SHOPPING_SOURCE_ALREADY_COOKED",
+            "An ingredient from a cooked batch cannot be changed from the shopping list",
+        )
+    ingredient_ids = sorted(
+        {
+            str(source.get("recipe_ingredient_id"))
+            for source in raw_sources
+            if source.get("recipe_ingredient_id")
+        }
+    )
+    ingredients = {
+        ingredient.id: ingredient
+        for ingredient in db.scalars(
+            select(RecipeIngredient).where(RecipeIngredient.id.in_(ingredient_ids))
+        ).all()
+    }
+    if not raw_sources or len(ingredients) != len(ingredient_ids):
+        raise DomainError(
+            "SHOPPING_SOURCE_STALE",
+            "The recipe sources changed; reload the shopping list and try again",
+            409,
+        )
+    for source in raw_sources:
+        ingredient = ingredients.get(str(source.get("recipe_ingredient_id")))
+        if (
+            ingredient is None
+            or ingredient.recipe_version_id != source.get("recipe_version_id")
+        ):
+            raise DomainError(
+                "SHOPPING_SOURCE_STALE",
+                "The recipe sources changed; reload the shopping list and try again",
+                409,
+            )
+        version = db.get(RecipeVersion, ingredient.recipe_version_id)
+        recipe = db.get(Recipe, version.recipe_id) if version is not None else None
+        if recipe is None or recipe.household_id != shopping_list.household_id:
+            raise NotFoundError("Recipe ingredient")
+    return raw_sources, ingredients
+
+
+def _ingredient_source_measurement(
+    db: Session, ingredient: RecipeIngredient
+) -> tuple[Decimal, str, Decimal | None]:
+    food = db.get(FoodRecord, ingredient.food_record_id) if ingredient.food_record_id else None
+    profile = resolve_measurement_profile(
+        (
+            f"{ingredient.preparation} "
+            f"{ingredient.parsed_food_phrase or ingredient.food_phrase or ingredient.original_text}"
+            if ingredient.preparation
+            else None
+        ),
+        ingredient.parsed_food_phrase,
+        ingredient.food_phrase,
+        ingredient.original_text,
+        food.name if food is not None else None,
+    )
+    density = (
+        Decimal(food.density_g_per_ml)
+        if food is not None and food.density_g_per_ml is not None
+        else profile.density_g_per_ml if profile is not None else None
+    )
+    if (
+        ingredient.shopping_measurement_overridden
+        and ingredient.quantity is not None
+        and ingredient.unit
+    ):
+        return Decimal(ingredient.quantity), canonical_quantity_unit(ingredient.unit), density
+    if ingredient.quantity_grams is not None:
+        return Decimal(ingredient.quantity_grams), "g", density
+    if ingredient.quantity is not None and ingredient.unit:
+        return Decimal(ingredient.quantity), canonical_quantity_unit(ingredient.unit), density
+    raise DomainError(
+        "SHOPPING_SOURCE_QUANTITY_MISSING",
+        f"Review {ingredient.original_text} before changing its shopping unit",
+    )
+
+
+def _ingredient_change_preview(
+    db: Session,
+    shopping_list: ShoppingList,
+    items: list[ShoppingItem],
+    payload: ShoppingIngredientChangePreviewRequest,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    _, ingredients = _shopping_item_sources(db, shopping_list, items)
+    target_unit = canonical_quantity_unit(payload.target_unit)
+    conversions: list[dict[str, object]] = []
+    internal: list[dict[str, object]] = []
+    for ingredient in ingredients.values():
+        version = db.get(RecipeVersion, ingredient.recipe_version_id)
+        recipe = db.get(Recipe, version.recipe_id)
+        amount, unit, density = _ingredient_source_measurement(db, ingredient)
+        converted = convert_quantity_to_unit(amount, unit, target_unit, density)
+        target_quantity = (
+            round_quantity(converted, target_unit)
+            if converted is not None and converted > 0
+            else None
+        )
+        conversions.append(
+            {
+                "recipe_id": recipe.id,
+                "recipe_title": recipe.title,
+                "recipe_ingredient_id": ingredient.id,
+                "original_text": ingredient.original_text,
+                "current_quantity": round_quantity(amount, unit),
+                "current_unit": unit,
+                "target_quantity": target_quantity,
+                "target_unit": target_unit,
+                "manual_quantity_required": target_quantity is None,
+            }
+        )
+        internal.append(
+            {
+                "ingredient": ingredient,
+                "recipe": recipe,
+                "version": version,
+                "density": density,
+                "target_quantity": target_quantity,
+            }
+        )
+    conversions.sort(
+        key=lambda value: (
+            str(value["recipe_title"]).casefold(),
+            str(value["original_text"]).casefold(),
+        )
+    )
+    return (
+        {
+            "item_ids": payload.item_ids,
+            "target_name": payload.target_name.strip(),
+            "target_unit": target_unit,
+            "conversions": conversions,
+        },
+        internal,
+    )
+
+
+@router.get(
+    "/shopping-lists/{list_id}/items/{item_id}/sources",
+    response_model=ShoppingItemSourcesOut,
+)
+def shopping_item_sources(
+    list_id: str,
+    item_id: str,
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    shopping_list = db.get(ShoppingList, list_id)
+    item = db.get(ShoppingItem, item_id)
+    if (
+        shopping_list is None
+        or shopping_list.household_id != context.user.household_id
+        or item is None
+        or item.shopping_list_id != shopping_list.id
+    ):
+        raise NotFoundError("Shopping item")
+    grouped: dict[str, dict[str, object]] = {}
+    for source in item.source_ingredients or []:
+        ingredient_id = str(source.get("recipe_ingredient_id") or "")
+        if not ingredient_id:
+            continue
+        row = grouped.setdefault(
+            ingredient_id,
+            {
+                "recipe_id": str(source.get("recipe_id") or ""),
+                "recipe_title": str(source.get("recipe_title") or "Saved recipe"),
+                "recipe_version_id": str(source.get("recipe_version_id") or ""),
+                "recipe_ingredient_id": ingredient_id,
+                "original_text": str(source.get("original_text") or item.display_name),
+                "preparation": source.get("preparation"),
+                "recipe_quantity": source.get("recipe_quantity"),
+                "recipe_unit": source.get("recipe_unit"),
+                "plan_quantity": Decimal("0"),
+                "plan_unit": str(source.get("plan_unit") or item.unit),
+                "meal_dates": [],
+                "cooked": False,
+            },
+        )
+        row["plan_quantity"] = Decimal(str(row["plan_quantity"])) + Decimal(
+            str(source.get("plan_quantity") or 0)
+        )
+        row["meal_dates"] = sorted(
+            {
+                *row["meal_dates"],
+                *(source.get("meal_dates") or []),
+            }
+        )
+        batch = (
+            db.get(MealBatch, str(source["batch_id"]))
+            if source.get("batch_id")
+            else None
+        )
+        row["cooked"] = (
+            bool(row["cooked"])
+            or bool(source.get("cooked"))
+            or bool(batch and batch.cooked_at is not None)
+        )
+    sources = sorted(
+        grouped.values(),
+        key=lambda value: (
+            str(value["recipe_title"]).casefold(),
+            str(value["original_text"]).casefold(),
+        ),
+    )
+    return {
+        "item": _shopping_item_out(db, item, context.user.ingredient_locale),
+        "sources": sources,
+        "editable": bool(
+            shopping_list.active
+            and not item.manual
+            and sources
+            and not any(bool(source["cooked"]) for source in sources)
+        ),
+    }
+
+
+@router.post(
+    "/shopping-lists/{list_id}/ingredient-change/preview",
+    response_model=ShoppingIngredientChangePreviewOut,
+)
+def preview_shopping_ingredient_change(
+    list_id: str,
+    payload: ShoppingIngredientChangePreviewRequest,
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    shopping_list = db.get(ShoppingList, list_id)
+    items = db.scalars(
+        select(ShoppingItem).where(
+            ShoppingItem.shopping_list_id == list_id,
+            ShoppingItem.id.in_(payload.item_ids),
+        )
+    ).all()
+    if (
+        shopping_list is None
+        or shopping_list.household_id != context.user.household_id
+        or not shopping_list.active
+        or len(items) != len(payload.item_ids)
+    ):
+        raise NotFoundError("Shopping items")
+    if any(item.manual for item in items):
+        raise DomainError(
+            "SHOPPING_MANUAL_ITEM_UNLINKED",
+            "Manual shopping items cannot update saved recipes",
+        )
+    preview, _ = _ingredient_change_preview(db, shopping_list, items, payload)
+    return preview
+
+
+@router.post(
+    "/shopping-lists/{list_id}/ingredient-change",
+    response_model=ShoppingIngredientChangeOut,
+)
+def apply_shopping_ingredient_change(
+    list_id: str,
+    payload: ShoppingIngredientChangeRequest,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    shopping_list = db.scalar(
+        select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
+    )
+    items = db.scalars(
+        select(ShoppingItem)
+        .where(
+            ShoppingItem.shopping_list_id == list_id,
+            ShoppingItem.id.in_(payload.item_ids),
+        )
+        .order_by(ShoppingItem.id)
+        .with_for_update()
+    ).all()
+    if (
+        shopping_list is None
+        or shopping_list.household_id != context.user.household_id
+        or not shopping_list.active
+        or len(items) != len(payload.item_ids)
+    ):
+        raise NotFoundError("Shopping items")
+    if shopping_list.version != payload.expected_list_version:
+        raise ConflictError("The shopping list changed. Reload before saving recipe changes.")
+    if any(item.manual for item in items):
+        raise DomainError(
+            "SHOPPING_MANUAL_ITEM_UNLINKED",
+            "Manual shopping items cannot update saved recipes",
+        )
+    preview_payload = ShoppingIngredientChangePreviewRequest(
+        item_ids=payload.item_ids,
+        target_name=payload.target_name,
+        target_unit=payload.target_unit,
+    )
+    preview, internal = _ingredient_change_preview(
+        db, shopping_list, items, preview_payload
+    )
+    manual = {
+        value.recipe_ingredient_id: Decimal(value.quantity)
+        for value in payload.manual_conversions
+    }
+    required_ids = {
+        str(value["ingredient"].id)
+        for value in internal
+        if value["target_quantity"] is None
+    }
+    if required_ids != set(manual):
+        raise DomainError(
+            "SHOPPING_CONVERSION_REQUIRED",
+            "Enter an equivalent quantity for every conversion the app cannot calculate",
+        )
+    target_name = (
+        convert_ingredient_text(db, payload.target_name.strip(), "uk")
+        or payload.target_name.strip()
+    )
+    target_unit = str(preview["target_unit"])
+    combine_group = (
+        f"manual:{uuid.uuid4()}" if len(payload.item_ids) > 1 else None
+    )
+    changes_by_recipe: dict[str, dict[str, dict[str, object]]] = {}
+    versions_by_recipe: dict[str, RecipeVersion] = {}
+    recipes_by_id: dict[str, Recipe] = {}
+    for value in internal:
+        ingredient = value["ingredient"]
+        recipe = value["recipe"]
+        version = value["version"]
+        latest = db.scalar(
+            select(RecipeVersion)
+            .where(RecipeVersion.recipe_id == recipe.id)
+            .order_by(RecipeVersion.version_number.desc())
+            .with_for_update()
+        )
+        if latest is None or latest.id != version.id:
+            raise DomainError(
+                "SHOPPING_SOURCE_STALE",
+                f"{recipe.title} changed; reload the shopping list and try again",
+                409,
+            )
+        quantity = value["target_quantity"] or manual[ingredient.id]
+        density = value["density"]
+        grams = convert_quantity_to_unit(
+            Decimal(quantity), target_unit, "g", density
+        )
+        changes_by_recipe.setdefault(recipe.id, {})[ingredient.id] = {
+            "quantity": round_quantity(Decimal(quantity), target_unit),
+            "unit": target_unit,
+            "food_phrase": target_name,
+            "shopping_group_key": (
+                combine_group
+                if combine_group is not None
+                else ingredient.shopping_group_key
+            ),
+            "quantity_grams": (
+                round_quantity(grams, "g") if grams is not None else None
+            ),
+        }
+        versions_by_recipe[recipe.id] = version
+        recipes_by_id[recipe.id] = recipe
+    replacements: dict[str, str] = {}
+    for recipe_id in sorted(changes_by_recipe):
+        next_version = clone_recipe_version_for_shopping(
+            db,
+            recipes_by_id[recipe_id],
+            versions_by_recipe[recipe_id],
+            changes_by_recipe[recipe_id],
+        )
+        replacements[versions_by_recipe[recipe_id].id] = next_version.id
+    sync = sync_recipe_versions_to_current_plans(
+        db, context.user.household_id, replacements
+    )
+    if not sync.shopping_list_rebuilt or not sync.shopping_list_id:
+        raise DomainError(
+            "SHOPPING_LIST_NOT_REBUILT",
+            "The active shopping list could not be rebuilt from the updated recipes",
+        )
+    rebuilt = db.get(ShoppingList, sync.shopping_list_id)
+    rebuilt_items = db.scalars(
+        select(ShoppingItem).where(ShoppingItem.shopping_list_id == rebuilt.id)
+    ).all()
+    updated_recipe_ids = sorted(recipes_by_id)
+    result = next(
+        (
+            item
+            for item in rebuilt_items
+            if item.display_name.casefold() == target_name.casefold()
+            and updated_recipe_ids
+            and set(updated_recipe_ids).intersection(
+                {
+                    str(source.get("recipe_id"))
+                    for source in item.source_ingredients or []
+                }
+            )
+        ),
+        None,
+    )
+    if result is None:
+        raise DomainError(
+            "SHOPPING_RESULT_MISSING",
+            "The recipes were updated but the resulting shopping item was not found",
+        )
+    db.commit()
+    db.refresh(rebuilt)
+    return {
+        "shopping_list": _shopping_out(
+            db, rebuilt, context.user.ingredient_locale
+        ),
+        "result_item_id": result.id,
+        "updated_recipe_ids": updated_recipe_ids,
+    }
 
 
 @router.post("/shopping-lists/{list_id}/items", response_model=ShoppingItemOut, status_code=201)

@@ -17,6 +17,7 @@ import {
 } from '../api/client'
 import type { Nutrition } from '../types'
 import { safeExternalUrl, safeImageUrl } from '../lib/safeUrls'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { MEAL_TYPES, capitalise, readDemoPlan, storeDemoPlan, type MealType } from './planner'
 
 interface PickerRecipe {
@@ -43,6 +44,7 @@ export function PlanRecipePickerPage() {
   const [importingUrl, setImportingUrl] = useState('')
   const [error, setError] = useState<ApiError | null>(null)
   const [failedRecipe, setFailedRecipe] = useState<PickerRecipe | null>(null)
+  const debouncedQuery = useDebouncedValue(query.trim(), 350)
 
   const planQuery = useQuery({
     queryKey: ['plan', planId],
@@ -68,14 +70,15 @@ export function PlanRecipePickerPage() {
     : mealType ? [mealType] : []
 
   const savedRecipes = useQuery({
-    queryKey: ['recipes', 'picker', query, candidateTags.join(',')],
-    queryFn: () => api.listRecipes(query, candidateTags, [], 'any', true),
+    queryKey: ['recipes', 'picker', debouncedQuery, candidateTags.join(',')],
+    queryFn: () => api.listRecipes(debouncedQuery, candidateTags, [], 'any', true),
     enabled: !isDemoMode && Boolean(mealType),
+    placeholderData: previous => previous,
   })
   const remoteRecipes = useQuery({
-    queryKey: ['recipe-discovery', 'picker', query.trim()],
-    queryFn: () => api.searchRemote(query.trim(), `plan-picker-${occurrenceId}`, ['good_food', 'allrecipes']),
-    enabled: !isDemoMode && query.trim().length >= 2,
+    queryKey: ['recipe-discovery', 'picker', debouncedQuery],
+    queryFn: () => api.searchRemote(debouncedQuery, `plan-picker-${occurrenceId}`, ['good_food', 'allrecipes']),
+    enabled: !isDemoMode && debouncedQuery.length >= 2,
   })
 
   const recipes = useMemo<PickerRecipe[]>(() => {

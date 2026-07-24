@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.models import MealPlan, PlanStatus, RecipeVersion, ShoppingItem, ShoppingList
+from app.models import MealPlan, PlanStatus, RecipeIngredient, RecipeVersion, ShoppingItem, ShoppingList
 
 
 PUBLISHER_NUTRITION = {
@@ -98,6 +98,179 @@ def _generate(
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def test_shopping_sources_combine_and_recipe_unit_preview(client, owner, session_factory):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    recipe = _create_recipe(
+        client,
+        owner,
+        "Root vegetable tray",
+        ["dinner"],
+        ingredients=[
+            {
+                "original_text": "100 g carrots",
+                "quantity": 100,
+                "unit": "g",
+                "quantity_grams": 100,
+                "food_phrase": "carrots",
+            },
+            {
+                "original_text": "50 g parsnips",
+                "quantity": 50,
+                "unit": "g",
+                "quantity_grams": 50,
+                "food_phrase": "parsnips",
+            },
+        ],
+    )
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [{
+            "meal_date": "2026-08-03",
+            "meal_type": "dinner",
+            "participant_member_ids": [member_id],
+        }],
+    )
+    accepted = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    )
+    assert accepted.status_code == 200, accepted.text
+    shopping = client.get("/api/v1/shopping-lists/active").json()
+    assert len(shopping["items"]) == 2
+    assert all(item["recipe_count"] == 1 for item in shopping["items"])
+    assert all(item["source_count"] == 1 for item in shopping["items"])
+
+    first = shopping["items"][0]
+    sources = client.get(
+        f"/api/v1/shopping-lists/{shopping['id']}/items/{first['id']}/sources"
+    )
+    assert sources.status_code == 200, sources.text
+    assert sources.json()["sources"][0]["recipe_title"] == "Root vegetable tray"
+    assert sources.json()["editable"] is True
+
+    unknown = client.post(
+        f"/api/v1/shopping-lists/{shopping['id']}/ingredient-change/preview",
+        json={
+            "item_ids": [first["id"]],
+            "target_name": first["display_name"],
+            "target_unit": "cup",
+        },
+    )
+    assert unknown.status_code == 200, unknown.text
+    assert unknown.json()["conversions"][0]["manual_quantity_required"] is True
+
+    item_ids = [item["id"] for item in shopping["items"]]
+    preview = client.post(
+        f"/api/v1/shopping-lists/{shopping['id']}/ingredient-change/preview",
+        json={
+            "item_ids": item_ids,
+            "target_name": "root vegetables",
+            "target_unit": "g",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    assert all(
+        not conversion["manual_quantity_required"]
+        for conversion in preview.json()["conversions"]
+    )
+    changed = client.post(
+        f"/api/v1/shopping-lists/{shopping['id']}/ingredient-change",
+        headers=_headers(owner),
+        json={
+            "expected_list_version": shopping["version"],
+            "item_ids": item_ids,
+            "target_name": "root vegetables",
+            "target_unit": "g",
+            "manual_conversions": [],
+        },
+    )
+    assert changed.status_code == 200, changed.text
+    result = changed.json()
+    assert result["shopping_list"]["id"] != shopping["id"]
+    assert len(result["shopping_list"]["items"]) == 1
+    assert result["shopping_list"]["items"][0]["display_name"] == "root vegetables"
+    assert result["shopping_list"]["items"][0]["source_count"] == 2
+
+    with session_factory() as db:
+        latest = db.scalar(
+            select(RecipeVersion)
+            .where(RecipeVersion.recipe_id == recipe["id"])
+            .order_by(RecipeVersion.version_number.desc())
+        )
+        rows = db.scalars(
+            select(RecipeIngredient)
+            .where(RecipeIngredient.recipe_version_id == latest.id)
+            .order_by(RecipeIngredient.position)
+        ).all()
+        assert len(rows) == 2
+        assert {row.food_phrase for row in rows} == {"root vegetables"}
+        assert len({row.shopping_group_key for row in rows}) == 1
+        assert all(row.shopping_measurement_overridden for row in rows)
+
+
+def test_recipe_review_rebuilds_the_current_plan_shopping_list(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    recipe = _create_recipe(
+        client,
+        owner,
+        "Ingredient sync dinner",
+        ["dinner"],
+        ingredients=[{
+            "original_text": "100 g spinach",
+            "quantity": 100,
+            "unit": "g",
+            "quantity_grams": 100,
+            "food_phrase": "spinach",
+        }],
+    )
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [{
+            "meal_date": "2026-08-10",
+            "meal_type": "dinner",
+            "participant_member_ids": [member_id],
+        }],
+    )
+    assert client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    ).status_code == 200
+    previous_list = client.get("/api/v1/shopping-lists/active").json()
+    current = client.get(f"/api/v1/recipes/{recipe['id']}").json()
+    ingredient = current["ingredients"][0]
+    reviewed = client.put(
+        f"/api/v1/recipes/{recipe['id']}/review",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "meal_types": current["meal_types"],
+            "ingredients": [{
+                "original_text": ingredient["original_text"],
+                "quantity": 200,
+                "unit": "g",
+                "quantity_grams": 200,
+                "food_phrase": ingredient["food_phrase"],
+                "included": True,
+                "optional": False,
+                "needs_review": False,
+                "shopping_excluded": False,
+                "shopping_measurement_overridden": True,
+            }],
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["plan_sync"]["shopping_list_rebuilt"] is True
+    active = client.get("/api/v1/shopping-lists/active").json()
+    assert active["id"] != previous_list["id"]
+    assert active["items"][0]["exact_quantity"] == "200"
 
 
 def test_recipe_meal_types_are_optional_filterable_and_required_by_planner(client, owner):

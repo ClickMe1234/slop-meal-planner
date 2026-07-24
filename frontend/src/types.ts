@@ -87,6 +87,8 @@ export interface ShoppingItem {
   pantryConflicts?: ShoppingPantryUnitConflict[]
   pantryMatches?: ShoppingPantryMatchSuggestion[]
   pantryConfirmedMatches?: ShoppingPantryConfirmedMatch[]
+  recipeCount?: number
+  sourceCount?: number
 }
 
 export interface ShoppingPantryUnitConflict {
