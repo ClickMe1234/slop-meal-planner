@@ -48,7 +48,8 @@ jobs:
           elif [[ "$EVENT_NAME" == "push" ]]; then
             image_tag="latest"
           else
-            image_tag="${version}-pr-${PR_NUMBER}"
+            version="${version}-pr-${PR_NUMBER}"
+            image_tag="${version}"
           fi
           
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -84,4 +85,3 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
           provenance: mode=max
-
