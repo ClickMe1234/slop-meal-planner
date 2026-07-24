@@ -33,20 +33,20 @@ In **Apps → Add Container**, use these main fields:
 | Field | Value |
 | --- | --- |
 | Name | `Slop Meal Planner` |
-| Repository | `ghcr.io/clickme1234/slop-meal-planner:0.12.0` |
+| Repository | `ghcr.io/clickme1234/slop-meal-planner:1.0.0` |
 | Network Type | `Bridge` |
 | Console shell | `Shell` / `sh` |
 | Privileged | Off |
 | Extra Parameters | `--init` |
 | Post Arguments | Blank (the image defaults to `all`) |
-| Web UI | `http://[IP]:[PORT:8000]/` |
+| Web UI | HTTPS URL served by your reverse proxy |
 
 The Repository field is a Docker image reference, not the GitHub source URL.
 No Label or Device entries are required. The GHCR package must be public so
 Unraid can pull it anonymously.
 
-For the `v0.12.0` release, verify once that
-`ghcr.io/clickme1234/slop-meal-planner:0.12.0` is public and that an
+For the `v1.0.0` release, verify once that
+`ghcr.io/clickme1234/slop-meal-planner:1.0.0` is public and that an
 unauthenticated `docker pull` succeeds. Later releases are not complete until
 the same anonymous-pull check passes for their immutable tag.
 
@@ -78,7 +78,8 @@ the second column:
 | Application secret | `MEAL_PLANNER_SECRET_KEY` | Independent random value ≥32 characters; masked |
 | Setup token | `MEAL_PLANNER_SETUP_TOKEN` | Independent random value ≥32 characters; masked |
 | Allowed hosts | `MEAL_PLANNER_ALLOWED_HOSTS` | Actual LAN IPs, hostnames, and proxy names |
-| Secure cookies | `MEAL_PLANNER_COOKIE_SECURE` | `false` for direct HTTP; `true` behind HTTPS |
+| Secure cookies | `MEAL_PLANNER_COOKIE_SECURE` | `true`; production requires HTTPS |
+| HSTS | `MEAL_PLANNER_HSTS_ENABLED` | `true` after HTTPS is configured |
 | Timezone | `TZ` | `Europe/London`; application timezone is derived from it |
 | Runtime user | `PUID` | `99` |
 | Runtime group | `PGID` | `100` |
@@ -145,6 +146,12 @@ The image bundles PostgreSQL 18.4 `pg_dump`, `pg_restore`, `psql`, `dropdb`, and
 finishes an `.incomplete` directory only after archive readability and checksums
 are valid. Schedule the backup role with Unraid User Scripts if desired.
 
+Local archives are readable by the configured backup administrator so they can
+be restored automatically. Encrypt every backup before copying it off the host
+with a separately managed key (for example, age, restic, or encrypted object
+storage). Do not reuse `MEAL_PLANNER_SECRET_KEY` as the backup key or store the
+backup key beside the archives.
+
 ### Selective restore
 
 For a migration into an existing installation, open **Settings > Data & Backup**
@@ -153,7 +160,8 @@ contents, choose the source household, and tick the domains to import. Recipes
 and their linked nutrition records, saved ingredients, pantry, shopping lists,
 plans, household settings, and user accounts can be selected independently.
 
-Selective restore merges missing records into the current household and keeps
+Selective restore verifies every archive file against `SHA256SUMS` before
+opening the database dump. It merges missing records into the current household and keeps
 matching records already present. Active sessions and encrypted integration
 credentials are never imported, so the target installation's login and secret
 configuration remain in place. The feature can inspect older database archives;

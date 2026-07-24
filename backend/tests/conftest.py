@@ -1,3 +1,8 @@
+import os
+
+os.environ.setdefault("MEAL_PLANNER_SETUP_TOKEN", "development-setup-token")
+os.environ.setdefault("MEAL_PLANNER_SECRET_KEY", "development-only-secret-change-this")
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

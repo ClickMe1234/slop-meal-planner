@@ -1,7 +1,9 @@
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import re
+import threading
+import time
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import delete, select
@@ -56,6 +58,40 @@ from ..services.regional_ingredients import equivalent_terms
 from ..services.shopping import build_shopping_list
 
 router = APIRouter(prefix="/meal-plans", tags=["meal planning"])
+_generation_lock = threading.Lock()
+_active_generation_households: set[str] = set()
+_generation_attempts: dict[str, deque[float]] = defaultdict(deque)
+
+
+def limit_plan_generation(
+    context: AuthContext = Depends(require_csrf),
+):
+    """Allow one bounded generation per household and ten starts per minute."""
+
+    now = time.monotonic()
+    with _generation_lock:
+        attempts = _generation_attempts[context.user.household_id]
+        while attempts and attempts[0] < now - 60:
+            attempts.popleft()
+        if len(attempts) >= 10:
+            raise DomainError(
+                "PLAN_RATE_LIMITED",
+                "Too many meal plans were started. Wait before trying again.",
+                429,
+            )
+        if context.user.household_id in _active_generation_households:
+            raise DomainError(
+                "PLAN_ALREADY_RUNNING",
+                "A meal plan is already being generated for this household.",
+                409,
+            )
+        attempts.append(now)
+        _active_generation_households.add(context.user.household_id)
+    try:
+        yield context
+    finally:
+        with _generation_lock:
+            _active_generation_households.discard(context.user.household_id)
 
 
 def _candidate(db: Session, recipe: Recipe, meal_type: str) -> RecipeCandidate | None:
@@ -657,7 +693,7 @@ def _rebalance_plan(
 @router.post("/generate", response_model=PlanOut, status_code=201)
 def generate_plan(
     payload: PlanGenerateRequest,
-    context: AuthContext = Depends(require_csrf),
+    context: AuthContext = Depends(limit_plan_generation),
     db: Session = Depends(get_db),
 ):
     if not payload.slots:

@@ -16,7 +16,10 @@ python -m scripts.import_cofid path/to/cofid.csv \
   --dry-run
 ```
 
-Remove `--dry-run` and set `DATABASE_URL` to transactionally upsert the records.
+Remove `--dry-run` and set `MEAL_PLANNER_DATABASE_URL` or `DATABASE_URL` in the
+process environment to transactionally upsert the records. Credentials are not
+accepted as command-line arguments, so they do not appear in process listings
+or normal shell history.
 A new dataset version replaces each food's nutrient rows rather than carrying old
 values forward.
 

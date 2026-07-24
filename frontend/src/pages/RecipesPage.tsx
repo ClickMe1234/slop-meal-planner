@@ -9,6 +9,7 @@ import { MealTypePicker, mealKindLabels, type RecipeMealType } from '../componen
 import { demoRecipes } from '../data/demo'
 import type { Nutrition, Recipe } from '../types'
 import { api, ApiError, isDemoMode, type BackendRecipe, type BackendRecipeDetail, type DiscoveryResult, type RecipeCategoryMatchMode, type RecipeCategoryOption, type RecipeSourceKey } from '../api/client'
+import { safeExternalUrl, safeImageUrl } from '../lib/safeUrls'
 
 const SOURCE_OPTIONS: Array<{ value: RecipeSourceKey; label: string }> = [
   { value: 'good_food', label: 'Good Food' },
@@ -226,7 +227,8 @@ export function RecipesPage() {
 function RecipeThumbnail({ url }: { url?: string }) {
   const [failed, setFailed] = useState(false)
   useEffect(() => setFailed(false), [url])
-  return url && !failed ? <img src={url} alt="" loading="lazy" onError={() => setFailed(true)}/> : <ChefHat/>
+  const safeUrl = safeImageUrl(url)
+  return safeUrl && !failed ? <img src={safeUrl} alt="" loading="lazy" onError={() => setFailed(true)}/> : <ChefHat/>
 }
 
 function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolean; onSave: () => void }) {
@@ -268,7 +270,7 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
   return <div ref={cardRef} className="recipe-card-observer"><Card className="recipe-card">
     <div className="recipe-image"><RecipeThumbnail url={recipe.imageUrl}/><div className="recipe-source">{recipe.source}</div>{saved && <span className="saved-mark" aria-label="Saved recipe"><Check size={16}/></span>}</div>
     <div className="recipe-content">
-      <div className="recipe-title"><h2>{recipe.title}</h2>{recipe.sourceUrl && <a href={recipe.sourceUrl} target="_blank" rel="noreferrer" aria-label={`Open ${recipe.title} source`}><ExternalLink size={17}/></a>}</div>
+      <div className="recipe-title"><h2>{recipe.title}</h2>{safeExternalUrl(recipe.sourceUrl) && <a href={safeExternalUrl(recipe.sourceUrl) ?? undefined} target="_blank" rel="noopener noreferrer" aria-label={`Open ${recipe.title} source`}><ExternalLink size={17}/></a>}</div>
       <RecipeRating rating={recipe.starRating} count={recipe.ratingCount}/>
       <p className="recipe-meta">{yieldServings ? `Serves ${yieldServings}` : 'Yield not reported'}{recipe.mealKinds.length ? ` · ${recipe.mealKinds.join(' · ')}` : ''}</p>
       {Boolean(recipe.publisherTags?.length) && <div className="recipe-publisher-tags" aria-label="Publisher categories">{recipe.publisherTags?.map(tag => <span key={tag}>{tag}</span>)}</div>}
