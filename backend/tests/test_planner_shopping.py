@@ -328,6 +328,72 @@ def test_shopping_keeps_readable_required_amount_but_rounds_purchase_up(db):
     assert item.purchase_quantity == Decimal("431")
 
 
+def test_shopping_combines_reviewed_name_with_stale_parser_identity(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 21),
+    )
+    db.add(plan)
+    db.flush()
+
+    ingredients = (
+        ("Beetroot latkes", "400g raw beetroot", "raw beetroot", Decimal("400")),
+        ("Beetroot fritters", "550g beetroot", "beetroot", Decimal("550")),
+    )
+    for offset, (title, original_text, parsed_name, quantity) in enumerate(ingredients):
+        recipe = Recipe(household_id=household.id, title=title)
+        db.add(recipe)
+        db.flush()
+        version = RecipeVersion(
+            recipe_id=recipe.id,
+            version_number=1,
+            title=title,
+            yield_servings=1,
+        )
+        db.add(version)
+        db.flush()
+        db.add(
+            RecipeIngredient(
+                recipe_version_id=version.id,
+                position=0,
+                original_text=original_text,
+                quantity_grams=quantity,
+                food_phrase="beetroot",
+                parsed_food_phrase=parsed_name,
+                parser_name_keys=[
+                    parsed_name,
+                    f"stem:{parsed_name}",
+                ],
+                name_overridden=True,
+            )
+        )
+        db.add(
+            MealBatch(
+                meal_plan_id=plan.id,
+                recipe_version_id=version.id,
+                servings=1,
+                planned_cook_date=date(2026, 7, 20 + offset),
+            )
+        )
+    db.flush()
+
+    shopping = build_shopping_list(db, household.id, plan.id, "Week shopping")
+    items = db.scalars(
+        select(ShoppingItem).where(ShoppingItem.shopping_list_id == shopping.id)
+    ).all()
+
+    assert len(items) == 1
+    assert items[0].display_name == "beetroot"
+    assert items[0].exact_quantity == Decimal("950")
+    assert "stem:beetroot" in items[0].source_name_keys
+    assert "stem:raw beetroot" in items[0].source_name_keys
+
+
 def test_pantry_reservations_convert_compatible_linked_units(db):
     household = Household(name="Home")
     food = FoodRecord(

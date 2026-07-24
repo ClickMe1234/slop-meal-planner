@@ -102,6 +102,8 @@ def build_shopping_list(
                 base_name,
                 overrides=name_overrides,
             )
+            display_keys = ingredient_name_keys(db, display)
+            source_keys = list(dict.fromkeys([*source_keys, *display_keys]))
             if ingredient.needs_review and not remembered:
                 review_actions.setdefault(
                     ingredient.id,
@@ -182,7 +184,7 @@ def build_shopping_list(
                 f"measurement:{profile.canonical_name}"
                 if profile is not None
                 else next(
-                    (value for value in source_keys if value.startswith("stem:")),
+                    (value for value in display_keys if value.startswith("stem:")),
                     canonical_ingredient_key(db, display),
                 )
             )

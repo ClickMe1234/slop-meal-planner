@@ -43,7 +43,10 @@ export function PantryPage() {
         setDemoItems(current => [...current, { id: `demo-${Date.now()}`, version: 1, name: name.trim(), initialQuantity: numericQuantity, quantity: numericQuantity, reserved: 0, unit, category: 'Pantry' }])
       } else {
         await api.addPantry({ display_name: name.trim(), quantity: Number(quantity), unit })
-        await queryClient.invalidateQueries({ queryKey: ['pantry'] })
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['pantry'] }),
+          queryClient.invalidateQueries({ queryKey: ['pantry-match-suggestions'] }),
+        ])
       }
       setName(''); setQuantity('1'); setAdding(false)
     } catch (error) {
