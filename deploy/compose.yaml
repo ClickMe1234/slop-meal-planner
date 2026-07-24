@@ -127,7 +127,7 @@ services:
       disable: true
 
   postgres:
-    image: postgres:17.5-bookworm
+    image: postgres:17.10-bookworm
     restart: unless-stopped
     shm_size: 256mb
     environment:
@@ -149,7 +149,7 @@ services:
       start_period: 20s
 
   redis:
-    image: redis:7.4.5-alpine
+    image: redis:7.4.9-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "60", "1000"]
     volumes:
@@ -165,7 +165,7 @@ services:
       retries: 10
 
   backup:
-    image: postgres:17.5-bookworm
+    image: postgres:17.10-bookworm
     profiles: ["maintenance"]
     user: "0:0"
     environment:
@@ -200,7 +200,7 @@ services:
     entrypoint: ["sh", "/opt/meal-planner/backup.sh"]
 
   restore:
-    image: postgres:17.5-bookworm
+    image: postgres:17.10-bookworm
     profiles: ["maintenance"]
     user: "0:0"
     environment:

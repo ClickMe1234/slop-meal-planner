@@ -1,38 +1,57 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>Meal Planner Web</Name>
-  <Repository>meal-planner:0.10.0</Repository>
-  <Registry></Registry>
-  <Network>meal-planner_internal</Network>
+  <Name>Slop Meal Planner</Name>
+  <Repository>ghcr.io/clickme1234/slop-meal-planner:0.11.0</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>Bridge</Network>
   <MyIP></MyIP>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support></Support>
-  <Project></Project>
-  <Overview>Private household meal planner web service. This template represents the web container only and requires the PostgreSQL, Redis, worker, and scheduler services from deploy/compose.yaml. Docker Compose Manager is the supported Unraid installation method.</Overview>
+  <Support>https://github.com/ClickMe1234/slop-meal-planner/issues</Support>
+  <Project>https://github.com/ClickMe1234/slop-meal-planner</Project>
+  <Overview>Production Slop Meal Planner application. This image runs the web server, Celery worker, and scheduler together. Install PostgreSQL and Redis separately first; the Repository value is the public Docker image, not the GitHub source URL.</Overview>
   <Category>Productivity: Tools:</Category>
-  <WebUI>http://[IP]:[PORT:8000]</WebUI>
+  <WebUI>http://[IP]:[PORT:8000]/</WebUI>
   <Icon></Icon>
   <ExtraParams>--init</ExtraParams>
-  <PostArgs>web</PostArgs>
+  <PostArgs></PostArgs>
   <CPUset></CPUset>
   <DateInstalled></DateInstalled>
   <DonateText></DonateText>
   <DonateLink></DonateLink>
-  <Requires>PostgreSQL 17, Redis 7.4, and the worker/scheduler containers declared in deploy/compose.yaml.</Requires>
-  <Config Name="Web UI" Target="8000" Default="8080" Mode="tcp" Description="LAN-only web port" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
-  <Config Name="Application data" Target="/data" Default="/mnt/user/appdata/meal-planner/data" Mode="rw" Description="Custom images and exports" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/meal-planner/data</Config>
-  <Config Name="Backup data" Target="/backups" Default="/mnt/user/backups/meal-planner" Mode="rw" Description="Verified database and application-data archives" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/backups/meal-planner</Config>
-  <Config Name="Runtime user ID" Target="PUID" Default="99" Mode="" Description="Unraid nobody user ID" Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
-  <Config Name="Runtime group ID" Target="PGID" Default="100" Mode="" Description="Unraid users group ID" Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
-  <Config Name="Database URL" Target="MEAL_PLANNER_DATABASE_URL" Default="" Mode="" Description="Internal PostgreSQL SQLAlchemy URL" Type="Variable" Display="always" Required="true" Mask="true"></Config>
-  <Config Name="Celery broker" Target="CELERY_BROKER_URL" Default="redis://redis:6379/0" Mode="" Description="Internal Redis broker URL" Type="Variable" Display="advanced" Required="true" Mask="false">redis://redis:6379/0</Config>
-  <Config Name="Celery results" Target="CELERY_RESULT_BACKEND" Default="redis://redis:6379/1" Mode="" Description="Internal Redis result URL" Type="Variable" Display="advanced" Required="true" Mask="false">redis://redis:6379/1</Config>
-  <Config Name="Secret key" Target="MEAL_PLANNER_SECRET_KEY" Default="" Mode="" Description="Long random application secret" Type="Variable" Display="always" Required="true" Mask="true"></Config>
-  <Config Name="Setup token" Target="MEAL_PLANNER_SETUP_TOKEN" Default="" Mode="" Description="One-time first-owner setup token" Type="Variable" Display="always" Required="true" Mask="true"></Config>
-  <Config Name="Allowed hosts" Target="MEAL_PLANNER_ALLOWED_HOSTS" Default="localhost,meal-planner" Mode="" Description="Comma-separated LAN hostnames and addresses" Type="Variable" Display="always" Required="true" Mask="false">localhost,meal-planner</Config>
-  <Config Name="Secure cookies" Target="MEAL_PLANNER_COOKIE_SECURE" Default="false" Mode="" Description="Set true only when serving through HTTPS" Type="Variable" Display="advanced" Required="true" Mask="false">false</Config>
-  <Config Name="Timezone" Target="MEAL_PLANNER_TIMEZONE" Default="Europe/London" Mode="" Description="IANA timezone" Type="Variable" Display="advanced" Required="true" Mask="false">Europe/London</Config>
-  <Config Name="Open Food Facts" Target="MEAL_PLANNER_OPEN_FOOD_FACTS_ENABLED" Default="true" Mode="" Description="Enable read-only packaged-product barcode and name lookups" Type="Variable" Display="advanced" Required="true" Mask="false">true</Config>
-  <Config Name="USDA FoodData Central API key" Target="MEAL_PLANNER_USDA_API_KEY" Default="" Mode="" Description="Free private key from fdc.nal.usda.gov/api-key-signup.html; required for reliable general-food search" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Requires>PostgreSQL 15-18 and standalone Redis 7.2/7.4 installed separately. Use one Slop container because Celery Beat must run once.</Requires>
+  <Config Name="Web UI" Target="8000" Default="8080" Mode="tcp" Description="Choose the LAN host port. Keep the container target at 8000." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Application data" Target="/data" Default="/mnt/user/appdata/slop-meal-planner/data" Mode="rw" Description="Persistent application files. The container target must remain /data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/slop-meal-planner/data</Config>
+  <Config Name="Backups" Target="/backups" Default="/mnt/user/backups/slop-meal-planner" Mode="rw" Description="Verified database and application-data archives. The container target must remain /backups." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/backups/slop-meal-planner</Config>
+  <Config Name="PostgreSQL host" Target="POSTGRES_HOST" Default="" Mode="" Description="Unraid server LAN IP, hostname, or PostgreSQL container name." Type="Variable" Display="always" Required="true" Mask="false"></Config>
+  <Config Name="PostgreSQL port" Target="POSTGRES_PORT" Default="5432" Mode="" Description="Reachable PostgreSQL TCP port." Type="Variable" Display="always" Required="true" Mask="false">5432</Config>
+  <Config Name="PostgreSQL database" Target="POSTGRES_DB" Default="meal_planner" Mode="" Description="Application database name; letters, numbers, and underscores only." Type="Variable" Display="always" Required="true" Mask="false">meal_planner</Config>
+  <Config Name="PostgreSQL user" Target="POSTGRES_USER" Default="meal_planner" Mode="" Description="Application database role; letters, numbers, and underscores only." Type="Variable" Display="always" Required="true" Mask="false">meal_planner</Config>
+  <Config Name="PostgreSQL password" Target="POSTGRES_PASSWORD" Default="" Mode="" Description="Password for the PostgreSQL role." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Redis host" Target="REDIS_HOST" Default="" Mode="" Description="Reachable standalone Redis host, IP, or container name." Type="Variable" Display="always" Required="true" Mask="false"></Config>
+  <Config Name="Redis port" Target="REDIS_PORT" Default="6379" Mode="" Description="Reachable standalone Redis TCP port." Type="Variable" Display="always" Required="true" Mask="false">6379</Config>
+  <Config Name="Redis password" Target="REDIS_PASSWORD" Default="" Mode="" Description="Strong Redis password, required when Redis is published on the LAN." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Application secret key" Target="MEAL_PLANNER_SECRET_KEY" Default="" Mode="" Description="Independent random value of at least 32 characters. Preserve it permanently because rotating it makes encrypted integration credentials unreadable." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Setup token" Target="MEAL_PLANNER_SETUP_TOKEN" Default="" Mode="" Description="Independent random value of at least 32 characters used to create the first owner." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Allowed hosts" Target="MEAL_PLANNER_ALLOWED_HOSTS" Default="localhost,127.0.0.1" Mode="" Description="Comma-separated actual LAN IPs, hostnames, and reverse-proxy names used to open Slop." Type="Variable" Display="always" Required="true" Mask="false">localhost,127.0.0.1</Config>
+  <Config Name="Secure cookies" Target="MEAL_PLANNER_COOKIE_SECURE" Default="false" Mode="" Description="Keep false for direct HTTP. Set true only behind trusted HTTPS." Type="Variable" Display="always" Required="true" Mask="false">false</Config>
+  <Config Name="Timezone" Target="TZ" Default="Europe/London" Mode="" Description="IANA timezone. The application timezone is derived from this value." Type="Variable" Display="always" Required="true" Mask="false">Europe/London</Config>
+  <Config Name="Runtime user ID" Target="PUID" Default="99" Mode="" Description="Unraid nobody user ID." Type="Variable" Display="always" Required="true" Mask="false">99</Config>
+  <Config Name="Runtime group ID" Target="PGID" Default="100" Mode="" Description="Unraid users group ID." Type="Variable" Display="always" Required="true" Mask="false">100</Config>
+  <Config Name="PostgreSQL SSL mode" Target="POSTGRES_SSLMODE" Default="prefer" Mode="" Description="Advanced libpq SSL mode." Type="Variable" Display="advanced" Required="true" Mask="false">prefer</Config>
+  <Config Name="Redis ACL username" Target="REDIS_USERNAME" Default="" Mode="" Description="Optional Redis ACL username." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Redis TLS" Target="REDIS_TLS" Default="false" Mode="" Description="Use rediss:// when Redis TLS is enabled." Type="Variable" Display="advanced" Required="true" Mask="false">false</Config>
+  <Config Name="Redis broker database" Target="REDIS_BROKER_DB" Default="0" Mode="" Description="Redis logical database for Celery tasks." Type="Variable" Display="advanced" Required="true" Mask="false">0</Config>
+  <Config Name="Redis result database" Target="REDIS_RESULT_DB" Default="1" Mode="" Description="Redis logical database for Celery results; must differ from the broker database." Type="Variable" Display="advanced" Required="true" Mask="false">1</Config>
+  <Config Name="PostgreSQL URL override" Target="MEAL_PLANNER_DATABASE_URL" Default="" Mode="" Description="Advanced full PostgreSQL URL override. When set, it wins over friendly PostgreSQL fields." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Celery broker URL override" Target="CELERY_BROKER_URL" Default="" Mode="" Description="Advanced full Redis broker URL override. When set, it wins over friendly Redis fields." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Celery result URL override" Target="CELERY_RESULT_BACKEND" Default="" Mode="" Description="Advanced full Redis result URL override. When set, it wins over friendly Redis fields." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Log level" Target="LOG_LEVEL" Default="INFO" Mode="" Description="Application and worker log level." Type="Variable" Display="advanced" Required="true" Mask="false">INFO</Config>
+  <Config Name="Daily backup retention" Target="RETAIN_DAILY" Default="14" Mode="" Description="Daily backup folders to retain." Type="Variable" Display="advanced" Required="true" Mask="false">14</Config>
+  <Config Name="Weekly backup retention" Target="RETAIN_WEEKLY" Default="8" Mode="" Description="Weekly backup folders to retain." Type="Variable" Display="advanced" Required="true" Mask="false">8</Config>
+  <Config Name="Monthly backup retention" Target="RETAIN_MONTHLY" Default="12" Mode="" Description="Monthly backup folders to retain." Type="Variable" Display="advanced" Required="true" Mask="false">12</Config>
+  <Config Name="USDA FoodData Central API key" Target="MEAL_PLANNER_USDA_API_KEY" Default="" Mode="" Description="Optional private key for general-food search." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Remote food search" Target="MEAL_PLANNER_REMOTE_FOOD_SEARCH_ENABLED" Default="true" Mode="" Description="Enable remote food search providers." Type="Variable" Display="advanced" Required="true" Mask="false">true</Config>
+  <Config Name="Open Food Facts" Target="MEAL_PLANNER_OPEN_FOOD_FACTS_ENABLED" Default="true" Mode="" Description="Enable read-only packaged-food lookups." Type="Variable" Display="advanced" Required="true" Mask="false">true</Config>
+  <Config Name="Open Food Facts timeout" Target="MEAL_PLANNER_OPEN_FOOD_FACTS_TIMEOUT_SECONDS" Default="10" Mode="" Description="Remote Open Food Facts request timeout in seconds." Type="Variable" Display="advanced" Required="true" Mask="false">10</Config>
 </Container>

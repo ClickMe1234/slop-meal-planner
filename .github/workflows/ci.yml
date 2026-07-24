@@ -24,7 +24,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17.5-bookworm
+        image: postgres:17.10-bookworm
         env:
           POSTGRES_DB: meal_planner_ci
           POSTGRES_USER: meal_planner
@@ -90,3 +90,19 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+  container:
+    name: Production image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build linux/amd64 image without publishing
+        run: >-
+          docker build
+          --build-arg APP_VERSION=0.11.0
+          --build-arg APP_REVISION=${{ github.sha }}
+          --tag slop-meal-planner:ci
+          .
