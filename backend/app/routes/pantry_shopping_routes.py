@@ -400,12 +400,6 @@ def _shopping_pantry_match_suggestions(
             or source_keys.intersection(lot.rejected_shopping_name_keys or [])
         ):
             continue
-        if (
-            item.food_record_id
-            and lot.food_record_id
-            and item.food_record_id != lot.food_record_id
-        ):
-            continue
         _, _, usable = balances(db, lot)
         if usable <= 0:
             continue

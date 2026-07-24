@@ -248,6 +248,64 @@ def test_confirmed_fuzzy_match_names_the_pantry_item_without_using_stock(
     assert confirmed["confidence"] < 1
 
 
+def test_fuzzy_match_is_suggested_across_distinct_food_records(
+    client, owner, session_factory
+):
+    with session_factory() as db:
+        household = db.scalar(select(Household))
+        pantry_food = FoodRecord(
+            provider="test",
+            provider_record_id="plain-protein-powder",
+            dataset_version="1",
+            name="Protein powder",
+        )
+        shopping_food = FoodRecord(
+            provider="test",
+            provider_record_id="vanilla-protein-powder",
+            dataset_version="1",
+            name="Vanilla protein powder",
+        )
+        db.add_all([pantry_food, shopping_food])
+        db.flush()
+        pantry = PantryLot(
+            household_id=household.id,
+            food_record_id=pantry_food.id,
+            display_name="protein powder",
+            initial_quantity=500,
+            unit="g",
+        )
+        shopping_list = ShoppingList(
+            household_id=household.id,
+            name="Current shopping list",
+            active=True,
+        )
+        db.add_all([pantry, shopping_list])
+        db.flush()
+        item = ShoppingItem(
+            shopping_list_id=shopping_list.id,
+            food_record_id=shopping_food.id,
+            display_name="vanilla protein powder",
+            exact_quantity=120,
+            purchase_quantity=120,
+            unit="g",
+            source_name_keys=[
+                "vanilla protein powder",
+                "stem:vanilla protein powder",
+            ],
+        )
+        db.add(item)
+        db.commit()
+        pantry_id = pantry.id
+
+    active = client.get("/api/v1/shopping-lists/active")
+
+    assert active.status_code == 200, active.text
+    suggestions = active.json()["items"][0]["pantry_match_suggestions"]
+    assert suggestions[0]["pantry_lot_id"] == pantry_id
+    assert suggestions[0]["display_name"] == "protein powder"
+    assert suggestions[0]["confidence"] >= 0.9
+
+
 def test_user_can_reject_an_unresolved_name_match(
     client, owner, session_factory
 ):
