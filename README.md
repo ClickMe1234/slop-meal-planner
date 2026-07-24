@@ -81,6 +81,33 @@ exported as text.
 
 Fuzzy matching of shopping list to pantry ingredients supported!
 
+## Screenshots
+
+The demo includes seeded sample data so you can explore the main workflows
+without connecting external recipe or nutrition services.
+
+### Plan the week
+
+![Weekly meal plan](docs/examples/week.png)
+
+![Plan review](docs/examples/plan.png)
+
+### Recipes and ingredients
+
+![Recipe catalogue](docs/examples/recipes.png)
+
+![Ingredients](docs/examples/ingredients.png)
+
+![Serving suggestions](docs/examples/servings.png)
+
+### Pantry and shopping
+
+![Pantry stock](docs/examples/pantry.png)
+
+![Shopping list](docs/examples/shopping.png)
+
+![Shopping list matching](docs/examples/shopping2.png)
+
 ## Changelog
 
 ### 1.0.0 - 2026-07-24
