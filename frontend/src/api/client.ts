@@ -429,6 +429,17 @@ export const api = {
     }),
   backupStatus: () => request<BackendBackupStatus>('/system/backups'),
   createBackup: () => request<BackendBackupStatus>('/system/backups', { method: 'POST' }),
+  restoreArchives: () => request<{ archives: BackendRestoreArchive[] }>('/system/restores'),
+  previewRestore: (archive: string, sourceHouseholdId?: string) =>
+    request<BackendRestorePreview>('/system/restores/preview', {
+      method: 'POST',
+      body: JSON.stringify({ archive, source_household_id: sourceHouseholdId }),
+    }),
+  restoreSelected: (archive: string, components: RestoreComponent[], sourceHouseholdId?: string) =>
+    request<BackendRestoreResult>('/system/restores', {
+      method: 'POST',
+      body: JSON.stringify({ archive, components, source_household_id: sourceHouseholdId }),
+    }),
   usdaIntegration: () => request<BackendUsdaIntegration>('/system/integrations/usda'),
   saveUsdaIntegration: (apiKey: string) =>
     request<BackendUsdaIntegration>('/system/integrations/usda', {
@@ -626,6 +637,43 @@ export interface BackendBackupStatus {
   tier?: string | null
   application_version?: string | null
   schema_revision?: string | null
+}
+
+export type RestoreComponent = 'household' | 'users' | 'recipes' | 'ingredients' | 'pantry' | 'shopping' | 'plans'
+
+export interface BackendRestoreArchive {
+  archive: string
+  tier: string
+  timestamp: string
+  manifest: Record<string, string>
+  files: {
+    database_dump: boolean
+    data_archive: boolean
+    checksums: boolean
+  }
+  selective_restore_available: boolean
+}
+
+export interface BackendRestoreComponent {
+  key: RestoreComponent
+  label: string
+  description: string
+  counts: Record<string, number>
+}
+
+export interface BackendRestorePreview extends BackendRestoreArchive {
+  households: Array<{ id: string; name: string; timezone: string }>
+  selected_household: { id: string; name: string; timezone: string }
+  components: BackendRestoreComponent[]
+  excluded: Array<{ key: string; label: string; reason: string }>
+}
+
+export interface BackendRestoreResult {
+  archive: string
+  source_household: string
+  components: RestoreComponent[]
+  imported: Record<string, number>
+  excluded: string[]
 }
 
 export interface DiscoveryResult {

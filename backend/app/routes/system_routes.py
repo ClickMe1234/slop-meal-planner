@@ -6,8 +6,9 @@ from ..config import get_settings
 from ..db import get_db
 from ..errors import DomainError
 from ..models import UserRole
-from ..schemas import IntegrationCredentialUpdate
+from ..schemas import IntegrationCredentialUpdate, RestorePreviewRequest, RestoreRequest
 from ..services.backups import backup_status, create_backup
+from ..services.selective_restore import list_archives, preview_archive, restore_archive
 from ..services.integration_credentials import (
     USDA_PROVIDER,
     delete_credential,
@@ -27,6 +28,36 @@ def get_backup_status(_: AuthContext = Depends(get_auth_context)):
 @router.post("/backups", status_code=201)
 def run_backup(_: AuthContext = Depends(require_owner)):
     return create_backup()
+
+
+@router.get("/restores")
+def get_restore_archives(context: AuthContext = Depends(get_auth_context)):
+    if context.user.role != UserRole.OWNER.value:
+        raise DomainError("OWNER_REQUIRED", "This action requires the owner role", 403)
+    return {"archives": list_archives()}
+
+
+@router.post("/restores/preview")
+def preview_restore(
+    payload: RestorePreviewRequest,
+    _: AuthContext = Depends(require_owner),
+):
+    return preview_archive(payload.archive, payload.source_household_id)
+
+
+@router.post("/restores", status_code=201)
+def run_selective_restore(
+    payload: RestoreRequest,
+    context: AuthContext = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    return restore_archive(
+        payload.archive,
+        payload.source_household_id,
+        payload.components,
+        db,
+        context.user.household_id,
+    )
 
 
 @router.get("/integrations/usda")
