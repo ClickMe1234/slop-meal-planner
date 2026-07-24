@@ -34,7 +34,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="Meal Planner API",
-        version=os.getenv("APP_VERSION", "0.11.0"),
+        version=os.getenv("APP_VERSION", "0.12.0"),
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
         lifespan=lifespan,

@@ -1,8 +1,8 @@
-import { Bell, ChevronRight, Database, Download, ExternalLink, HardDrive, KeyRound, Moon, Network, RefreshCw, Server, Shield, Sun, UserRound, Users } from 'lucide-react'
+import { Archive, Bell, Check, ChevronRight, Database, Download, ExternalLink, HardDrive, KeyRound, LockKeyhole, Moon, Network, RefreshCw, Server, Shield, Sun, Upload, UserRound, Users } from 'lucide-react'
 import { FormEvent, ReactNode, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink } from 'react-router-dom'
-import { api, ApiError, type BackendRestriction, type IngredientLocale } from '../api/client'
+import { api, ApiError, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type RestoreComponent } from '../api/client'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import type { ThemeChoice } from '../types'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
@@ -665,11 +665,23 @@ export function AppearanceSettings({ theme, setTheme }: { theme: ThemeChoice; se
 
 export function DataSettings() {
   const queryClient = useQueryClient()
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me })
+  const isOwner = session.data?.role === 'owner'
   const status = useQuery({
     queryKey: ['backup-status'],
     queryFn: api.backupStatus,
   })
+  const archives = useQuery({
+    queryKey: ['restore-archives'],
+    queryFn: api.restoreArchives,
+    enabled: isOwner,
+  })
   const [running, setRunning] = useState(false)
+  const [restoreArchive, setRestoreArchive] = useState('')
+  const [restorePreview, setRestorePreview] = useState<BackendRestorePreview | null>(null)
+  const [restoreComponents, setRestoreComponents] = useState<RestoreComponent[]>(['recipes', 'ingredients'])
+  const [previewing, setPreviewing] = useState(false)
+  const [restoring, setRestoring] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const backup = async () => {
@@ -684,6 +696,49 @@ export function DataSettings() {
       setError(reason instanceof ApiError ? reason.message : 'The backup could not be created.')
     } finally {
       setRunning(false)
+    }
+  }
+  const inspectRestore = async (archive = restoreArchive, sourceHouseholdId?: string) => {
+    if (!archive) return
+    setPreviewing(true)
+    setError('')
+    setMessage('')
+    try {
+      const result = await api.previewRestore(archive, sourceHouseholdId)
+      setRestoreArchive(result.archive)
+      setRestorePreview(result)
+      setRestoreComponents((current) => {
+        const available = new Set(result.components.map((component) => component.key))
+        const retained = current.filter((component) => available.has(component))
+        return retained.length ? retained : result.components.some((component) => component.key === 'recipes') ? ['recipes', 'ingredients'] : [result.components[0]?.key ?? 'recipes']
+      })
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : 'The backup could not be inspected.')
+      setRestorePreview(null)
+    } finally {
+      setPreviewing(false)
+    }
+  }
+  const toggleRestoreComponent = (key: RestoreComponent) => {
+    setRestoreComponents((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])
+  }
+  const restoreSelected = async () => {
+    if (!restorePreview || !restoreComponents.length) return
+    if (!window.confirm('Import the selected data into this household? Existing matching records will be kept.')) return
+    setRestoring(true)
+    setError('')
+    setMessage('')
+    try {
+      const result = await api.restoreSelected(restorePreview.archive, restoreComponents, restorePreview.selected_household.id)
+      await queryClient.invalidateQueries()
+      const imported = Object.entries(result.imported).map(([key, count]) => `${count} ${key.replaceAll('_', ' ')}`).join(' · ')
+      setMessage(imported ? `Imported ${imported}. Existing matching records were kept.` : 'Nothing new was imported; matching records were already present.')
+      setRestorePreview(null)
+      await queryClient.invalidateQueries({ queryKey: ['restore-archives'] })
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : 'The selected data could not be restored.')
+    } finally {
+      setRestoring(false)
     }
   }
   const last = status.data?.last_backup
@@ -726,7 +781,86 @@ export function DataSettings() {
           Unraid parity is not a backup. Copy archives to another physical device.
         </Notice>
       </Card>
+      {isOwner && (
+        <Card className="settings-section restore-card">
+          <div className="restore-heading">
+            <div>
+              <span className="eyebrow">Migration tool</span>
+              <h3>Restore selected data</h3>
+              <p>Bring recipes and household lists into this installation without replacing your login or encrypted settings.</p>
+            </div>
+            <Archive aria-hidden />
+          </div>
+          <div className="restore-selector">
+            <label htmlFor="restore-archive">Backup archive</label>
+            <div className="restore-selector-row">
+              <select id="restore-archive" value={restoreArchive} onChange={(event) => { setRestoreArchive(event.target.value); setRestorePreview(null) }}>
+                <option value="">Choose a backup folder…</option>
+                {(archives.data?.archives ?? []).map((archive) => (
+                  <option key={archive.archive} value={archive.archive}>{archive.timestamp} · {archive.tier}</option>
+                ))}
+              </select>
+              <Button variant="secondary" disabled={!restoreArchive || previewing} onClick={() => inspectRestore()}>
+                <Upload />
+                {previewing ? 'Reading archive…' : 'Inspect archive'}
+              </Button>
+            </div>
+            {!archives.isLoading && !archives.data?.archives.length && (
+              <small className="muted">No database archives are available under the configured /backups folder.</small>
+            )}
+          </div>
+          {restorePreview && (
+            <div className="restore-workspace">
+              {restorePreview.households.length > 1 && (
+                <label className="restore-household-select">
+                  Source household
+                  <select value={restorePreview.selected_household.id} onChange={(event) => inspectRestore(restorePreview.archive, event.target.value)} disabled={previewing}>
+                    {restorePreview.households.map((household) => <option key={household.id} value={household.id}>{household.name}</option>)}
+                  </select>
+                </label>
+              )}
+              <div className="restore-preview-banner">
+                <div>
+                  <strong>{restorePreview.selected_household.name}</strong>
+                  <span>{restorePreview.archive} · {restorePreview.files.data_archive ? 'application files included' : 'database only'}</span>
+                </div>
+                <LockKeyhole aria-hidden />
+              </div>
+              <div className="restore-component-grid">
+                {restorePreview.components.map((component) => (
+                  <RestoreComponentCard key={component.key} component={component} selected={restoreComponents.includes(component.key)} onToggle={() => toggleRestoreComponent(component.key)} />
+                ))}
+              </div>
+              <Notice tone="warning" title="Safe merge">
+                Active sessions and encrypted API credentials are never imported. Matching records stay in place; only missing records are added.
+              </Notice>
+              <div className="button-row restore-actions">
+                <Button disabled={restoring || !restoreComponents.length} onClick={restoreSelected}>
+                  <Check />
+                  {restoring ? 'Restoring…' : `Restore ${restoreComponents.length} selected`}
+                </Button>
+                <Button variant="ghost" disabled={restoring} onClick={() => setRestorePreview(null)}>Cancel</Button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
     </SettingsLayout>
+  )
+}
+
+function RestoreComponentCard({ component, selected, onToggle }: { component: BackendRestoreComponent; selected: boolean; onToggle: () => void }) {
+  const summary = Object.entries(component.counts).map(([key, count]) => `${count} ${key.replaceAll('_', ' ')}`).join(' · ')
+  return (
+    <label className={`restore-component ${selected ? 'selected' : ''}`}>
+      <input type="checkbox" checked={selected} onChange={onToggle} />
+      <span className="restore-component-check" aria-hidden>{selected && <Check />}</span>
+      <span className="restore-component-copy">
+        <strong>{component.label}</strong>
+        <small>{component.description}</small>
+        <em>{summary || 'Nothing found'}</em>
+      </span>
+    </label>
   )
 }
 
