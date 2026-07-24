@@ -58,6 +58,8 @@ jobs:
       - name: Verify PostgreSQL migration replay and model parity
         env:
           MEAL_PLANNER_DATABASE_URL: postgresql+psycopg://meal_planner:migration-test-password@127.0.0.1:5432/meal_planner_ci
+          MEAL_PLANNER_SETUP_TOKEN: migration-test-setup-token-not-for-production
+          MEAL_PLANNER_SECRET_KEY: migration-test-signing-key-not-for-production
         run: |
           alembic -c alembic.ini upgrade head
           alembic -c alembic.ini check
