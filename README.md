@@ -2,7 +2,7 @@
 
 > A free, self-hosted meal planner for real households.
 
-Current release: **1.0.0**. See the [latest release notes](#changelog) or the
+Current release: **1.0.1**. See the [latest release notes](#changelog) or the
 [full changelog](CHANGELOG.md).
 
 ## About
@@ -90,6 +90,12 @@ Fuzzy matching of shopping list to pantry ingredients supported!
 
 ## Changelog
 
+### 1.0.1 - 2026-07-24
+
+- Correct shopping-list aggregation for reviewed ingredient names.
+- Restore fuzzy pantry matching across equivalent nutrition records and
+  refresh suggestions after pantry additions.
+
 ### 1.0.0 - 2026-07-24
 
 - Promote Slop Meal Planner to its first stable release.
@@ -157,7 +163,7 @@ Compose Manager is required for the application container.
    passwords, setup tokens, API keys, and session cookies to on-path devices.
 4. In Unraid Apps, choose **Add Container** and use the exact values in
    [`deploy/unraid-template.xml`](deploy/unraid-template.xml):
-   `ghcr.io/clickme1234/slop-meal-planner:1.0.0` as Repository, `Bridge` as
+   `ghcr.io/clickme1234/slop-meal-planner:1.0.1` as Repository, `Bridge` as
    Network Type, `Shell` as the console shell, Privileged off, and `--init` as
    Extra Parameters. The Repository is a Docker image reference, not the GitHub
    source URL. Leave Post Arguments blank.

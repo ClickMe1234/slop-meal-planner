@@ -31,7 +31,7 @@ jobs:
       - name: Build without publishing
         run: >-
           docker build
-          --build-arg APP_VERSION=1.0.0-pr-${{ github.event.number }}
+          --build-arg APP_VERSION=1.0.1-pr-${{ github.event.number }}
           --build-arg APP_REVISION=${{ github.sha }}
           --tag slop-meal-planner:pr-${{ github.event.number }}
           .
