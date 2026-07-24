@@ -12,11 +12,12 @@ def test_unraid_template_matches_production_runtime_contract():
     configs = {config.attrib["Target"]: config for config in root.findall("Config")}
 
     assert root.findtext("Name") == "Slop Meal Planner"
-    assert root.findtext("Repository") == "ghcr.io/clickme1234/slop-meal-planner:0.12.0"
+    assert root.findtext("Repository") == "ghcr.io/clickme1234/slop-meal-planner:1.0.0"
     assert root.findtext("Network") == "Bridge"
     assert root.findtext("PostArgs") == ""
-    assert root.findtext("WebUI") == "http://[IP]:[PORT:8000]/"
-    assert root.findtext("ExtraParams") == "--init"
+    assert root.findtext("WebUI") == "https://[IP]:[PORT:8000]/"
+    assert "--read-only" in (root.findtext("ExtraParams") or "")
+    assert "--security-opt no-new-privileges" in (root.findtext("ExtraParams") or "")
     assert root.findtext("Privileged") == "false"
 
     assert configs["8000"].attrib["Type"] == "Port"
@@ -38,6 +39,7 @@ def test_unraid_template_matches_production_runtime_contract():
         "MEAL_PLANNER_SETUP_TOKEN",
         "MEAL_PLANNER_ALLOWED_HOSTS",
         "MEAL_PLANNER_COOKIE_SECURE",
+        "MEAL_PLANNER_HSTS_ENABLED",
         "TZ",
         "PUID",
         "PGID",

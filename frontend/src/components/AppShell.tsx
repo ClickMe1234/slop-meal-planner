@@ -1,8 +1,9 @@
 import { CalendarDays, ChefHat, ClipboardList, Heart, LogOut, Menu, Moon, PackageOpen, Settings, Sun, WandSparkles, Wheat, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, isDemoMode } from '../api/client'
+import { clearOfflineShoppingData } from '../lib/offlineShopping'
 import type { ThemeChoice } from '../types'
 
 const items = [
@@ -18,6 +19,8 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [logoutError, setLogoutError] = useState('')
   const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false })
   const username = session.data?.username ?? 'Zach'
   const role = session.data?.role ?? 'owner'
@@ -29,10 +32,17 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
   }, [menuOpen])
   const logout = async () => {
     try {
-      if (!isDemoMode) await api.logout()
-    } finally {
+      setLogoutError('')
+      if (!isDemoMode) {
+        await api.logout()
+        await queryClient.cancelQueries()
+        queryClient.clear()
+        await clearOfflineShoppingData()
+      }
       localStorage.removeItem('slop-demo-session')
       navigate('/login')
+    } catch {
+      setLogoutError('Sign out could not be confirmed. You are still signed in; check your connection and try again.')
     }
   }
   return <div className="app-shell">
@@ -44,6 +54,7 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
       <div className="sidebar-bottom">
         <NavLink to="/settings" className={location.pathname.startsWith('/settings') ? 'active' : ''}><Settings size={20} /><span>Settings</span></NavLink>
         <button className="theme-shortcut" onClick={() => setTheme(nextTheme)} aria-label={`Use ${nextTheme} theme`}>{theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}<span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span></button>
+        {logoutError && <p className="field-error" role="alert">{logoutError}</p>}
         <div className="profile-chip"><span>{username.slice(0, 1).toUpperCase()}</span><div><strong>{username}</strong><small>Household {role}</small></div><button type="button" aria-label="Sign out" onClick={logout}><LogOut size={16}/></button></div>
       </div>
     </aside>

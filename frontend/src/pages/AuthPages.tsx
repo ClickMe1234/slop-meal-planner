@@ -5,9 +5,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge, Button, Card, Notice, ProgressBar, Segmented } from '../components/ui'
 import { api, ApiError, isDemoMode, type IngredientLocale } from '../api/client'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
+import { clearOfflineShoppingData } from '../lib/offlineShopping'
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [loading, setLoading] = useState(false)
   const [username, setUsername] = useState(isDemoMode ? 'zach' : '')
   const [password, setPassword] = useState(isDemoMode ? 'password' : '')
@@ -25,6 +27,8 @@ export function LoginPage() {
         localStorage.setItem('slop-demo-session', 'active')
       } else {
         const result = await api.login(username.trim(), password)
+        queryClient.clear()
+        await clearOfflineShoppingData()
         if (result.user.must_change_password) { navigate('/change-password'); return }
       }
       navigate('/week')

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
+from .discovery.errors import InvalidUrlError
+from .discovery.urls import canonicalize_url
 from .models import IngredientLocale, JobStatus, MealType, PlanStatus, RecipeEligibility, RecipeTag, TargetMode, UserRole
 
 MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
+BoundedIdentifier = Annotated[str, StringConstraints(min_length=1, max_length=80)]
+BoundedTerm = Annotated[str, StringConstraints(min_length=1, max_length=160)]
 
 
 class APIModel(BaseModel):
@@ -20,15 +24,15 @@ class VersionedUpdate(APIModel):
 
 
 class SetupRequest(APIModel):
-    setup_token: str
+    setup_token: str = Field(min_length=1, max_length=256)
     household_name: str = Field(min_length=1, max_length=160)
     username: str = Field(min_length=3, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
     password: str = Field(min_length=12, max_length=200)
 
 
 class LoginRequest(APIModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=1, max_length=200)
 
 
 class UserOut(APIModel):
@@ -57,7 +61,7 @@ class CollaboratorCreate(APIModel):
 
 
 class PasswordChange(APIModel):
-    current_password: str
+    current_password: str = Field(min_length=1, max_length=200)
     new_password: str = Field(min_length=12, max_length=200)
 
 
@@ -125,7 +129,9 @@ class TargetProfileIn(APIModel):
             MealAllocationIn(meal_type="lunch", percentage=30),
             MealAllocationIn(meal_type="dinner", percentage=35),
             MealAllocationIn(meal_type="snack", percentage=10),
-        ]
+        ],
+        min_length=1,
+        max_length=20,
     )
 
     @model_validator(mode="after")
@@ -185,12 +191,12 @@ class RestrictionIn(APIModel):
 
 
 class RecipeIngredientIn(APIModel):
-    original_text: str = Field(min_length=1)
+    original_text: str = Field(min_length=1, max_length=1000)
     quantity: Decimal | None = Field(default=None, ge=0)
-    unit: str | None = None
+    unit: str | None = Field(default=None, max_length=80)
     quantity_grams: Decimal | None = Field(default=None, ge=0)
-    food_phrase: str | None = None
-    preparation: str | None = None
+    food_phrase: str | None = Field(default=None, max_length=300)
+    preparation: str | None = Field(default=None, max_length=300)
     included: bool = True
     optional: bool = False
     needs_review: bool = False
@@ -208,13 +214,23 @@ class RecipeCreate(APIModel):
     title: str = Field(min_length=1, max_length=300)
     yield_servings: Decimal | None = Field(default=None, gt=0)
     source_type: Literal["custom", "url"] = "custom"
-    source_url: str | None = None
-    publisher: str | None = None
-    image_url: str | None = None
-    custom_instructions: str | None = None
+    source_url: str | None = Field(default=None, max_length=4096)
+    publisher: str | None = Field(default=None, max_length=300)
+    image_url: str | None = Field(default=None, max_length=4096)
+    custom_instructions: str | None = Field(default=None, max_length=20_000)
     publisher_nutrition: dict[str, Any] | None = None
-    meal_types: list[RecipeTag] = Field(default_factory=list)
-    ingredients: list[RecipeIngredientIn] = Field(default_factory=list)
+    meal_types: list[RecipeTag] = Field(default_factory=list, max_length=20)
+    ingredients: list[RecipeIngredientIn] = Field(default_factory=list, max_length=500)
+
+    @field_validator("source_url", "image_url")
+    @classmethod
+    def canonicalize_recipe_url(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        try:
+            return canonicalize_url(value)
+        except InvalidUrlError as exc:
+            raise ValueError(str(exc)) from exc
 
     @model_validator(mode="after")
     def custom_instruction_policy(self):
@@ -230,8 +246,8 @@ class RecipeCreate(APIModel):
 class RecipeReviewUpdate(VersionedUpdate):
     title: str = Field(min_length=1, max_length=300)
     yield_servings: Decimal = Field(gt=0)
-    meal_types: list[RecipeTag] | None = None
-    ingredients: list[RecipeIngredientIn] = Field(min_length=1)
+    meal_types: list[RecipeTag] | None = Field(default=None, max_length=20)
+    ingredients: list[RecipeIngredientIn] = Field(min_length=1, max_length=500)
 
     @model_validator(mode="after")
     def validate_meal_types(self):
@@ -290,7 +306,7 @@ class FoodRecordCreate(APIModel):
     basis_amount: Decimal = Field(default=100, gt=0)
     basis_unit: Literal["g", "ml"] = "g"
     density_g_per_ml: Decimal | None = Field(default=None, gt=0)
-    nutrients: list[FoodNutrientIn]
+    nutrients: list[FoodNutrientIn] = Field(min_length=1, max_length=32)
 
 
 class FoodRecordOut(APIModel):
@@ -351,11 +367,11 @@ class SavedFoodCreate(APIModel):
     display_name: str | None = Field(default=None, max_length=300)
     basis_amount: Decimal = Field(default=100, gt=0)
     basis_unit: Literal["g", "ml"] = "g"
-    nutrients: list[FoodNutrientIn] = Field(default_factory=list)
+    nutrients: list[FoodNutrientIn] = Field(default_factory=list, max_length=32)
     serving_amount: Decimal | None = Field(default=None, gt=0)
     serving_unit: Literal["g", "ml"] | None = None
     planner_enabled: bool = False
-    meal_types: list[RecipeTag] = Field(default_factory=list)
+    meal_types: list[RecipeTag] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def validate_source_and_planner(self):
@@ -381,7 +397,7 @@ class SavedFoodUpdate(VersionedUpdate):
     serving_amount: Decimal | None = Field(default=None, gt=0)
     serving_unit: Literal["g", "ml"] | None = None
     planner_enabled: bool = False
-    meal_types: list[RecipeTag] = Field(default_factory=list)
+    meal_types: list[RecipeTag] = Field(default_factory=list, max_length=20)
     basis_amount: Decimal | None = Field(default=None, gt=0)
     basis_unit: Literal["g", "ml"] | None = None
     nutrients: list[FoodNutrientIn] | None = None
@@ -441,7 +457,15 @@ class NutritionCalculationOut(APIModel):
 
 
 class ImportRequest(APIModel):
-    url: str
+    url: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("url")
+    @classmethod
+    def canonicalize_import_url(cls, value: str) -> str:
+        try:
+            return canonicalize_url(value)
+        except InvalidUrlError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class JobOut(APIModel):
@@ -460,7 +484,7 @@ class JobOut(APIModel):
 class PlanSlotIn(APIModel):
     meal_date: date
     meal_type: MealType
-    participant_member_ids: list[str] = Field(min_length=1)
+    participant_member_ids: list[BoundedIdentifier] = Field(min_length=1, max_length=50)
     # Slots sharing a key are cooked as one batch and allocated across dates.
     # Omit the key to cook that occurrence separately.
     batch_key: str | None = Field(default=None, max_length=80)
@@ -476,7 +500,7 @@ class DayCalorieBoostIn(APIModel):
     meal_date: date
     member_id: str
     calories: Decimal = Field(gt=0, le=10000)
-    meal_allocations: list[MealCalorieBoostAllocationIn] = Field(default_factory=list)
+    meal_allocations: list[MealCalorieBoostAllocationIn] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def validate_meal_allocations(self):
@@ -491,7 +515,7 @@ class DayCalorieBoostIn(APIModel):
 class GuestDayIn(APIModel):
     meal_date: date
     guest_count: int = Field(gt=0, le=50)
-    meal_types: list[MealType] = Field(default_factory=list)
+    meal_types: list[MealType] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def validate_meal_types(self):
@@ -504,16 +528,16 @@ class PlanGenerateRequest(APIModel):
     name: str = Field(min_length=1, max_length=160)
     start_date: date | None = None
     end_date: date | None = None
-    slots: list[PlanSlotIn]
-    recipe_ids: list[str] = Field(default_factory=list)
-    must_use_food_record_ids: list[str] = Field(default_factory=list)
-    prefer_food_record_ids: list[str] = Field(default_factory=list)
-    exclude_food_record_ids: list[str] = Field(default_factory=list)
-    must_use_ingredient_terms: list[str] = Field(default_factory=list)
-    prefer_ingredient_terms: list[str] = Field(default_factory=list)
-    exclude_ingredient_terms: list[str] = Field(default_factory=list)
-    calorie_boosts: list[DayCalorieBoostIn] = Field(default_factory=list)
-    guest_days: list[GuestDayIn] = Field(default_factory=list)
+    slots: list[PlanSlotIn] = Field(min_length=1, max_length=250)
+    recipe_ids: list[BoundedIdentifier] = Field(default_factory=list, max_length=500)
+    must_use_food_record_ids: list[BoundedIdentifier] = Field(default_factory=list, max_length=200)
+    prefer_food_record_ids: list[BoundedIdentifier] = Field(default_factory=list, max_length=200)
+    exclude_food_record_ids: list[BoundedIdentifier] = Field(default_factory=list, max_length=200)
+    must_use_ingredient_terms: list[BoundedTerm] = Field(default_factory=list, max_length=200)
+    prefer_ingredient_terms: list[BoundedTerm] = Field(default_factory=list, max_length=200)
+    exclude_ingredient_terms: list[BoundedTerm] = Field(default_factory=list, max_length=200)
+    calorie_boosts: list[DayCalorieBoostIn] = Field(default_factory=list, max_length=250)
+    guest_days: list[GuestDayIn] = Field(default_factory=list, max_length=250)
     ignore_nutrition_tolerances: bool = False
 
     @model_validator(mode="after")
@@ -523,6 +547,8 @@ class PlanGenerateRequest(APIModel):
         if self.start_date is not None and self.end_date is not None:
             if self.start_date > self.end_date:
                 raise ValueError("start_date cannot be after end_date")
+            if (self.end_date - self.start_date).days > 31:
+                raise ValueError("planning periods cannot exceed 32 days")
             if any(
                 slot.meal_date < self.start_date or slot.meal_date > self.end_date
                 for slot in self.slots

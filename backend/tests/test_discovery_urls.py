@@ -1,6 +1,9 @@
+import asyncio
+
 import pytest
 
-from app.discovery.errors import InvalidUrlError, UnsafeUrlError
+from app.discovery.errors import FetchError, InvalidUrlError, UnsafeUrlError
+from app.discovery.http import PoliteHttpFetcher
 from app.discovery.urls import canonicalize_url, validate_fetch_url
 
 
@@ -28,3 +31,45 @@ def test_fetch_validation_blocks_private_or_mixed_dns_results():
         resolver=lambda _: ["93.184.216.34"],
         allowed_hosts={"recipes.example"},
     ) == "https://recipes.example/one"
+
+
+def test_fetcher_pins_the_address_returned_by_the_validating_lookup(monkeypatch):
+    lookups = iter((["93.184.216.34"], ["127.0.0.1"]))
+    fetcher = PoliteHttpFetcher(
+        min_host_interval_seconds=0,
+        resolver=lambda _: next(lookups),
+    )
+    connected: list[str] = []
+
+    def fake_fetch(url, host, address):
+        connected.append(address)
+        return 200, {"content-type": "text/html"}, b"<html></html>", "utf-8"
+
+    monkeypatch.setattr(fetcher, "_fetch_pinned", fake_fetch)
+    assert asyncio.run(
+        fetcher.fetch_text(
+            "https://recipes.example/one",
+            allowed_hosts={"recipes.example"},
+        )
+    ) == "<html></html>"
+    assert connected == ["93.184.216.34"]
+
+
+def test_image_fetcher_rejects_non_image_content(monkeypatch):
+    fetcher = PoliteHttpFetcher(
+        min_host_interval_seconds=0,
+        resolver=lambda _: ["93.184.216.34"],
+    )
+
+    def fake_fetch(url, host, address, *, accept=None):
+        assert accept and "image/webp" in accept
+        return 200, {"content-type": "text/html"}, b"<script>unsafe</script>", "utf-8"
+
+    monkeypatch.setattr(fetcher, "_fetch_pinned", fake_fetch)
+    with pytest.raises(FetchError, match="not a supported image"):
+        asyncio.run(
+            fetcher.fetch_bytes(
+                "https://images.example/one",
+                allowed_content_types={"image/png"},
+            )
+        )

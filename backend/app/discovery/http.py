@@ -1,24 +1,54 @@
 from __future__ import annotations
 
 import asyncio
-import http.cookiejar
+import http.client
+import socket
+import ssl
 import time
-import urllib.error
-import urllib.request
 from collections import defaultdict
-from urllib.parse import urljoin, urlsplit
+from http.cookies import SimpleCookie
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 
 from .errors import FetchError, ResponseTooLargeError
-from .urls import validate_fetch_url
+from .urls import resolve_fetch_url
 
 
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Expose redirects so every destination is revalidated before fetching."""
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTP connection whose socket uses a previously validated IP address."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
-        return None
+    def __init__(self, host: str, address: str, port: int, timeout: float) -> None:
+        super().__init__(host, port=port, timeout=timeout)
+        self._validated_address = address
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._validated_address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection pinned to an IP while preserving hostname TLS checks."""
+
+    def __init__(self, host: str, address: str, port: int, timeout: float) -> None:
+        super().__init__(
+            host,
+            port=port,
+            timeout=timeout,
+            context=ssl.create_default_context(),
+        )
+        self._validated_address = address
+
+    def connect(self) -> None:
+        sock = socket.create_connection(
+            (self._validated_address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
 class PoliteHttpFetcher:
@@ -53,34 +83,48 @@ class PoliteHttpFetcher:
         # response; no JavaScript challenge or access control is bypassed.
         self._client = client
         self._owns_client = False
-        self._openers: dict[str, urllib.request.OpenerDirector] = {}
+        self._cookies: dict[str, str] = {}
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._last_request: dict[str, float] = {}
 
-    def _opener(self, host: str) -> urllib.request.OpenerDirector:
-        opener = self._openers.get(host)
-        if opener is None:
-            opener = urllib.request.build_opener(
-                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
-                _NoRedirectHandler(),
-            )
-            self._openers[host] = opener
-        return opener
-
-    def _fetch_with_urllib(self, url: str, host: str):
-        opener = self._opener(host)
+    def _fetch_pinned(
+        self,
+        url: str,
+        host: str,
+        address: str,
+        *,
+        accept: str | None = None,
+    ):
+        parts = urlsplit(url)
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        target = urlunsplit(("", "", parts.path or "/", parts.query, ""))
         for attempt in range(2):
-            request = urllib.request.Request(url, headers=self._headers)
+            connection_type = (
+                _PinnedHTTPSConnection if parts.scheme == "https" else _PinnedHTTPConnection
+            )
+            connection = connection_type(host, address, port, self.timeout_seconds)
+            headers = dict(self._headers)
+            if accept is not None:
+                headers["Accept"] = accept
+            if cookie := self._cookies.get(host):
+                headers["Cookie"] = cookie
             try:
-                response = opener.open(request, timeout=self.timeout_seconds)
-            except urllib.error.HTTPError as exc:
-                response = exc
-            except (urllib.error.URLError, OSError, TimeoutError) as exc:
+                connection.request("GET", target, headers=headers)
+                response = connection.getresponse()
+            except (OSError, TimeoutError, http.client.HTTPException) as exc:
+                connection.close()
                 raise FetchError("The publisher could not be reached") from exc
 
             try:
                 status = int(response.status)
                 headers = response.headers
+                cookies = SimpleCookie()
+                for value in headers.get_all("Set-Cookie", []):
+                    cookies.load(value)
+                if cookies:
+                    self._cookies[host] = "; ".join(
+                        f"{name}={morsel.value}" for name, morsel in cookies.items()
+                    )
                 # A few publisher edges set a regular session cookie on the
                 # first 402/403 response. Retry once with that cookie, then
                 # preserve the explicit declined-access behaviour below.
@@ -106,12 +150,99 @@ class PoliteHttpFetcher:
                 encoding = headers.get_content_charset() or "utf-8"
                 return status, headers, b"".join(chunks), encoding
             finally:
-                response.close()
+                connection.close()
         raise FetchError("The publisher declined the request")
 
+    async def fetch_bytes(
+        self,
+        url: str,
+        *,
+        allowed_hosts: set[str] | None = None,
+        allowed_content_types: set[str],
+    ) -> tuple[bytes, str]:
+        """Fetch bounded binary content through the DNS-pinned transport."""
+
+        current, addresses = await asyncio.to_thread(
+            resolve_fetch_url,
+            url,
+            resolver=self._resolver,
+            allowed_hosts=allowed_hosts,
+        )
+        for redirect_count in range(self.max_redirects + 1):
+            host = urlsplit(current).hostname or ""
+            async with self._locks[host]:
+                delay = self.min_host_interval_seconds - (
+                    time.monotonic() - self._last_request.get(host, 0.0)
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                if self._client is None:
+                    status, headers, content, _ = await asyncio.to_thread(
+                        self._fetch_pinned,
+                        current,
+                        host,
+                        addresses[0],
+                        accept="image/avif,image/webp,image/png,image/jpeg,image/gif",
+                    )
+                else:
+                    try:
+                        async with self._client.stream(
+                            "GET",
+                            current,
+                            headers={
+                                **self._headers,
+                                "Accept": "image/avif,image/webp,image/png,image/jpeg,image/gif",
+                            },
+                        ) as response:
+                            status = response.status_code
+                            headers = response.headers
+                            chunks: list[bytes] = []
+                            size = 0
+                            async for chunk in response.aiter_bytes():
+                                size += len(chunk)
+                                if size > self.max_response_bytes:
+                                    raise ResponseTooLargeError(
+                                        "The publisher response exceeded the safe size limit"
+                                    )
+                                chunks.append(chunk)
+                            content = b"".join(chunks)
+                    except httpx.HTTPError as exc:
+                        raise FetchError("The publisher could not be reached") from exc
+
+                self._last_request[host] = time.monotonic()
+                if status in {301, 302, 303, 307, 308}:
+                    location = headers.get("location")
+                    if not location:
+                        raise FetchError(
+                            "The publisher returned a redirect without a destination"
+                        )
+                    if redirect_count >= self.max_redirects:
+                        raise FetchError("The publisher returned too many redirects")
+                    current, addresses = await asyncio.to_thread(
+                        resolve_fetch_url,
+                        urljoin(current, location),
+                        resolver=self._resolver,
+                        allowed_hosts=allowed_hosts,
+                    )
+                    continue
+                if status in {402, 403, 429}:
+                    raise FetchError(
+                        "The publisher declined or rate-limited the request; "
+                        "the application will not bypass that control"
+                    )
+                if status >= 400:
+                    raise FetchError(f"The publisher returned HTTP {status}")
+                content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if content_type not in allowed_content_types:
+                    raise FetchError("The publisher response was not a supported image")
+                if not content:
+                    raise FetchError("The publisher returned an empty image")
+                return content, content_type
+        raise FetchError("The publisher redirect could not be resolved")
+
     async def fetch_text(self, url: str, *, allowed_hosts: set[str]) -> str:
-        current = await asyncio.to_thread(
-            validate_fetch_url,
+        current, addresses = await asyncio.to_thread(
+            resolve_fetch_url,
             url,
             resolver=self._resolver,
             allowed_hosts=allowed_hosts,
@@ -124,7 +255,7 @@ class PoliteHttpFetcher:
                     await asyncio.sleep(delay)
                 if self._client is None:
                     status, headers, content, encoding = await asyncio.to_thread(
-                        self._fetch_with_urllib, current, host
+                        self._fetch_pinned, current, host, addresses[0]
                     )
                 else:
                     try:
@@ -152,8 +283,8 @@ class PoliteHttpFetcher:
                         raise FetchError("The publisher returned a redirect without a destination")
                     if redirect_count >= self.max_redirects:
                         raise FetchError("The publisher returned too many redirects")
-                    current = await asyncio.to_thread(
-                        validate_fetch_url,
+                    current, addresses = await asyncio.to_thread(
+                        resolve_fetch_url,
                         urljoin(current, location),
                         resolver=self._resolver,
                         allowed_hosts=allowed_hosts,

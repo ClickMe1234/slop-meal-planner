@@ -2,7 +2,7 @@
 
 > A free, self-hosted meal planner for real households.
 
-Current release: **0.12.0**. See the [latest release notes](#changelog) or the
+Current release: **1.0.0**. See the [latest release notes](#changelog) or the
 [full changelog](CHANGELOG.md).
 
 ## About
@@ -32,7 +32,6 @@ it is self-hosted, there is no subscription fee for the application.
 
 ### Plan the week automatically
 
-![Weekly meal plan](docs/screenshots/week.png)
 
 The week view puts every planned meal, portion, batch, leftover, and nutrition
 summary in one place. Plans can be regenerated while keeping meals that you
@@ -41,13 +40,11 @@ have already chosen.
 
 ### Serving suggestions
 
-![Weekly meal plan](docs/screenshots/servings.png)
 
 Enter the total weight of what you cooked and see how much to give each person in the house based on nutitional goals.
 
 ### Work through constraints step by step
 
-![Automatic planning wizard](docs/screenshots/plan.png)
 
 The planning flow takes dates, household members, attendance, special days,
 cook days, and ingredient preferences into account before showing a reviewable
@@ -55,7 +52,6 @@ plan.
 
 ### Discover and import recipes
 
-![Recipe discovery](docs/screenshots/recipes.png)
 
 Search Good Food and Allrecipes from one catalogue, filter by meal type or
 source, import a URL, and review nutrition, servings, tags, and ambiguous
@@ -63,7 +59,6 @@ ingredients before a recipe becomes eligible for automatic planning.
 
 ### Keep nutrition data reusable
 
-![Household ingredients](docs/screenshots/ingredients.png)
 
 Search general nutrition records, look up packaged products with Open Food
 Facts, scan a barcode, or enter a label manually. Saved household ingredients
@@ -71,7 +66,6 @@ can be reused in recipes, planning, and pantry stock.
 
 ### Track pantry stock and reservations
 
-![Pantry inventory](docs/screenshots/pantry.png)
 
 Pantry quantities are reserved when a plan is accepted and deducted when food
 is cooked. Use-soon, low-stock, expiry, and staple flags make the inventory
@@ -79,17 +73,21 @@ useful during the week.
 
 ### Generate a practical shopping list
 
-![Shopping list](docs/screenshots/shopping.png)
 
 Shopping quantities subtract usable pantry stock, round to practical units, and
 remain available offline. Items can be checked, renamed, shared, copied, or
 exported as text.
 
-![Shopping list2](docs/screenshots/shopping2.png)
 
 Fuzzy matching of shopping list to pantry ingredients supported!
 
 ## Changelog
+
+### 1.0.0 - 2026-07-24
+
+- Promote Slop Meal Planner to its first stable release.
+- Establish a documented security baseline across source, history,
+  dependencies, CI, containers, and deployment.
 
 ### 0.12.0 - 2026-07-24
 
@@ -147,21 +145,23 @@ Compose Manager is required for the application container.
    [`deploy/README.md`](deploy/README.md).
 2. Generate three independent values with `openssl rand -hex 32`: a PostgreSQL
    password, `MEAL_PLANNER_SECRET_KEY`, and `MEAL_PLANNER_SETUP_TOKEN`.
-3. In Unraid Apps, choose **Add Container** and use the exact values in
+3. Configure an HTTPS reverse proxy or authenticated private overlay first.
+   Direct LAN HTTP is not a supported production deployment because it exposes
+   passwords, setup tokens, API keys, and session cookies to on-path devices.
+4. In Unraid Apps, choose **Add Container** and use the exact values in
    [`deploy/unraid-template.xml`](deploy/unraid-template.xml):
-   `ghcr.io/clickme1234/slop-meal-planner:0.12.0` as Repository, `Bridge` as
+   `ghcr.io/clickme1234/slop-meal-planner:1.0.0` as Repository, `Bridge` as
    Network Type, `Shell` as the console shell, Privileged off, and `--init` as
    Extra Parameters. The Repository is a Docker image reference, not the GitHub
    source URL. Leave Post Arguments blank.
-4. Add the Web UI Port mapping `8080:8000` (the host side may be changed), map
+5. Add the Web UI Port mapping `8080:8000` (the host side may be changed), map
    `/mnt/user/appdata/slop-meal-planner/data` to `/data`, and map
    `/mnt/user/backups/slop-meal-planner` to `/backups`.
-5. Add the visible PostgreSQL, Redis, secret, host, cookie, timezone, PUID, and
-   PGID variables. Set `MEAL_PLANNER_ALLOWED_HOSTS` to the actual Unraid LAN IP,
-   hostnames, and any reverse-proxy name used by household devices. Keep
-   `MEAL_PLANNER_COOKIE_SECURE=false` for direct HTTP; set it to `true` only
-   behind HTTPS.
-6. Start PostgreSQL and Redis before Slop. Slop still retries dependencies for
+6. Add the visible PostgreSQL, Redis, secret, host, cookie, timezone, PUID, and
+   PGID variables. Set `MEAL_PLANNER_ALLOWED_HOSTS` to the reverse-proxy names
+   used by household devices. Keep `MEAL_PLANNER_COOKIE_SECURE=true` and
+   `MEAL_PLANNER_HSTS_ENABLED=true`.
+7. Start PostgreSQL and Redis before Slop. Slop still retries dependencies for
    up to 120 seconds, then runs migrations once and starts its web, worker, and
    scheduler processes. Open the selected host port and use the setup token to
    create the owner.
@@ -354,12 +354,12 @@ licence/version notes, then run:
 
 ```powershell
 Set-Location backend
+$env:MEAL_PLANNER_DATABASE_URL = "postgresql+psycopg://meal_planner:password@localhost/meal_planner"
 ..\.venv\Scripts\python.exe -m scripts.import_cofid `
   C:\path\to\cofid.csv `
   --dataset-version "CoFID 2021" `
   --source-uri "official download URL" `
-  --license-name "Open Government Licence" `
-  --database-url "postgresql+psycopg://meal_planner:password@localhost/meal_planner"
+  --license-name "Open Government Licence"
 ```
 
 See [backend/app/data_import/README.md](backend/app/data_import/README.md) for

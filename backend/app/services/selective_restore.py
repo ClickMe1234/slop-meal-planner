@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
+import secrets
 import subprocess
 import threading
 import uuid
@@ -27,6 +29,8 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..config import get_settings
+from ..discovery.errors import InvalidUrlError
+from ..discovery.urls import canonicalize_url
 from ..errors import DomainError
 from ..models import (
     FoodAlias,
@@ -208,6 +212,39 @@ def resolve_archive(value: str) -> ArchiveFiles:
         data_archive=(path / "data.tar.gz").is_file(),
         checksums=(path / "SHA256SUMS").is_file(),
     )
+
+
+def verify_archive_checksums(archive: ArchiveFiles) -> None:
+    checksum_path = archive.path / "SHA256SUMS"
+    if not checksum_path.is_file():
+        raise DomainError(
+            "BACKUP_CHECKSUM_MISSING",
+            "This backup has no checksum manifest and cannot be restored.",
+            422,
+        )
+    expected: dict[str, str] = {}
+    for line in checksum_path.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"([0-9a-fA-F]{64})\s+\*?([A-Za-z0-9._-]+)", line.strip())
+        if match:
+            expected[match.group(2)] = match.group(1).lower()
+    for name in ("database.dump", "data.tar.gz", "manifest.txt"):
+        path = archive.path / name
+        if not path.is_file() or name not in expected:
+            raise DomainError(
+                "BACKUP_CHECKSUM_INCOMPLETE",
+                f"The backup checksum manifest does not cover {name}.",
+                422,
+            )
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if not secrets.compare_digest(digest.hexdigest(), expected[name]):
+            raise DomainError(
+                "BACKUP_CHECKSUM_FAILED",
+                f"The backup failed integrity verification for {name}.",
+                422,
+            )
 
 
 def list_archives() -> list[dict[str, Any]]:
@@ -498,6 +535,7 @@ def _counts(bundle: SourceBundle) -> dict[str, dict[str, int]]:
 
 def preview_archive(archive_value: str, source_household_id: str | None = None) -> dict[str, Any]:
     archive = resolve_archive(archive_value)
+    verify_archive_checksums(archive)
     if not archive.database_dump:
         raise DomainError("BACKUP_INCOMPLETE", "This backup has no database.dump file.", 422)
     with _TemporaryDatabase(archive.path / "database.dump") as source_db:
@@ -668,6 +706,12 @@ def _insert_rows(db: Session, model: Any, rows: list[dict[str, Any]], maps: dict
             continue
         if table == "meal_batch":
             data["parent_batch_id"] = None
+        if table == "recipe":
+            for field in ("source_url", "image_url"):
+                try:
+                    data[field] = canonicalize_url(data[field]) if data.get(field) else None
+                except InvalidUrlError:
+                    data[field] = None
         data = _mapped_data(data, maps)
         existing = _find_existing(db, model, data, maps)
         if existing is not None:
@@ -698,6 +742,7 @@ def restore_archive(
         archive = resolve_archive(archive_value)
         if not archive.database_dump:
             raise DomainError("BACKUP_INCOMPLETE", "This backup has no database.dump file.", 422)
+        verify_archive_checksums(archive)
         with _TemporaryDatabase(archive.path / "database.dump") as source_db:
             bundle = _load_source_bundle(source_db, source_household_id)
             include = _component_tables(requested, bundle.tables)

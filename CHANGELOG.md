@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.0 - 2026-07-24
+
+- Promote the application and deployment metadata to the first stable release.
+- Complete a full repository security review covering committed-secret
+  history, application attack surfaces, dependencies, CI, containers, and
+  deployment.
+- Prevent stored active-content URLs and DNS-rebinding SSRF, quarantine legacy
+  unsafe URLs, and stop browsers from loading cross-origin recipe images.
+- Add login throttling, bounded password verification, other-session revocation
+  on password changes, reliable logout cleanup, request and planner limits, and
+  security response headers.
+- Require patched and hash-locked dependencies, verify restore checksums, pin
+  build inputs and CI actions, scan production images, and harden containers.
+- Remove privacy-sensitive screenshots from the current tree and make HTTPS
+  with secure cookies the supported production deployment.
+- Restore external recipe pictures through an authenticated, DNS-pinned image
+  proxy instead of loading third-party URLs directly in household browsers.
+
 ## 0.12.0 - 2026-07-24
 
 - Add owner-only selective backup restore from Settings → Data & backup.
