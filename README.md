@@ -32,77 +32,57 @@ it is self-hosted, there is no subscription fee for the application.
 
 ### Plan the week automatically
 
-
 The week view puts every planned meal, portion, batch, leftover, and nutrition
 summary in one place. Plans can be regenerated while keeping meals that you
 have already chosen.
 
+![Weekly meal plan](docs/examples/week.png)
 
 ### Serving suggestions
 
-
 Enter the total weight of what you cooked and see how much to give each person in the house based on nutitional goals.
 
-### Work through constraints step by step
+![Serving suggestions](docs/examples/servings.png)
 
+### Work through constraints step by step
 
 The planning flow takes dates, household members, attendance, special days,
 cook days, and ingredient preferences into account before showing a reviewable
 plan.
 
-### Discover and import recipes
+![Plan review](docs/examples/plan.png)
 
+### Discover and import recipes
 
 Search Good Food and Allrecipes from one catalogue, filter by meal type or
 source, import a URL, and review nutrition, servings, tags, and ambiguous
 ingredients before a recipe becomes eligible for automatic planning.
 
-### Keep nutrition data reusable
+![Recipe catalogue](docs/examples/recipes.png)
 
+### Keep nutrition data reusable
 
 Search general nutrition records, look up packaged products with Open Food
 Facts, scan a barcode, or enter a label manually. Saved household ingredients
 can be reused in recipes, planning, and pantry stock.
 
-### Track pantry stock and reservations
+![Pantry stock](docs/examples/pantry.png)
 
+### Track pantry stock and reservations
 
 Pantry quantities are reserved when a plan is accepted and deducted when food
 is cooked. Use-soon, low-stock, expiry, and staple flags make the inventory
 useful during the week.
 
-### Generate a practical shopping list
+![Ingredients](docs/examples/ingredients.png)
 
+### Generate a practical shopping list
 
 Shopping quantities subtract usable pantry stock, round to practical units, and
 remain available offline. Items can be checked, renamed, shared, copied, or
 exported as text.
 
-
 Fuzzy matching of shopping list to pantry ingredients supported!
-
-## Screenshots
-
-The demo includes seeded sample data so you can explore the main workflows
-without connecting external recipe or nutrition services.
-
-### Plan the week
-
-![Weekly meal plan](docs/examples/week.png)
-
-![Plan review](docs/examples/plan.png)
-
-### Recipes and ingredients
-
-![Recipe catalogue](docs/examples/recipes.png)
-
-![Ingredients](docs/examples/ingredients.png)
-
-![Serving suggestions](docs/examples/servings.png)
-
-### Pantry and shopping
-
-![Pantry stock](docs/examples/pantry.png)
 
 ![Shopping list](docs/examples/shopping.png)
 
