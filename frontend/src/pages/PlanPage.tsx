@@ -21,7 +21,7 @@ import {
   WandSparkles,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type DragEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { NutritionStrip } from '../components/Nutrition'
 import { Badge, Button, Card, Loading, Notice, PageHeader, ProgressBar } from '../components/ui'
@@ -150,6 +150,8 @@ export function PlanPage() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const restoredPlanId = searchParams.get('plan')
+  const editSetupRequested = searchParams.get('edit') === 'setup'
+  const editedPlanRequestRef = useRef<string | null>(null)
   const [step, setStep] = useState(0)
   const [maxVisitedStep, setMaxVisitedStep] = useState(0)
   const [generating, setGenerating] = useState(false)
@@ -332,6 +334,18 @@ export function PlanPage() {
     setLivePlan(null)
     setSearchParams({}, { replace: true })
   }
+
+  useEffect(() => {
+    if (
+      !editSetupRequested
+      || !restoredPlanId
+      || !displayedPlan
+      || editedPlanRequestRef.current === restoredPlanId
+      || (!isDemoMode && membersQuery.isLoading)
+    ) return
+    editedPlanRequestRef.current = restoredPlanId
+    editSetupCopy(displayedPlan)
+  }, [displayedPlan, editSetupRequested, members, membersQuery.isLoading, restoredPlanId])
 
   const generate = async (ignoreNutritionTolerances = false) => {
     if (generationBlocked) {
