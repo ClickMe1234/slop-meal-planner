@@ -33,7 +33,7 @@ In **Apps → Add Container**, use these main fields:
 | Field | Value |
 | --- | --- |
 | Name | `Slop Meal Planner` |
-| Repository | `ghcr.io/clickme1234/slop-meal-planner:1.0.1` |
+| Repository | `ghcr.io/clickme1234/slop-meal-planner:latest` |
 | Network Type | `Bridge` |
 
 The Repository field is a Docker image reference, not the GitHub source URL.
