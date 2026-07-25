@@ -32,6 +32,7 @@
     "vitest": "^3.0.5"
   },
   "overrides": {
-    "react-router": "8.3.0"
+    "react-router": "8.3.0",
+    "filelist": "2.0.2"
   }
 }
