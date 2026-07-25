@@ -90,15 +90,15 @@ Fuzzy matching of shopping list to pantry ingredients supported!
 
 ## Changelog
 
-### 1.1.0 - 2026-07-24
+### 1.1.0 - 2026-07-25
 
 - Fix recipe customisation search so typing no longer replaces the page.
 - Show which recipes contribute each shopping-list ingredient and add
   permanent, recipe-linked unit changes and manual combining.
-- Add a recipe-preserving editor for active plans: remove days or guests and
-  change calorie boosts without replacing meals, swap a cooking batch, merge a
-  cook day back into its previous batch, or add a cook day by choosing its new
-  recipe from the existing customisation screen.
+- Add a recipe-preserving editor for ready or accepted plans: remove days or
+  guests and change calorie boosts without replacing meals, swap a batch from
+  its cook day, merge a cook day back into its previous batch, or add a cook
+  day by choosing its recipe from the existing customisation screen.
 - Keep current plans, pantry reservations, and shopping lists synchronised
   when saved recipe ingredients change.
 - Pin patched frontend build dependencies to remove the `brace-expansion`
