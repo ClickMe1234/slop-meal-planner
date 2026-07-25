@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.0 - 2026-07-25
+
+- Fix recipe customisation search so typing no longer replaces the page, while
+  debouncing saved and remote searches and retaining the previous results.
+- Open generated shopping ingredients to see the recipes, ingredient rows,
+  plan quantities, and meal dates that contributed them.
+- Combine recipe-backed shopping lines manually and change their recipe-facing
+  names and units, requesting explicit equivalents when conversion is unsafe.
+- Edit ready or accepted plans without regenerating their existing meals:
+  remove days or guests, change calorie boosts, and launch the workflow from
+  the week view.
+- Manage cooking batches in the plan editor by swapping recipes on cook days,
+  merging a removed cook day into its previous batch, or adding a cook day and
+  selecting its recipe through the existing customisation screen.
+- Repoint uncooked current-plan batches after recipe ingredient changes and
+  rebuild pantry reservations and the active shopping list atomically after
+  linked recipe or accepted-plan edits.
+- Pin patched frontend build dependencies to remove the `brace-expansion`
+  denial-of-service advisory from CI.
+
 ## 1.0.1 - 2026-07-24
 
 - Combine shopping-list ingredients by their reviewed display identity so

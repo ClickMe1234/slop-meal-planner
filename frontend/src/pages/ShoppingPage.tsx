@@ -734,10 +734,14 @@ export function ShoppingPage() {
                   <input type="checkbox" checked={item.checked} onChange={() => toggle(item.id)}/>
                   <span className="custom-check"><Check/></span>
                 </label>
-                <span className="shopping-copy"><strong>{item.name}</strong>{(item.exact || item.pantryUsed) && <span>{item.exact}{item.exact && item.pantryUsed && <> · </>}{item.pantryUsed}</span>}</span>
+                {item.sourceCount && online && listId
+                  ? <Link className="shopping-copy shopping-copy--linked" to={`/shopping/${listId}/items/${item.id}`}><strong>{item.name}</strong>{(item.exact || item.pantryUsed) && <span>{item.exact}{item.exact && item.pantryUsed && <> · </>}{item.pantryUsed}</span>}<small>Used in {item.recipeCount} {item.recipeCount === 1 ? 'recipe' : 'recipes'}</small></Link>
+                  : <span className="shopping-copy"><strong>{item.name}</strong>{(item.exact || item.pantryUsed) && <span>{item.exact}{item.exact && item.pantryUsed && <> · </>}{item.pantryUsed}</span>}</span>}
                 <span className="shopping-quantity">
                   <strong className="buy-amount">{item.buy}</strong>
-                  {(item.quantityOptions?.length ?? 0) > 1 && <span className="shopping-unit-options" aria-label={`Display unit for ${item.name}`}>
+                  {Boolean(item.sourceCount) && online && listId
+                    ? <Link className="shopping-unit-change-link" to={`/shopping/${listId}/ingredient-change?mode=unit&items=${item.id}`}>Change unit</Link>
+                    : (item.quantityOptions?.length ?? 0) > 1 && <span className="shopping-unit-options" aria-label={`Display unit for ${item.name}`}>
                     {item.quantityOptions?.map(option => <button
                       type="button"
                       key={option.unit}
@@ -844,6 +848,8 @@ export function mapShoppingItem(item: BackendShoppingItem): ShoppingItem {
       confidence: match.confidence,
       fuzzy: match.fuzzy,
     })),
+    recipeCount: item.recipe_count ?? 0,
+    sourceCount: item.source_count ?? 0,
   }
 }
 

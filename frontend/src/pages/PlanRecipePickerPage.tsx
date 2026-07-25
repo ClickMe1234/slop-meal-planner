@@ -17,7 +17,9 @@ import {
 } from '../api/client'
 import type { Nutrition } from '../types'
 import { safeExternalUrl, safeImageUrl } from '../lib/safeUrls'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { MEAL_TYPES, capitalise, readDemoPlan, storeDemoPlan, type MealType } from './planner'
+import { readPlanEditDraft, writePlanEditDraft } from './planEditDraft'
 
 interface PickerRecipe {
   id: string
@@ -43,6 +45,7 @@ export function PlanRecipePickerPage() {
   const [importingUrl, setImportingUrl] = useState('')
   const [error, setError] = useState<ApiError | null>(null)
   const [failedRecipe, setFailedRecipe] = useState<PickerRecipe | null>(null)
+  const debouncedQuery = useDebouncedValue(query.trim(), 350)
 
   const planQuery = useQuery({
     queryKey: ['plan', planId],
@@ -60,6 +63,8 @@ export function PlanRecipePickerPage() {
     ? plan?.occurrences.find(item => item.parent_batch_id === batchId && item.component_slot === sideSlot)
     : undefined
   const requestedMealType = searchParams.get('mealType')
+  const editMode = searchParams.get('editMode')
+  const editorMode = editMode === 'swap' || editMode === 'addCook'
   const mealType = isMealType(occurrence?.meal_type)
     ? occurrence.meal_type
     : isMealType(requestedMealType) ? requestedMealType : undefined
@@ -68,14 +73,15 @@ export function PlanRecipePickerPage() {
     : mealType ? [mealType] : []
 
   const savedRecipes = useQuery({
-    queryKey: ['recipes', 'picker', query, candidateTags.join(',')],
-    queryFn: () => api.listRecipes(query, candidateTags, [], 'any', true),
+    queryKey: ['recipes', 'picker', debouncedQuery, candidateTags.join(',')],
+    queryFn: () => api.listRecipes(debouncedQuery, candidateTags, [], 'any', true),
     enabled: !isDemoMode && Boolean(mealType),
+    placeholderData: previous => previous,
   })
   const remoteRecipes = useQuery({
-    queryKey: ['recipe-discovery', 'picker', query.trim()],
-    queryFn: () => api.searchRemote(query.trim(), `plan-picker-${occurrenceId}`, ['good_food', 'allrecipes']),
-    enabled: !isDemoMode && query.trim().length >= 2,
+    queryKey: ['recipe-discovery', 'picker', debouncedQuery],
+    queryFn: () => api.searchRemote(debouncedQuery, `plan-picker-${occurrenceId}`, ['good_food', 'allrecipes']),
+    enabled: !isDemoMode && debouncedQuery.length >= 2,
   })
 
   const recipes = useMemo<PickerRecipe[]>(() => {
@@ -105,6 +111,29 @@ export function PlanRecipePickerPage() {
     setError(null)
     setFailedRecipe(null)
     try {
+      if (editorMode) {
+        const draft = readPlanEditDraft(planId)
+        if (!draft || draft.planVersion !== plan.plan.version) {
+          throw new ApiError(409, 'The edit draft is no longer current. Return to the editor and try again.')
+        }
+        if (editMode === 'addCook') {
+          const key = `${occurrence.meal_date}::${mealType}`
+          draft.addedCookDays[key] = {
+            mealDate: occurrence.meal_date,
+            mealType,
+            recipeId: recipe.id,
+            recipeTitle: recipe.title,
+          }
+        } else {
+          draft.recipeSwaps[occurrence.batch_id] = {
+            recipeId: recipe.id,
+            recipeTitle: recipe.title,
+          }
+        }
+        writePlanEditDraft(planId, draft)
+        navigate(`/plan/${encodeURIComponent(planId)}/edit`)
+        return
+      }
       if (isDemoMode) {
         let updated: BackendPlanDetail
         if (sideMode) {
@@ -171,9 +200,11 @@ export function PlanRecipePickerPage() {
     setFailedRecipe(null)
     try {
       const job = await api.startImport(result.url)
+      const pickerParams = new URLSearchParams(searchParams)
+      pickerParams.set('mealType', mealType)
       const returnTo = sideMode
-        ? `/plan/${planId}/batches/${batchId}/sides/${sideSlot}/recipes?mealType=${encodeURIComponent(mealType)}`
-        : `/plan/${planId}/occurrences/${occurrenceId}/recipes?mealType=${encodeURIComponent(mealType)}`
+        ? `/plan/${planId}/batches/${batchId}/sides/${sideSlot}/recipes?${pickerParams.toString()}`
+        : `/plan/${planId}/occurrences/${occurrenceId}/recipes?${pickerParams.toString()}`
       const suggestedMealType = sideMode && mealType !== 'snack' ? 'side' : mealType
       navigate(`/imports/${job.id}/review?suggestedMealType=${encodeURIComponent(suggestedMealType)}&returnTo=${encodeURIComponent(returnTo)}`)
     } catch (reason) {
@@ -190,7 +221,7 @@ export function PlanRecipePickerPage() {
   if (!plan || !occurrence || !mealType) {
     return <div className="page"><PageHeader title="Meal unavailable" description="This planned meal could not be found."/><Notice tone="warning" title="Cannot customise this meal">Open the meal plan again and choose a meal from its grid.</Notice><Link className="button button--primary" to={backToPlan}>Back to plan</Link></div>
   }
-  if (plan.plan.status !== 'ready') {
+  if (plan.plan.status !== 'ready' && !editorMode) {
     return <div className="page"><PageHeader title="Plan already accepted" description="Accepted meals are locked so their pantry reservations and shopping quantities stay consistent."/><Notice title="Start a new plan to make changes">You can still review this plan and its shopping list.</Notice><Link className="button button--primary" to={backToPlan}>Back to plan</Link></div>
   }
 
@@ -218,7 +249,13 @@ export function PlanRecipePickerPage() {
       {query.trim().length >= 2 && <section className="planner-picker-section"><div className="section-heading"><div><h2>Recipe websites</h2><p>Save a new recipe, tag it and return here to select it.</p></div></div>{remoteRecipes.isFetching ? <Loading label="Searching recipe websites…"/> : remoteResults.length ? <div className="planner-remote-results">{remoteResults.map(result => <Card className="planner-remote-card" key={result.url}><div>{safeImageUrl(result.image_url) ? <img src={safeImageUrl(result.image_url) ?? undefined} alt=""/> : <ChefHat/>}</div><span><strong>{result.title}</strong><small>{result.source}</small><RecipeRating rating={result.star_rating} count={result.rating_count}/></span>{safeExternalUrl(result.url) && <a href={safeExternalUrl(result.url) ?? undefined} target="_blank" rel="noopener noreferrer" aria-label={`Open ${result.title}`}><ExternalLink/></a>}<Button variant="secondary" disabled={result.already_saved || importingUrl === result.url} onClick={() => startImport(result)}>{result.already_saved ? <><Check/>Already saved</> : importingUrl === result.url ? 'Starting import…' : <><WandSparkles/>Save for {itemLabel}</>}</Button></Card>)}</div> : <p className="muted">No website recipes found. Try a broader search.</p>}</section>}
     </div>
   }
-  return <div className="page"><div className="review-top"><Link to={backToPlan} className="icon-link"><ArrowLeft/>Back to plan</Link><Badge tone="green">{capitalise(mealType)} recipes only</Badge></div><PageHeader eyebrow={`${occurrence.meal_date} · ${capitalise(mealType)}`} title="Choose a different recipe" description={`Replace ${occurrence.recipe_title} for this cooked batch and every date it covers. Only saved recipes tagged for ${mealType} can be selected.`}/><div className="recipe-search planner-picker-search"><Search size={22}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`Search saved ${mealType} recipes or recipe websites…`} aria-label={`Search ${mealType} recipes`}/></div>{error && <Card className="planner-generation-error"><Notice tone="warning" title="Could not update meal">{error.message}</Notice>{failedRecipe && <Button variant="secondary" disabled={Boolean(savingId)} onClick={() => choose(failedRecipe, true)}>Continue anyway</Button>}</Card>}<section className="planner-picker-section"><div className="section-heading"><div><h2>Saved recipes</h2><p>{recipes.length} tagged for {mealType}</p></div></div>{recipes.length ? <div className="planner-recipe-grid">{recipes.map(recipe => <PickerRecipeCard key={recipe.id} recipe={recipe} current={recipe.id === occurrence.recipe_id} saving={savingId === recipe.id} onChoose={() => choose(recipe)}/>)}</div> : <EmptyState icon={<ChefHat size={38}/>} title={`No saved ${mealType} recipes found`} description={`Add the ${mealType} tag to a planner-ready recipe, or search recipe websites below.`} action={<Link className="button button--secondary" to="/recipes">Manage recipes</Link>}/>}</section>{query.trim().length >= 2 && <section className="planner-picker-section"><div className="section-heading"><div><h2>Recipe websites</h2><p>Save a new recipe, confirm its details and return here to select it.</p></div></div>{remoteRecipes.isFetching ? <Loading label="Searching recipe websites…"/> : remoteResults.length ? <div className="planner-remote-results">{remoteResults.map(result => <Card className="planner-remote-card" key={result.url}><div>{safeImageUrl(result.image_url) ? <img src={safeImageUrl(result.image_url) ?? undefined} alt=""/> : <ChefHat/>}</div><span><strong>{result.title}</strong><small>{result.source}</small><RecipeRating rating={result.star_rating} count={result.rating_count}/></span>{safeExternalUrl(result.url) && <a href={safeExternalUrl(result.url) ?? undefined} target="_blank" rel="noopener noreferrer" aria-label={`Open ${result.title}`}><ExternalLink/></a>}<Button variant="secondary" disabled={result.already_saved || importingUrl === result.url} onClick={() => startImport(result)}>{result.already_saved ? <><Check/>Already saved</> : importingUrl === result.url ? 'Starting import…' : <><WandSparkles/>Save for {mealType}</>}</Button></Card>)}</div> : <p className="muted">No website recipes found. Try a broader search.</p>}</section>}</div>
+  const editorBackPath = `/plan/${encodeURIComponent(planId)}/edit`
+  const pickerBackPath = editorMode ? editorBackPath : backToPlan
+  const pickerTitle = editMode === 'addCook' ? 'Choose the new cook-day recipe' : editorMode ? 'Swap this batch recipe' : 'Choose a different recipe'
+  const pickerDescription = editMode === 'addCook'
+    ? `Pick the recipe that starts on ${occurrence.meal_date}. It will continue until the next cooking boundary.`
+    : `Replace ${occurrence.recipe_title} for this cooking batch and every date it covers. Only saved recipes tagged for ${mealType} can be selected.`
+  return <div className="page"><div className="review-top"><Link to={pickerBackPath} className="icon-link"><ArrowLeft/>Back to {editorMode ? 'editor' : 'plan'}</Link><Badge tone="green">{capitalise(mealType)} recipes only</Badge></div><PageHeader eyebrow={`${occurrence.meal_date} · ${capitalise(mealType)}`} title={pickerTitle} description={pickerDescription}/><div className="recipe-search planner-picker-search"><Search size={22}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`Search saved ${mealType} recipes or recipe websites…`} aria-label={`Search ${mealType} recipes`}/></div>{error && <Card className="planner-generation-error"><Notice tone="warning" title="Could not update meal">{error.message}</Notice>{failedRecipe && <Button variant="secondary" disabled={Boolean(savingId)} onClick={() => choose(failedRecipe, true)}>Continue anyway</Button>}</Card>}<section className="planner-picker-section"><div className="section-heading"><div><h2>Saved recipes</h2><p>{recipes.length} tagged for {mealType}</p></div></div>{recipes.length ? <div className="planner-recipe-grid">{recipes.map(recipe => <PickerRecipeCard key={recipe.id} recipe={recipe} current={recipe.id === occurrence.recipe_id} saving={savingId === recipe.id} onChoose={() => choose(recipe)}/>)}</div> : <EmptyState icon={<ChefHat size={38}/>} title={`No saved ${mealType} recipes found`} description={`Add the ${mealType} tag to a planner-ready recipe, or search recipe websites below.`} action={<Link className="button button--secondary" to="/recipes">Manage recipes</Link>}/>}</section>{query.trim().length >= 2 && <section className="planner-picker-section"><div className="section-heading"><div><h2>Recipe websites</h2><p>Save a new recipe, confirm its details and return here to select it.</p></div></div>{remoteRecipes.isFetching ? <Loading label="Searching recipe websites…"/> : remoteResults.length ? <div className="planner-remote-results">{remoteResults.map(result => <Card className="planner-remote-card" key={result.url}><div>{safeImageUrl(result.image_url) ? <img src={safeImageUrl(result.image_url) ?? undefined} alt=""/> : <ChefHat/>}</div><span><strong>{result.title}</strong><small>{result.source}</small><RecipeRating rating={result.star_rating} count={result.rating_count}/></span>{safeExternalUrl(result.url) && <a href={safeExternalUrl(result.url) ?? undefined} target="_blank" rel="noopener noreferrer" aria-label={`Open ${result.title}`}><ExternalLink/></a>}<Button variant="secondary" disabled={result.already_saved || importingUrl === result.url} onClick={() => startImport(result)}>{result.already_saved ? <><Check/>Already saved</> : importingUrl === result.url ? 'Starting import…' : <><WandSparkles/>Save for {mealType}</>}</Button></Card>)}</div> : <p className="muted">No website recipes found. Try a broader search.</p>}</section>}</div>
 }
 
 function PickerRecipeCard({ recipe, current, saving, onChoose }: { recipe: PickerRecipe; current: boolean; saving: boolean; onChoose: () => void }) {

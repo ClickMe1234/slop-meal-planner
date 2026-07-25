@@ -201,6 +201,8 @@ class RecipeIngredientIn(APIModel):
     optional: bool = False
     needs_review: bool = False
     shopping_excluded: bool = False
+    shopping_measurement_overridden: bool = False
+    shopping_group_key: str | None = Field(default=None, max_length=240)
     food_record_id: str | None = None
 
     @model_validator(mode="after")
@@ -283,12 +285,20 @@ class RecipeSummary(APIModel):
     publisher_metadata_status: str = "not_applicable"
 
 
+class RecipePlanSyncOut(APIModel):
+    plans_updated: int = 0
+    shopping_list_rebuilt: bool = False
+    shopping_list_id: str | None = None
+    cooked_batches_unchanged: int = 0
+
+
 class RecipeDetail(RecipeSummary):
     recipe_version_id: str
     version_number: int
     yield_servings: Decimal | None
     custom_instructions: str | None
     ingredients: list[dict[str, Any]]
+    plan_sync: RecipePlanSyncOut | None = None
 
 
 class FoodNutrientIn(APIModel):
@@ -591,6 +601,56 @@ class PlanRecipeReplaceRequest(APIModel):
     ignore_nutrition_tolerances: bool = False
 
 
+class PlanCookDayIn(APIModel):
+    meal_date: date
+    meal_type: MealType
+
+
+class PlanCookDayAddIn(PlanCookDayIn):
+    recipe_id: str
+
+
+class PlanBatchRecipeSwapIn(APIModel):
+    batch_id: str
+    recipe_id: str
+
+
+class PlanPreservingEditRequest(APIModel):
+    expected_plan_version: int = Field(ge=1)
+    removed_dates: list[date] = Field(default_factory=list, max_length=32)
+    calorie_boosts: list[DayCalorieBoostIn] = Field(default_factory=list, max_length=250)
+    guest_days: list[GuestDayIn] = Field(default_factory=list, max_length=250)
+    added_cook_days: list[PlanCookDayAddIn] = Field(default_factory=list, max_length=250)
+    removed_cook_days: list[PlanCookDayIn] = Field(default_factory=list, max_length=250)
+    recipe_swaps: list[PlanBatchRecipeSwapIn] = Field(default_factory=list, max_length=250)
+    ignore_nutrition_tolerances: bool = False
+
+    @model_validator(mode="after")
+    def validate_unique_edits(self):
+        if len(self.removed_dates) != len(set(self.removed_dates)):
+            raise ValueError("removed dates must be unique")
+        boost_keys = [(item.meal_date, item.member_id) for item in self.calorie_boosts]
+        if len(boost_keys) != len(set(boost_keys)):
+            raise ValueError("a member can only have one calorie boost per day")
+        guest_dates = [item.meal_date for item in self.guest_days]
+        if len(guest_dates) != len(set(guest_dates)):
+            raise ValueError("a date can only have one guest count")
+        cook_keys = [(item.meal_date, item.meal_type) for item in self.added_cook_days]
+        if len(cook_keys) != len(set(cook_keys)):
+            raise ValueError("a date and meal type can only add one cooking day")
+        removed_cook_keys = [
+            (item.meal_date, item.meal_type) for item in self.removed_cook_days
+        ]
+        if len(removed_cook_keys) != len(set(removed_cook_keys)):
+            raise ValueError("a date and meal type can only remove one cooking day")
+        if set(cook_keys) & set(removed_cook_keys):
+            raise ValueError("a cooking day cannot be added and removed together")
+        swap_batches = [item.batch_id for item in self.recipe_swaps]
+        if len(swap_batches) != len(set(swap_batches)):
+            raise ValueError("a batch can only have one recipe swap")
+        return self
+
+
 class PlanSideCreateRequest(APIModel):
     recipe_id: str
     expected_plan_version: int = Field(ge=1)
@@ -789,7 +849,77 @@ class ShoppingItemOut(APIModel):
     pantry_unit_conflicts: list[ShoppingPantryUnitConflict]
     pantry_match_suggestions: list[ShoppingPantryMatchSuggestion]
     pantry_confirmed_matches: list[ShoppingPantryConfirmedMatch]
+    source_count: int = 0
+    recipe_count: int = 0
     version: int
+
+
+class ShoppingRecipeSource(APIModel):
+    recipe_id: str
+    recipe_title: str
+    recipe_version_id: str
+    recipe_ingredient_id: str
+    original_text: str
+    preparation: str | None = None
+    recipe_quantity: Decimal | None = None
+    recipe_unit: str | None = None
+    plan_quantity: Decimal
+    plan_unit: str
+    meal_dates: list[date] = Field(default_factory=list)
+    cooked: bool = False
+
+
+class ShoppingItemSourcesOut(APIModel):
+    item: ShoppingItemOut
+    sources: list[ShoppingRecipeSource]
+    editable: bool
+
+
+class ShoppingIngredientChangePreviewRequest(APIModel):
+    item_ids: list[BoundedIdentifier] = Field(min_length=1, max_length=50)
+    target_name: str = Field(min_length=1, max_length=240)
+    target_unit: str = Field(min_length=1, max_length=30)
+
+    @model_validator(mode="after")
+    def strip_target(self):
+        self.target_name = self.target_name.strip()
+        self.target_unit = self.target_unit.strip()
+        if not self.target_name or not self.target_unit:
+            raise ValueError("target name and unit cannot be blank")
+        if len(set(self.item_ids)) != len(self.item_ids):
+            raise ValueError("shopping items must be unique")
+        return self
+
+
+class ShoppingIngredientConversion(APIModel):
+    recipe_id: str
+    recipe_title: str
+    recipe_ingredient_id: str
+    original_text: str
+    current_quantity: Decimal
+    current_unit: str
+    target_quantity: Decimal | None = None
+    target_unit: str
+    manual_quantity_required: bool
+
+
+class ShoppingIngredientChangePreviewOut(APIModel):
+    item_ids: list[str]
+    target_name: str
+    target_unit: str
+    conversions: list[ShoppingIngredientConversion]
+
+
+class ShoppingManualConversion(APIModel):
+    recipe_ingredient_id: str
+    quantity: Decimal = Field(gt=0)
+
+
+class ShoppingIngredientChangeRequest(ShoppingIngredientChangePreviewRequest):
+    expected_list_version: int = Field(ge=1)
+    manual_conversions: list[ShoppingManualConversion] = Field(
+        default_factory=list, max_length=500
+    )
 
 
 class ShoppingPantryReviewOut(APIModel):
@@ -812,6 +942,12 @@ class ShoppingListOut(APIModel):
     rebuild_recommended: bool
     version: int
     items: list[ShoppingItemOut]
+
+
+class ShoppingIngredientChangeOut(APIModel):
+    shopping_list: ShoppingListOut
+    result_item_id: str
+    updated_recipe_ids: list[str]
 
 
 class ProblemDetail(APIModel):

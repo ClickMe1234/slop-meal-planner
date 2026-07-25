@@ -16,9 +16,50 @@ import {
   memberNutritionTotals,
   plannerDates,
   totalNutrition,
+  plannerSetupFromPlan,
 } from './planner'
 
 describe('planner helpers', () => {
+  it('reconstructs editable setup values from a generated plan', () => {
+    const setup = plannerSetupFromPlan({
+      plan: {
+        id: 'plan',
+        name: 'Existing week',
+        start_date: '2026-08-03',
+        end_date: '2026-08-06',
+        status: 'accepted',
+        version: 3,
+        diagnostics: [{
+          code: 'GENERATION_GUIDANCE',
+          must_use_ingredient_terms: ['spinach'],
+          prefer_ingredient_terms: ['beans'],
+          exclude_ingredient_terms: ['peanuts'],
+        }],
+        calorie_boosts: [{
+          meal_date: '2026-08-03',
+          member_id: 'alex',
+          calories: 400,
+          meal_allocations: [{ meal_type: 'dinner', percentage: 100 }],
+        }],
+        guest_days: [{ meal_date: '2026-08-04', guest_count: 2, meal_types: ['dinner'] }],
+      },
+      occurrences: [
+        { id: 'one', meal_date: '2026-08-03', meal_type: 'dinner', batch_id: 'batch-a', component_slot: 0, recipe_id: 'a', recipe_title: 'A', batch_servings: 2, portions: [{ member_id: 'alex', servings: 1 }, { member_id: 'sam', servings: 1 }] },
+        { id: 'two', meal_date: '2026-08-04', meal_type: 'dinner', batch_id: 'batch-a', component_slot: 0, recipe_id: 'a', recipe_title: 'A', batch_servings: 2, portions: [{ member_id: 'alex', servings: 1 }] },
+        { id: 'three', meal_date: '2026-08-06', meal_type: 'dinner', batch_id: 'batch-a', component_slot: 0, recipe_id: 'a', recipe_title: 'A', batch_servings: 2, portions: [{ member_id: 'alex', servings: 1 }] },
+      ],
+    })
+
+    expect(setup.startDate).toBe('2026-08-03')
+    expect(setup.days).toBe(4)
+    expect(setup.selectedMemberIds).toEqual(['alex', 'sam'])
+    expect(setup.attendance['2026-08-04:dinner:sam']).toBe(false)
+    expect(setup.cookStarts['2026-08-03:dinner']).toBe(true)
+    expect(setup.foodSafetyAcknowledged).toBe(true)
+    expect(setup.calorieBoosts['2026-08-03:alex']).toBe(400)
+    expect(setup.guestCounts['2026-08-04']).toBe(2)
+    expect(setup.ingredientGuidance.must[0].term).toBe('spinach')
+  })
   it('orders meal types consistently for display', () => {
     expect(['breakfast', 'dinner', 'lunch', 'snack'].sort(compareMealTypes)).toEqual([
       'breakfast',

@@ -1,7 +1,7 @@
 {
   "name": "meal-planner-frontend",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
@@ -16,7 +16,7 @@
     "lucide-react": "^0.475.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router-dom": "^7.1.5"
+    "react-router-dom": "7.18.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
@@ -30,5 +30,9 @@
     "vite": "^6.1.0",
     "vite-plugin-pwa": "^0.21.1",
     "vitest": "^3.0.5"
+  },
+  "overrides": {
+    "react-router": "8.3.0",
+    "filelist": "2.0.2"
   }
 }

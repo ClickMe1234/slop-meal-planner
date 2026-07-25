@@ -1,6 +1,7 @@
-import { Check, ChefHat, ChevronLeft, ChevronRight, Clock3, ExternalLink, RefreshCw, Scale } from 'lucide-react'
+import { Check, ChefHat, ChevronLeft, ChevronRight, Clock3, ExternalLink, PencilLine, RefreshCw, Scale } from 'lucide-react'
 import { useMemo, useState, type CSSProperties } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { NutritionRings } from '../components/Nutrition'
 import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader } from '../components/ui'
 import { demoRecipes, demoWeek } from '../data/demo'
@@ -10,6 +11,10 @@ import { safeExternalUrl, safeImageUrl } from '../lib/safeUrls'
 
 type NutritionTotals = { calories: number; protein: number; carbs: number; fat: number }
 const emptyNutrition = (): NutritionTotals => ({ calories: 0, protein: 0, carbs: 0, fat: 0 })
+
+export function editPlanPath(planId: string): string {
+  return `/plan/${encodeURIComponent(planId)}/edit`
+}
 
 export function WeekPage() {
   return isDemoMode ? <DemoWeekPage/> : <LiveWeekPage/>
@@ -324,7 +329,7 @@ function LiveWeekPage() {
   }
 
   return <div className="page">
-    <PageHeader eyebrow={`${current.start_date} – ${current.end_date}`} title="This week" description="Accepted batches reserve pantry stock and consume it only when you mark them cooked." actions={<Button>Plan next week</Button>}/>
+    <PageHeader eyebrow={`${current.start_date} – ${current.end_date}`} title="This week" description="Accepted batches reserve pantry stock and consume it only when you mark them cooked." actions={<><Link className="button button--secondary" to={editPlanPath(current.id)}><PencilLine size={17}/>Edit meal plan</Link><Button>Plan next week</Button></>}/>
     {current.status === 'ready' && <Notice tone="warning" title="Draft plan">Accept this plan from the Plan page before pantry stock is reserved.</Notice>}
     {cookError && <Notice tone="warning" title="Cooking update failed">{cookError}</Notice>}
     <div className="day-tabs" style={{ '--day-count': dates.length } as CSSProperties}>{dates.map((item, index) => <button key={item} className={selected === index ? 'active' : ''} onClick={() => setSelected(index)}><span>{new Date(`${item}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{new Date(`${item}T12:00:00`).getDate()}</strong></button>)}</div>

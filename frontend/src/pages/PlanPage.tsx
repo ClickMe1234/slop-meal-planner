@@ -59,6 +59,7 @@ import {
   occurrenceServings,
   participantsFor,
   plannerDates,
+  plannerSetupFromPlan,
   readDemoPlan,
   storeDemoPlan,
   guestDayEntries,
@@ -170,6 +171,7 @@ export function PlanPage() {
   const [pantryImportOpen, setPantryImportOpen] = useState(false)
   const [overwritePrompt, setOverwritePrompt] = useState<{ ignoreNutritionTolerances: boolean } | null>(null)
   const [overwriteConfirmed, setOverwriteConfirmed] = useState(false)
+  const [copyingPlanName, setCopyingPlanName] = useState('')
 
   const membersQuery = useQuery({
     queryKey: ['members'],
@@ -309,6 +311,27 @@ export function PlanPage() {
     setLivePlan(null)
     setSearchParams({}, { replace: true })
   }
+  const editSetupCopy = (plan: BackendPlanDetail) => {
+    const setup = plannerSetupFromPlan(plan)
+    const activeMemberIds = new Set(members.map(member => member.id))
+    setStartDate(setup.startDate)
+    setDays(setup.days)
+    setSelectedMemberIds(setup.selectedMemberIds.filter(id => activeMemberIds.has(id)))
+    setAttendance(setup.attendance)
+    setCalorieBoosts(setup.calorieBoosts)
+    setCalorieBoostShares(setup.calorieBoostShares)
+    setGuestCounts(setup.guestCounts)
+    setGuestMeals(setup.guestMeals)
+    setCookStarts(setup.cookStarts)
+    setFoodSafetyAcknowledged(setup.foodSafetyAcknowledged)
+    setIngredientGuidance(setup.ingredientGuidance)
+    setStep(0)
+    setMaxVisitedStep(wizardSteps.length - 1)
+    setCopyingPlanName(plan.plan.name)
+    setOverwriteConfirmed(true)
+    setLivePlan(null)
+    setSearchParams({}, { replace: true })
+  }
 
   const generate = async (ignoreNutritionTolerances = false) => {
     if (generationBlocked) {
@@ -375,7 +398,7 @@ export function PlanPage() {
     return <GeneratedPlan
       plan={displayedPlan}
       memberNames={Object.fromEntries(members.map(member => [member.id, member.name]))}
-      onBack={closePlan}
+      onEditSetup={() => editSetupCopy(displayedPlan)}
       onPlanChange={setLivePlan}
     />
   }
@@ -388,6 +411,7 @@ export function PlanPage() {
 
   return <div className="page">
     <PageHeader eyebrow="Automatic planning" title="Build your next meal plan" description="Set exactly who needs each meal and when you want to cook. Portions, ingredients and shopping quantities follow those choices."/>
+    {copyingPlanName && <Notice title="Editing a copy">Settings were copied from <strong>{copyingPlanName}</strong>. The accepted plan and shopping list stay active until you accept this replacement.</Notice>}
     {error && <Card className="planner-generation-error"><PlanGenerationError error={error}/>{error.code === 'NUTRITION_TARGET_INFEASIBLE' && <Button variant="secondary" disabled={generating} onClick={() => requestGeneration(true)}>Continue anyway</Button>}</Card>}
     <div className={`planner-layout${step === 5 ? ' planner-layout--ingredients' : ''}`}>
       <aside className="wizard-sidebar"><ol>{wizardSteps.map((name, index) => <li key={name} className={index < step ? 'done' : index === step ? 'active' : ''}><button type="button" disabled={index > maxVisitedStep} onClick={() => openStep(index)}><span>{index < step ? <Check size={15}/> : index + 1}</span><div><strong>{name}</strong><small>{stepDescriptions[index]}</small></div></button></li>)}</ol></aside>
@@ -675,7 +699,7 @@ function ReviewStep({ dates, slots, members, guidance, profileRestrictionCount, 
   return <div className="constraint-review"><dl><div><dt>Dates</dt><dd>{formatDateRange(dates)} · {dates.length} {dates.length === 1 ? 'day' : 'days'}</dd></div><div><dt>Meal slots</dt><dd>{slots.length} total · {mealCounts}</dd></div><div><dt>People</dt><dd>{members.map(member => member.name).join(', ')}</dd></div><div><dt>Special days</dt><dd>{boosts.length} calorie {boosts.length === 1 ? 'boost' : 'boosts'} · {guestPlaces} guest {guestPlaces === 1 ? 'place' : 'places'}</dd></div><div><dt>Cooking</dt><dd>{batchCount(slots)} new recipe {batchCount(slots) === 1 ? 'batch' : 'batches'}</dd></div><div><dt>Plan guidance</dt><dd>{guidance.must.length} must use · {guidance.prefer.length} preferred · {guidance.exclude.length} excluded</dd></div><div><dt>Profile rules</dt><dd>{profileRestrictionCount} applied automatically</dd></div></dl><Notice title="Recipes are meal-tagged">Only planner-ready recipes tagged for the relevant breakfast, lunch, dinner or snack slot will be considered.</Notice>{generating && <ProgressBar value={72} label="Balancing nutrition, portions, batches and preferences…"/>}</div>
 }
 
-function GeneratedPlan({ plan, memberNames, onBack, onPlanChange }: { plan: BackendPlanDetail; memberNames: Record<string, string>; onBack: () => void; onPlanChange: (plan: BackendPlanDetail) => void }) {
+function GeneratedPlan({ plan, memberNames, onEditSetup, onPlanChange }: { plan: BackendPlanDetail; memberNames: Record<string, string>; onEditSetup: () => void; onPlanChange: (plan: BackendPlanDetail) => void }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const editable = plan.plan.status === 'ready'
@@ -749,7 +773,7 @@ function GeneratedPlan({ plan, memberNames, onBack, onPlanChange }: { plan: Back
     }
   }
 
-  return <div className="page"><PageHeader eyebrow={`${plan.plan.start_date} – ${plan.plan.end_date}`} title={editable ? 'Your plan is ready' : 'Your accepted plan'} description={editable ? 'Review each day, customise any recipe, then accept the plan to create the shopping list.' : 'This plan is accepted. Review its meals or open the current shopping list.'} actions={<><Button variant="secondary" onClick={onBack}>{editable ? 'Edit setup' : 'Build another plan'}</Button><Button disabled={accepting} onClick={accept}>{accepting ? 'Opening…' : editable ? 'Accept plan' : 'Open shopping list'}<ArrowRight/></Button></>}/>{acceptError && <Card className="planner-action-error" role="alert"><CircleAlert/><div><h3>{acceptError.code === 'SHOPPING_REVIEW_REQUIRED' ? 'Shopping ingredients need attention' : 'Plan needs attention'}</h3><p>{acceptError.message}</p>{acceptError.actions.map((action, index) => <div className="planner-error-action" key={`${action.href}-${index}`}><span>{action.suggestion ?? 'Review the suggested change, then return and accept the plan again.'}</span>{action.href && <Link className="button button--secondary" to={appendReturnTo(action.href, `/plan?plan=${plan.plan.id}`)}>{action.label ?? 'Review issue'}</Link>}</div>)}</div></Card>}<Notice tone="success" title={editable ? 'Plan generated' : 'Plan accepted'}>Each day shows the portion-adjusted calories and macros for every person eating.</Notice><div className="generated-grid">{dates.map(date => {
+  return <div className="page"><PageHeader eyebrow={`${plan.plan.start_date} – ${plan.plan.end_date}`} title={editable ? 'Your plan is ready' : 'Your accepted plan'} description={editable ? 'Review each day, customise any recipe, then accept the plan to create the shopping list.' : 'This plan is accepted. Review its meals or open the current shopping list.'} actions={<><Button variant="secondary" onClick={onEditSetup}>Edit setup as copy</Button><Button disabled={accepting} onClick={accept}>{accepting ? 'Opening…' : editable ? 'Accept plan' : 'Open shopping list'}<ArrowRight/></Button></>}/>{acceptError && <Card className="planner-action-error" role="alert"><CircleAlert/><div><h3>{acceptError.code === 'SHOPPING_REVIEW_REQUIRED' ? 'Shopping ingredients need attention' : 'Plan needs attention'}</h3><p>{acceptError.message}</p>{acceptError.actions.map((action, index) => <div className="planner-error-action" key={`${action.href}-${index}`}><span>{action.suggestion ?? 'Review the suggested change, then return and accept the plan again.'}</span>{action.href && <Link className="button button--secondary" to={appendReturnTo(action.href, `/plan?plan=${plan.plan.id}`)}>{action.label ?? 'Review issue'}</Link>}</div>)}</div></Card>}<Notice tone="success" title={editable ? 'Plan generated' : 'Plan accepted'}>Each day shows the portion-adjusted calories and macros for every person eating.</Notice><div className="generated-grid">{dates.map(date => {
     const occurrences = grouped[date] ?? []
     const memberNutrition = memberNutritionTotals(occurrences)
     const collapsed = Boolean(collapsedDays[date])

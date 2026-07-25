@@ -325,6 +325,28 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   activeShoppingList: () => request<BackendShoppingList>('/shopping-lists/active'),
+  shoppingItemSources: (listId: string, itemId: string) =>
+    request<BackendShoppingItemSources>(`/shopping-lists/${listId}/items/${itemId}/sources`),
+  previewShoppingIngredientChange: (
+    listId: string,
+    payload: { item_ids: string[]; target_name: string; target_unit: string },
+  ) => request<BackendShoppingIngredientChangePreview>(`/shopping-lists/${listId}/ingredient-change/preview`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  applyShoppingIngredientChange: (
+    listId: string,
+    payload: {
+      expected_list_version: number
+      item_ids: string[]
+      target_name: string
+      target_unit: string
+      manual_conversions: Array<{ recipe_ingredient_id: string; quantity: number }>
+    },
+  ) => request<BackendShoppingIngredientChangeResult>(`/shopping-lists/${listId}/ingredient-change`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   patchShoppingItem: (
     listId: string,
     itemId: string,
@@ -382,6 +404,11 @@ export const api = {
     }),
   listPlans: () => request<BackendPlan[]>('/meal-plans'),
   getPlan: (id: string) => request<BackendPlanDetail>(`/meal-plans/${id}`),
+  editPlanPreservingRecipes: (id: string, payload: BackendPlanPreservingEditRequest) =>
+    request<BackendPlanDetail>(`/meal-plans/${id}/preserving-edit`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
   replacePlanRecipe: (planId: string, occurrenceId: string, recipeId: string, expectedPlanVersion: number, ignoreNutritionTolerances = false) =>
     request<BackendPlanDetail>(`/meal-plans/${planId}/occurrences/${occurrenceId}/recipe`, {
       method: 'PUT',
@@ -517,8 +544,16 @@ export interface BackendRecipeDetail extends BackendRecipe {
     optional: boolean
     needs_review: boolean
     shopping_excluded: boolean
+    shopping_measurement_overridden?: boolean
+    shopping_group_key?: string
     food_record_id?: string
   }>
+  plan_sync?: {
+    plans_updated: number
+    shopping_list_rebuilt: boolean
+    shopping_list_id?: string
+    cooked_batches_unchanged: number
+  }
 }
 
 export interface BackendFood {
@@ -790,7 +825,55 @@ export interface BackendShoppingItem {
   pantry_unit_conflicts?: BackendShoppingPantryUnitConflict[]
   pantry_match_suggestions?: BackendShoppingPantryMatchSuggestion[]
   pantry_confirmed_matches?: BackendShoppingPantryConfirmedMatch[]
+  source_count?: number
+  recipe_count?: number
   version: number
+}
+
+export interface BackendShoppingRecipeSource {
+  recipe_id: string
+  recipe_title: string
+  recipe_version_id: string
+  recipe_ingredient_id: string
+  original_text: string
+  preparation?: string
+  recipe_quantity?: ApiDecimal
+  recipe_unit?: string
+  plan_quantity: ApiDecimal
+  plan_unit: string
+  meal_dates: string[]
+  cooked: boolean
+}
+
+export interface BackendShoppingItemSources {
+  item: BackendShoppingItem
+  sources: BackendShoppingRecipeSource[]
+  editable: boolean
+}
+
+export interface BackendShoppingIngredientConversion {
+  recipe_id: string
+  recipe_title: string
+  recipe_ingredient_id: string
+  original_text: string
+  current_quantity: ApiDecimal
+  current_unit: string
+  target_quantity?: ApiDecimal
+  target_unit: string
+  manual_quantity_required: boolean
+}
+
+export interface BackendShoppingIngredientChangePreview {
+  item_ids: string[]
+  target_name: string
+  target_unit: string
+  conversions: BackendShoppingIngredientConversion[]
+}
+
+export interface BackendShoppingIngredientChangeResult {
+  shopping_list: BackendShoppingList
+  result_item_id: string
+  updated_recipe_ids: string[]
 }
 
 export interface BackendShoppingPantryUnitConflict {
@@ -879,4 +962,24 @@ export interface BackendPlanDetail {
     totals: Record<string, number>
     members: Array<{ member_id: string; totals: Record<string, number> }>
   }>
+}
+
+export interface BackendPlanPreservingEditRequest {
+  expected_plan_version: number
+  removed_dates: string[]
+  calorie_boosts: Array<{
+    meal_date: string
+    member_id: string
+    calories: number
+    meal_allocations?: Array<{ meal_type: string; percentage: number }>
+  }>
+  guest_days: Array<{
+    meal_date: string
+    guest_count: number
+    meal_types?: string[]
+  }>
+  added_cook_days: Array<{ meal_date: string; meal_type: string; recipe_id: string }>
+  removed_cook_days: Array<{ meal_date: string; meal_type: string }>
+  recipe_swaps: Array<{ batch_id: string; recipe_id: string }>
+  ignore_nutrition_tolerances?: boolean
 }

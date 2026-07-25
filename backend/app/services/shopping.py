@@ -10,6 +10,7 @@ from ..errors import DomainError, NotFoundError
 from ..models import (
     FoodRecord,
     MealBatch,
+    MealOccurrence,
     MealPlan,
     PantryLot,
     PantryReservation,
@@ -67,9 +68,18 @@ def build_shopping_list(
     batches = db.scalars(
         select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
     ).all()
+    meal_dates_by_batch: dict[str, list[str]] = defaultdict(list)
+    for occurrence in db.scalars(
+        select(MealOccurrence)
+        .where(MealOccurrence.meal_plan_id == plan.id)
+        .order_by(MealOccurrence.meal_date)
+    ).all():
+        meal_dates_by_batch[occurrence.batch_id].append(occurrence.meal_date.isoformat())
     requirements: dict[tuple[str, str], dict[str, object]] = {}
     review_actions: dict[str, dict] = {}
     for batch in batches:
+        if batch.cooked_at is not None:
+            continue
         version = db.get(RecipeVersion, batch.recipe_version_id)
         if version is None or not version.yield_servings:
             raise DomainError("INVALID_BATCH", "A meal batch references an invalid recipe yield")
@@ -146,7 +156,14 @@ def build_shopping_list(
                 if food is not None and food.density_g_per_ml is not None
                 else profile.density_g_per_ml if profile is not None else None
             )
-            if ingredient.quantity_grams is not None:
+            if (
+                ingredient.shopping_measurement_overridden
+                and ingredient.quantity is not None
+                and ingredient.unit
+            ):
+                source_amount = Decimal(ingredient.quantity)
+                source_unit = canonical_quantity_unit(ingredient.unit)
+            elif ingredient.quantity_grams is not None:
                 source_amount, source_unit = Decimal(ingredient.quantity_grams), "g"
             elif ingredient.quantity is not None and ingredient.unit:
                 source_amount = Decimal(ingredient.quantity)
@@ -180,7 +197,7 @@ def build_shopping_list(
                 source_display_unit = "g"
             if source_display_unit not in available_display_units(unit, density):
                 source_display_unit = available_display_units(unit, density)[0]
-            grouping_key = (
+            grouping_key = ingredient.shopping_group_key or (
                 f"measurement:{profile.canonical_name}"
                 if profile is not None
                 else next(
@@ -208,6 +225,10 @@ def build_shopping_list(
                     ),
                     "cross_dimension": density is not None,
                     "profile_name": profile.canonical_name if profile is not None else None,
+                    "explicit_display_unit": bool(
+                        ingredient.shopping_measurement_overridden
+                    ),
+                    "sources": [],
                     "exact": Decimal("0"),
                 },
             )
@@ -221,6 +242,31 @@ def build_shopping_list(
                 requirement["density"] = density
             requirement["source_keys"].update(source_keys)
             requirement["cross_dimension"] = bool(requirement["cross_dimension"]) or density is not None
+            requirement["explicit_display_unit"] = bool(
+                requirement["explicit_display_unit"]
+            ) or bool(ingredient.shopping_measurement_overridden)
+            requirement["sources"].append(
+                {
+                    "recipe_id": version.recipe_id,
+                    "recipe_title": version.title,
+                    "recipe_version_id": version.id,
+                    "recipe_ingredient_id": ingredient.id,
+                    "shopping_group_key": ingredient.shopping_group_key,
+                    "batch_id": batch.id,
+                    "original_text": ingredient.original_text,
+                    "preparation": ingredient.preparation,
+                    "recipe_quantity": (
+                        str(ingredient.quantity)
+                        if ingredient.quantity is not None
+                        else None
+                    ),
+                    "recipe_unit": ingredient.unit,
+                    "plan_quantity": str(amount * scale),
+                    "plan_unit": unit,
+                    "meal_dates": meal_dates_by_batch.get(batch.id, []),
+                    "cooked": batch.cooked_at is not None,
+                }
+            )
             requirement["exact"] = Decimal(requirement["exact"]) + amount * scale
 
     if review_actions:
@@ -353,11 +399,12 @@ def build_shopping_list(
             checked = bool(matching_prior) and all(item.checked for item in matching_prior)
             valid_display_units = available_display_units(unit, default_density)
             display_unit = str(requirement["display_unit"])
-            for prior in matching_prior:
-                prior_display = canonical_quantity_unit(prior.display_unit or prior.unit)
-                if prior_display in valid_display_units:
-                    display_unit = prior_display
-                    break
+            if not bool(requirement["explicit_display_unit"]):
+                for prior in matching_prior:
+                    prior_display = canonical_quantity_unit(prior.display_unit or prior.unit)
+                    if prior_display in valid_display_units:
+                        display_unit = prior_display
+                        break
             db.add(
                 ShoppingItem(
                     shopping_list_id=shopping_list.id,
@@ -372,6 +419,7 @@ def build_shopping_list(
                     checked=checked,
                     manual=False,
                     source_name_keys=sorted(source_keys),
+                    source_ingredients=list(requirement["sources"]),
                     pantry_unit_conflicts=pantry_unit_conflicts,
                 )
             )
@@ -391,6 +439,7 @@ def build_shopping_list(
                     checked=item.checked,
                     manual=True,
                     source_name_keys=list(item.source_name_keys or []),
+                    source_ingredients=[],
                 )
             )
     db.flush()

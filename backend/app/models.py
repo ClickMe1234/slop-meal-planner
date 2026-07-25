@@ -304,6 +304,10 @@ class RecipeIngredient(IdMixin, Base):
     optional: Mapped[bool] = mapped_column(Boolean, default=False)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
     shopping_excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+    shopping_measurement_overridden: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    shopping_group_key: Mapped[str | None] = mapped_column(String(240))
     food_record_id: Mapped[str | None] = mapped_column(ForeignKey("food_record.id", ondelete="SET NULL"), index=True)
 
     recipe_version: Mapped[RecipeVersion] = relationship(back_populates="ingredients")
@@ -528,6 +532,9 @@ class ShoppingItem(IdMixin, AuditMixin, Base):
     checked: Mapped[bool] = mapped_column(Boolean, default=False)
     manual: Mapped[bool] = mapped_column(Boolean, default=False)
     source_name_keys: Mapped[list[str]] = mapped_column(JSON, default=list)
+    source_ingredients: Mapped[list[dict]] = mapped_column(
+        JSON, default=list, server_default="[]"
+    )
     pantry_unit_conflicts: Mapped[list[dict]] = mapped_column(
         JSON, default=list, server_default="[]"
     )

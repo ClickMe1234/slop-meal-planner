@@ -1,5 +1,5 @@
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import re
 import threading
@@ -36,6 +36,7 @@ from ..schemas import (
     BatchCookedWeightUpdate,
     PlanGenerateRequest,
     PlanOut,
+    PlanPreservingEditRequest,
     PlanRecipeReplaceRequest,
     PlanSideCreateRequest,
     PlanSideRemoveRequest,
@@ -582,6 +583,9 @@ def _rebalance_plan(
                         nutrition=nutrition,
                         current=Decimal(allocation.servings),
                         allowed=(
+                            (Decimal(allocation.servings),)
+                            if batch.cooked_at is not None
+                            else
                             SIDE_PORTIONS
                             if batch.parent_batch_id is not None
                             else BOOST_PORTIONS
@@ -668,6 +672,8 @@ def _rebalance_plan(
             * largest_household_portion
         )
     for batch in batches:
+        if batch.cooked_at is not None:
+            continue
         batch.servings = sum(
             (
                 sum(
@@ -688,6 +694,301 @@ def _rebalance_plan(
             ),
             Decimal("0"),
         )
+
+
+def _normalised_boosts(items: list[dict], dates: set[str]) -> dict[tuple[str, str], tuple]:
+    return {
+        (str(item["meal_date"]), str(item["member_id"])): (
+            Decimal(str(item["calories"])),
+            tuple(
+                sorted(
+                    (
+                        str(allocation["meal_type"]),
+                        int(allocation["percentage"]),
+                    )
+                    for allocation in item.get("meal_allocations") or []
+                )
+            ),
+        )
+        for item in items
+        if str(item["meal_date"]) in dates
+    }
+
+
+def _normalised_guests(items: list[dict], dates: set[str]) -> dict[str, tuple]:
+    return {
+        str(item["meal_date"]): (
+            int(item["guest_count"]),
+            tuple(sorted(str(meal_type) for meal_type in item.get("meal_types") or [])),
+        )
+        for item in items
+        if str(item["meal_date"]) in dates
+    }
+
+
+def _selected_main_recipe_candidate(
+    db: Session,
+    plan: MealPlan,
+    recipe_id: str,
+    meal_type: str,
+) -> RecipeCandidate:
+    recipe = db.get(Recipe, recipe_id)
+    if (
+        recipe is None
+        or recipe.household_id != plan.household_id
+        or recipe.archived_at is not None
+    ):
+        raise NotFoundError("Recipe")
+    tagged = db.scalar(
+        select(RecipeMealType.id).where(
+            RecipeMealType.recipe_id == recipe.id,
+            RecipeMealType.meal_type == meal_type,
+        )
+    )
+    if tagged is None:
+        raise DomainError(
+            "RECIPE_MEAL_TYPE_MISMATCH",
+            f"Choose a recipe tagged for {meal_type}",
+            422,
+        )
+    candidate = _candidate(db, recipe, meal_type)
+    if candidate is None:
+        raise DomainError(
+            "RECIPE_NOT_PLANNER_READY",
+            "The selected recipe needs complete nutrition, a yield and the matching meal tag",
+            422,
+        )
+    return candidate
+
+
+def _batch_tree_is_cooked(db: Session, batch: MealBatch) -> bool:
+    if batch.cooked_at is not None:
+        return True
+    return db.scalar(
+        select(MealBatch.id)
+        .where(
+            MealBatch.parent_batch_id == batch.id,
+            MealBatch.cooked_at.is_not(None),
+        )
+        .limit(1)
+    ) is not None
+
+
+def _split_batch_for_new_cook_day(
+    db: Session,
+    plan: MealPlan,
+    meal_date: date,
+    meal_type: str,
+    recipe_id: str,
+) -> None:
+    boundary = db.scalar(
+        select(MealOccurrence).where(
+            MealOccurrence.meal_plan_id == plan.id,
+            MealOccurrence.meal_date == meal_date,
+            MealOccurrence.meal_type == meal_type,
+            MealOccurrence.component_slot == 0,
+        )
+    )
+    if boundary is None:
+        raise DomainError(
+            "INVALID_COOK_DAY",
+            "A new cooking day must start on an existing planned meal",
+            422,
+        )
+    old_batch = db.get(MealBatch, boundary.batch_id)
+    if old_batch is None or old_batch.parent_batch_id is not None:
+        raise DomainError("INVALID_COOK_DAY", "The selected meal batch is invalid", 422)
+    if _batch_tree_is_cooked(db, old_batch):
+        raise DomainError(
+            "COOKED_DAY_LOCKED",
+            "A cooked batch cannot be split into a new cooking day",
+            409,
+        )
+    if old_batch.planned_cook_date == meal_date:
+        raise DomainError(
+            "COOK_DAY_EXISTS",
+            "This meal already starts a new cooking batch on that day",
+            409,
+        )
+
+    moving = db.scalars(
+        select(MealOccurrence)
+        .where(
+            MealOccurrence.batch_id == old_batch.id,
+            MealOccurrence.meal_date >= meal_date,
+            MealOccurrence.component_slot == 0,
+        )
+        .order_by(MealOccurrence.meal_date)
+    ).all()
+    if not moving:
+        raise DomainError("INVALID_COOK_DAY", "No meals follow this cooking day", 422)
+    candidate = _selected_main_recipe_candidate(db, plan, recipe_id, meal_type)
+    old_version = db.get(RecipeVersion, old_batch.recipe_version_id)
+    if old_version is not None and old_version.recipe_id == candidate.recipe_id:
+        raise DomainError(
+            "COOK_DAY_RECIPE_UNCHANGED",
+            "Choose a different recipe for the new cooking day",
+            422,
+        )
+    new_batch = MealBatch(
+        meal_plan_id=plan.id,
+        recipe_version_id=candidate.recipe_version_id,
+        servings=Decimal("1"),
+        planned_cook_date=meal_date,
+    )
+    db.add(new_batch)
+    db.flush()
+    for occurrence in moving:
+        occurrence.batch_id = new_batch.id
+
+    side_batches = db.scalars(
+        select(MealBatch).where(MealBatch.parent_batch_id == old_batch.id)
+    ).all()
+    for side_batch in side_batches:
+        side_occurrences = db.scalars(
+            select(MealOccurrence)
+            .where(MealOccurrence.batch_id == side_batch.id)
+            .order_by(MealOccurrence.meal_date)
+        ).all()
+        moving_sides = [
+            occurrence
+            for occurrence in side_occurrences
+            if occurrence.meal_date >= meal_date
+        ]
+        if not moving_sides:
+            continue
+        if len(moving_sides) == len(side_occurrences):
+            side_batch.parent_batch_id = new_batch.id
+            side_batch.planned_cook_date = meal_date
+            continue
+        new_side_batch = MealBatch(
+            meal_plan_id=plan.id,
+            recipe_version_id=side_batch.recipe_version_id,
+            servings=Decimal("1"),
+            planned_cook_date=meal_date,
+            parent_batch_id=new_batch.id,
+            component_slot=side_batch.component_slot,
+        )
+        db.add(new_side_batch)
+        db.flush()
+        for occurrence in moving_sides:
+            occurrence.batch_id = new_side_batch.id
+    db.flush()
+
+
+def _remove_cook_day(
+    db: Session,
+    plan: MealPlan,
+    meal_date: date,
+    meal_type: str,
+) -> None:
+    boundary = db.scalar(
+        select(MealOccurrence).where(
+            MealOccurrence.meal_plan_id == plan.id,
+            MealOccurrence.meal_date == meal_date,
+            MealOccurrence.meal_type == meal_type,
+            MealOccurrence.component_slot == 0,
+        )
+    )
+    if boundary is None:
+        raise DomainError("INVALID_COOK_DAY", "The cooking day no longer exists", 422)
+    current_batch = db.get(MealBatch, boundary.batch_id)
+    if current_batch is None or current_batch.planned_cook_date != meal_date:
+        raise DomainError(
+            "COOK_DAY_NOT_BOUNDARY",
+            "Only the first day of a cooking batch can be removed",
+            422,
+        )
+    previous = db.scalar(
+        select(MealOccurrence)
+        .where(
+            MealOccurrence.meal_plan_id == plan.id,
+            MealOccurrence.meal_type == meal_type,
+            MealOccurrence.component_slot == 0,
+            MealOccurrence.meal_date < meal_date,
+        )
+        .order_by(MealOccurrence.meal_date.desc())
+        .limit(1)
+    )
+    if previous is None:
+        raise DomainError(
+            "FIRST_COOK_DAY_REQUIRED",
+            "The first cooking day for a meal cannot be removed",
+            422,
+        )
+    previous_batch = db.get(MealBatch, previous.batch_id)
+    if (
+        _batch_tree_is_cooked(db, current_batch)
+        or previous_batch is None
+        or _batch_tree_is_cooked(db, previous_batch)
+    ):
+        raise DomainError(
+            "COOKED_DAY_LOCKED",
+            "A cooking boundary involving a cooked batch cannot be removed",
+            409,
+        )
+
+    moving_main = db.scalars(
+        select(MealOccurrence)
+        .where(MealOccurrence.batch_id == current_batch.id)
+        .order_by(MealOccurrence.meal_date)
+    ).all()
+    current_sides = db.scalars(
+        select(MealBatch).where(MealBatch.parent_batch_id == current_batch.id)
+    ).all()
+    for side_batch in current_sides:
+        side_occurrence_ids = list(
+            db.scalars(
+                select(MealOccurrence.id).where(
+                    MealOccurrence.batch_id == side_batch.id
+                )
+            ).all()
+        )
+        if side_occurrence_ids:
+            db.execute(
+                delete(PortionAllocation).where(
+                    PortionAllocation.meal_occurrence_id.in_(side_occurrence_ids)
+                )
+            )
+            db.execute(
+                delete(MealOccurrence).where(
+                    MealOccurrence.id.in_(side_occurrence_ids)
+                )
+            )
+        db.delete(side_batch)
+    db.flush()
+
+    previous_sides = db.scalars(
+        select(MealBatch).where(MealBatch.parent_batch_id == previous_batch.id)
+    ).all()
+    for occurrence in moving_main:
+        occurrence.batch_id = previous_batch.id
+        main_allocations = db.scalars(
+            select(PortionAllocation).where(
+                PortionAllocation.meal_occurrence_id == occurrence.id
+            )
+        ).all()
+        for side_batch in previous_sides:
+            side_occurrence = MealOccurrence(
+                meal_plan_id=plan.id,
+                batch_id=side_batch.id,
+                meal_date=occurrence.meal_date,
+                meal_type=occurrence.meal_type,
+                component_slot=side_batch.component_slot,
+            )
+            db.add(side_occurrence)
+            db.flush()
+            for allocation in main_allocations:
+                db.add(
+                    PortionAllocation(
+                        meal_occurrence_id=side_occurrence.id,
+                        member_id=allocation.member_id,
+                        servings=Decimal("0.25"),
+                    )
+                )
+    db.flush()
+    db.delete(current_batch)
+    db.flush()
 
 
 @router.post("/generate", response_model=PlanOut, status_code=201)
@@ -1214,6 +1515,317 @@ def get_plan(
     plan = db.get(MealPlan, plan_id)
     if plan is None or plan.household_id != context.user.household_id:
         raise NotFoundError("Meal plan")
+    return _plan_detail(db, plan)
+
+
+@router.put("/{plan_id}/preserving-edit")
+def edit_plan_preserving_recipes(
+    plan_id: str,
+    payload: PlanPreservingEditRequest,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    plan = db.scalar(
+        select(MealPlan).where(MealPlan.id == plan_id).with_for_update()
+    )
+    if plan is None or plan.household_id != context.user.household_id:
+        raise NotFoundError("Meal plan")
+    if plan.status not in {PlanStatus.READY.value, PlanStatus.ACCEPTED.value}:
+        raise DomainError(
+            "PLAN_NOT_EDITABLE",
+            "Only a ready or accepted meal plan can be edited",
+            409,
+        )
+    if plan.version != payload.expected_plan_version:
+        raise ConflictError("The meal plan changed while you were editing it. Reload and try again.")
+
+    occurrences = db.scalars(
+        select(MealOccurrence).where(MealOccurrence.meal_plan_id == plan.id)
+    ).all()
+    planned_dates = {occurrence.meal_date for occurrence in occurrences}
+    removed_dates = set(payload.removed_dates)
+    if not removed_dates.issubset(planned_dates):
+        raise DomainError(
+            "INVALID_REMOVED_DAY",
+            "Only dates currently present in the meal plan can be removed",
+            422,
+        )
+    remaining_dates = planned_dates - removed_dates
+    if not remaining_dates:
+        raise DomainError(
+            "EMPTY_PLAN",
+            "A meal plan must keep at least one planned day",
+            422,
+        )
+
+    batch_by_id = {
+        batch.id: batch
+        for batch in db.scalars(
+            select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
+        ).all()
+    }
+    cooked_dates = {
+        occurrence.meal_date.isoformat()
+        for occurrence in occurrences
+        if batch_by_id[occurrence.batch_id].cooked_at is not None
+    }
+    if cooked_dates & {item.isoformat() for item in removed_dates}:
+        raise DomainError(
+            "COOKED_DAY_LOCKED",
+            "A day containing a cooked batch cannot be removed",
+            409,
+        )
+
+    boost_payload = [
+        item.model_dump(mode="json") for item in payload.calorie_boosts
+    ]
+    guest_payload = [item.model_dump(mode="json") for item in payload.guest_days]
+    if _normalised_boosts(plan.calorie_boosts or [], cooked_dates) != _normalised_boosts(
+        boost_payload, cooked_dates
+    ) or _normalised_guests(plan.guest_days or [], cooked_dates) != _normalised_guests(
+        guest_payload, cooked_dates
+    ):
+        raise DomainError(
+            "COOKED_DAY_LOCKED",
+            "Guests and calorie boosts cannot be changed after a meal batch is cooked",
+            409,
+        )
+
+    remaining_date_text = {item.isoformat() for item in remaining_dates}
+    if any(
+        item.meal_date.isoformat() not in remaining_date_text
+        for item in [*payload.calorie_boosts, *payload.guest_days]
+    ):
+        raise DomainError(
+            "EDIT_OUTSIDE_PLAN",
+            "Guests and calorie boosts must belong to a day kept in the plan",
+            422,
+        )
+    participant_days = {
+        (occurrence.meal_date, allocation.member_id)
+        for occurrence in occurrences
+        if occurrence.meal_date in remaining_dates
+        for allocation in db.scalars(
+            select(PortionAllocation).where(
+                PortionAllocation.meal_occurrence_id == occurrence.id
+            )
+        ).all()
+    }
+    for boost in payload.calorie_boosts:
+        if (boost.meal_date, boost.member_id) not in participant_days:
+            raise DomainError(
+                "INVALID_CALORIE_BOOST",
+                "A calorie boost must belong to someone eating on that date",
+                422,
+            )
+        attended_meals = {
+            occurrence.meal_type
+            for occurrence in occurrences
+            if occurrence.meal_date == boost.meal_date
+            and db.scalar(
+                select(PortionAllocation.id).where(
+                    PortionAllocation.meal_occurrence_id == occurrence.id,
+                    PortionAllocation.member_id == boost.member_id,
+                )
+            )
+            is not None
+        }
+        if any(
+            allocation.meal_type not in attended_meals
+            for allocation in boost.meal_allocations
+        ):
+            raise DomainError(
+                "INVALID_CALORIE_BOOST_MEAL",
+                "Calorie boosts can only be assigned to meals that person is eating",
+                422,
+            )
+    for guest_day in payload.guest_days:
+        planned_meals = {
+            occurrence.meal_type
+            for occurrence in occurrences
+            if occurrence.meal_date == guest_day.meal_date
+        }
+        if any(meal_type not in planned_meals for meal_type in guest_day.meal_types):
+            raise DomainError(
+                "INVALID_GUEST_MEAL",
+                "Guests can only attend meals planned for that date",
+                422,
+            )
+
+    if removed_dates:
+        removed_occurrence_ids = [
+            occurrence.id
+            for occurrence in occurrences
+            if occurrence.meal_date in removed_dates
+        ]
+        db.execute(
+            delete(PortionAllocation).where(
+                PortionAllocation.meal_occurrence_id.in_(removed_occurrence_ids)
+            )
+        )
+        db.execute(
+            delete(MealOccurrence).where(
+                MealOccurrence.id.in_(removed_occurrence_ids)
+            )
+        )
+        db.flush()
+        batches = db.scalars(
+            select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
+        ).all()
+        empty_batches = [
+            batch
+            for batch in batches
+            if db.scalar(
+                select(MealOccurrence.id)
+                .where(MealOccurrence.batch_id == batch.id)
+                .limit(1)
+            )
+            is None
+        ]
+        for batch in sorted(
+            empty_batches, key=lambda item: item.parent_batch_id is None
+        ):
+            db.delete(batch)
+        db.flush()
+        for batch in db.scalars(
+            select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
+        ).all():
+            first_remaining_date = db.scalar(
+                select(MealOccurrence.meal_date)
+                .where(MealOccurrence.batch_id == batch.id)
+                .order_by(MealOccurrence.meal_date)
+                .limit(1)
+            )
+            if first_remaining_date is not None:
+                batch.planned_cook_date = first_remaining_date
+
+    plan.calorie_boosts = boost_payload
+    plan.guest_days = guest_payload
+    flag_modified(plan, "calorie_boosts")
+    flag_modified(plan, "guest_days")
+    for cook_day in sorted(
+        payload.removed_cook_days, key=lambda item: (item.meal_date, item.meal_type)
+    ):
+        if cook_day.meal_date not in remaining_dates:
+            raise DomainError(
+                "INVALID_COOK_DAY",
+                "A cooking day cannot be removed from a deleted date",
+                422,
+            )
+        _remove_cook_day(db, plan, cook_day.meal_date, cook_day.meal_type)
+    for cook_day in sorted(
+        payload.added_cook_days, key=lambda item: (item.meal_date, item.meal_type)
+    ):
+        if cook_day.meal_date not in remaining_dates:
+            raise DomainError(
+                "INVALID_COOK_DAY",
+                "A cooking day cannot be added to a removed date",
+                422,
+            )
+        _split_batch_for_new_cook_day(
+            db,
+            plan,
+            cook_day.meal_date,
+            cook_day.meal_type,
+            cook_day.recipe_id,
+        )
+    for swap in payload.recipe_swaps:
+        batch = db.get(MealBatch, swap.batch_id)
+        if (
+            batch is None
+            or batch.meal_plan_id != plan.id
+            or batch.parent_batch_id is not None
+        ):
+            raise DomainError(
+                "INVALID_RECIPE_SWAP",
+                "The cooking batch selected for swapping no longer exists",
+                422,
+            )
+        if _batch_tree_is_cooked(db, batch):
+            raise DomainError(
+                "COOKED_DAY_LOCKED",
+                "A cooked batch cannot have its recipe swapped",
+                409,
+            )
+        batch_occurrences = db.scalars(
+            select(MealOccurrence)
+            .where(MealOccurrence.batch_id == batch.id)
+            .order_by(MealOccurrence.meal_date)
+        ).all()
+        if not batch_occurrences or len(
+            {item.meal_type for item in batch_occurrences}
+        ) != 1:
+            raise DomainError("INVALID_BATCH", "The selected batch is invalid", 422)
+        candidate = _selected_main_recipe_candidate(
+            db,
+            plan,
+            swap.recipe_id,
+            batch_occurrences[0].meal_type,
+        )
+        batch.recipe_version_id = candidate.recipe_version_id
+    db.flush()
+
+    plan.start_date = min(remaining_dates)
+    plan.end_date = max(remaining_dates)
+    _validate_mutable_plan_constraints(db, plan)
+    _rebalance_plan(
+        db,
+        plan,
+        ignore_nutrition_tolerances=payload.ignore_nutrition_tolerances,
+        infeasible_detail=(
+            "These recipes could not meet the updated calorie targets. "
+            "Continue anyway to keep the same meals with the closest portions."
+        ),
+    )
+    diagnostics = list(plan.diagnostics or [])
+    diagnostics.append(
+        {
+            "code": "RECIPE_PRESERVING_EDIT",
+            "removed_dates": sorted(item.isoformat() for item in removed_dates),
+            "added_cook_days": [
+                item.model_dump(mode="json") for item in payload.added_cook_days
+            ],
+            "removed_cook_days": [
+                item.model_dump(mode="json") for item in payload.removed_cook_days
+            ],
+            "recipe_swaps": [
+                item.model_dump(mode="json") for item in payload.recipe_swaps
+            ],
+        }
+    )
+    plan.diagnostics = diagnostics
+    flag_modified(plan, "diagnostics")
+    plan.version += 1
+
+    if plan.status == PlanStatus.ACCEPTED.value:
+        db.scalar(
+            select(Household)
+            .where(Household.id == plan.household_id)
+            .with_for_update()
+        )
+        future_batches = db.scalars(
+            select(MealBatch).where(
+                MealBatch.meal_plan_id == plan.id,
+                MealBatch.cooked_at.is_(None),
+            )
+        ).all()
+        future_batch_ids = [batch.id for batch in future_batches]
+        if future_batch_ids:
+            db.execute(
+                delete(PantryReservation).where(
+                    PantryReservation.meal_batch_id.in_(future_batch_ids)
+                )
+            )
+        reserve_plan_batches(db, plan.household_id, list(future_batches))
+        build_shopping_list(
+            db,
+            plan.household_id,
+            plan.id,
+            "Current shopping list",
+        )
+
+    db.commit()
+    db.refresh(plan)
     return _plan_detail(db, plan)
 
 
