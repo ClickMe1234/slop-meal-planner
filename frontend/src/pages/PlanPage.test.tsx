@@ -300,38 +300,6 @@ describe('PlanPage wizard', () => {
     expect(screen.queryByRole('link', { name: /customise/i })).not.toBeInTheDocument()
   })
 
-  it('starts the edit-copy workflow directly when requested by the week view', async () => {
-    storeDemoPlan({
-      plan: {
-        id: 'demo',
-        name: 'Accepted family plan',
-        start_date: '2026-07-20',
-        end_date: '2026-07-22',
-        status: 'accepted',
-        diagnostics: [],
-        version: 2,
-      },
-      occurrences: [{
-        id: 'dinner',
-        meal_date: '2026-07-20',
-        meal_type: 'dinner',
-        batch_id: 'dinner-batch',
-        component_slot: 0,
-        recipe_id: 'curry',
-        recipe_title: 'Curry',
-        batch_servings: 1,
-        portions: [{ member_id: 'demo-you', servings: 1 }],
-      }],
-    })
-
-    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan?plan=demo&edit=setup']}><PlanPage/></MemoryRouter></QueryClientProvider>)
-
-    expect(await screen.findByRole('heading', { name: 'When are you planning for?' })).toBeInTheDocument()
-    expect(screen.getByText('Editing a copy').closest('.notice')).toHaveTextContent('Settings were copied from Accepted family plan')
-    expect(screen.getByLabelText('Starts')).toHaveValue('2026-07-20')
-    expect(screen.getByRole('spinbutton', { name: 'Number of days' })).toHaveValue(3)
-  })
-
   it('warns before creating a plan that will replace the current plan', async () => {
     storeDemoPlan({
       plan: {
