@@ -35,11 +35,6 @@ In **Apps → Add Container**, use these main fields:
 | Name | `Slop Meal Planner` |
 | Repository | `ghcr.io/clickme1234/slop-meal-planner:1.1.0` |
 | Network Type | `Bridge` |
-| Console shell | `Shell` / `sh` |
-| Privileged | Off |
-| Extra Parameters | `--init` |
-| Post Arguments | Blank (the image defaults to `all`) |
-| Web UI | HTTPS URL served by your reverse proxy |
 
 The Repository field is a Docker image reference, not the GitHub source URL.
 No Label or Device entries are required. The GHCR package must be public so
