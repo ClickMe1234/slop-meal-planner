@@ -168,6 +168,7 @@ describe('PlanEditPage', () => {
     const monday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-27' }).closest('.plan-edit-day') as HTMLElement
     expect(within(monday).getByRole('button', { name: 'Swap Harissa chicken batch' })).toBeInTheDocument()
     const tuesday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-28' }).closest('.plan-edit-day') as HTMLElement
+    expect(within(tuesday).queryByRole('button', { name: 'Swap Harissa chicken batch' })).not.toBeInTheDocument()
     await user.click(within(tuesday).getByRole('button', { name: 'Add cooking day' }))
 
     expect(await screen.findByText('Recipe selection opened')).toBeInTheDocument()
