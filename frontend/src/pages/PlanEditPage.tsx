@@ -425,7 +425,7 @@ export function PlanEditPage() {
                       <span>{mealLabel(meal.meal_type)}{sideMeals.length ? ` + ${sideMeals.length} side` : ''}</span>
                       <div className="plan-edit-recipe-title">
                         <strong>{displayedRecipe}</strong>
-                        {!batchCooked && !removingBatch && !addedSelection && <button type="button" onClick={() => openRecipePicker(meal, 'swap')} aria-label={`Swap ${meal.recipe_title} batch`}><RefreshCcw/>Swap</button>}
+                        {existingCookStart && !batchCooked && !removingBatch && !addedSelection && <button type="button" onClick={() => openRecipePicker(meal, 'swap')} aria-label={`Swap ${meal.recipe_title} batch`}><RefreshCcw/>Swap</button>}
                         {addingCookStart && <button type="button" onClick={() => openRecipePicker(meal, 'addCook')} aria-label={`Change new recipe for ${mealDate}`}><RefreshCcw/>Change</button>}
                       </div>
                       <small>{removingBatch
