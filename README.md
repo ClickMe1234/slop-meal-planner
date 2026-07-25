@@ -96,8 +96,9 @@ Fuzzy matching of shopping list to pantry ingredients supported!
 - Show which recipes contribute each shopping-list ingredient and add
   permanent, recipe-linked unit changes and manual combining.
 - Add a recipe-preserving editor for active plans: remove days or guests and
-  change calorie boosts without replacing meals, or add an explicit cooking
-  day that introduces a new recipe only from that boundary onward.
+  change calorie boosts without replacing meals, swap a cooking batch, merge a
+  cook day back into its previous batch, or add a cook day by choosing its new
+  recipe from the existing customisation screen.
 - Keep current plans, pantry reservations, and shopping lists synchronised
   when saved recipe ingredients change.
 
