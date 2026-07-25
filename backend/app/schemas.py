@@ -606,12 +606,23 @@ class PlanCookDayIn(APIModel):
     meal_type: MealType
 
 
+class PlanCookDayAddIn(PlanCookDayIn):
+    recipe_id: str
+
+
+class PlanBatchRecipeSwapIn(APIModel):
+    batch_id: str
+    recipe_id: str
+
+
 class PlanPreservingEditRequest(APIModel):
     expected_plan_version: int = Field(ge=1)
     removed_dates: list[date] = Field(default_factory=list, max_length=32)
     calorie_boosts: list[DayCalorieBoostIn] = Field(default_factory=list, max_length=250)
     guest_days: list[GuestDayIn] = Field(default_factory=list, max_length=250)
-    added_cook_days: list[PlanCookDayIn] = Field(default_factory=list, max_length=250)
+    added_cook_days: list[PlanCookDayAddIn] = Field(default_factory=list, max_length=250)
+    removed_cook_days: list[PlanCookDayIn] = Field(default_factory=list, max_length=250)
+    recipe_swaps: list[PlanBatchRecipeSwapIn] = Field(default_factory=list, max_length=250)
     ignore_nutrition_tolerances: bool = False
 
     @model_validator(mode="after")
@@ -627,6 +638,16 @@ class PlanPreservingEditRequest(APIModel):
         cook_keys = [(item.meal_date, item.meal_type) for item in self.added_cook_days]
         if len(cook_keys) != len(set(cook_keys)):
             raise ValueError("a date and meal type can only add one cooking day")
+        removed_cook_keys = [
+            (item.meal_date, item.meal_type) for item in self.removed_cook_days
+        ]
+        if len(removed_cook_keys) != len(set(removed_cook_keys)):
+            raise ValueError("a date and meal type can only remove one cooking day")
+        if set(cook_keys) & set(removed_cook_keys):
+            raise ValueError("a cooking day cannot be added and removed together")
+        swap_batches = [item.batch_id for item in self.recipe_swaps]
+        if len(swap_batches) != len(set(swap_batches)):
+            raise ValueError("a batch can only have one recipe swap")
         return self
 
 

@@ -978,6 +978,8 @@ export interface BackendPlanPreservingEditRequest {
     guest_count: number
     meal_types?: string[]
   }>
-  added_cook_days: Array<{ meal_date: string; meal_type: string }>
+  added_cook_days: Array<{ meal_date: string; meal_type: string; recipe_id: string }>
+  removed_cook_days: Array<{ meal_date: string; meal_type: string }>
+  recipe_swaps: Array<{ batch_id: string; recipe_id: string }>
   ignore_nutrition_tolerances?: boolean
 }

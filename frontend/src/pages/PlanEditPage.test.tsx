@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { api, type BackendPlanDetail } from '../api/client'
 import { buildPreservingEditPayload, PlanEditPage } from './PlanEditPage'
+import { readPlanEditDraft } from './planEditDraft'
 
 const planDetail: BackendPlanDetail = {
   plan: {
@@ -58,7 +59,10 @@ const planDetail: BackendPlanDetail = {
   ],
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  sessionStorage.clear()
+})
 
 describe('buildPreservingEditPayload', () => {
   it('serialises only week-shape changes without accepting recipe replacements', () => {
@@ -67,7 +71,16 @@ describe('buildPreservingEditPayload', () => {
       new Set(['2026-07-29']),
       { '2026-07-27': { count: 0, mealTypes: ['dinner'] } },
       { '2026-07-27::member-1': { calories: '350', mealAllocations: [] } },
-      new Set(['2026-07-28::dinner']),
+      {
+        '2026-07-28::dinner': {
+          mealDate: '2026-07-28',
+          mealType: 'dinner',
+          recipeId: 'recipe-c',
+          recipeTitle: 'New dinner',
+        },
+      },
+      new Set(['2026-07-29::dinner']),
+      { 'batch-a': { recipeId: 'recipe-d', recipeTitle: 'Swapped dinner' } },
     )).toEqual({
       expected_plan_version: 4,
       removed_dates: ['2026-07-29'],
@@ -78,7 +91,9 @@ describe('buildPreservingEditPayload', () => {
         meal_allocations: [],
       }],
       guest_days: [],
-      added_cook_days: [{ meal_date: '2026-07-28', meal_type: 'dinner' }],
+      added_cook_days: [{ meal_date: '2026-07-28', meal_type: 'dinner', recipe_id: 'recipe-c' }],
+      removed_cook_days: [],
+      recipe_swaps: [{ batch_id: 'batch-a', recipe_id: 'recipe-d' }],
       ignore_nutrition_tolerances: false,
     })
   })
@@ -108,7 +123,7 @@ describe('PlanEditPage', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Adjust the week, keep the meals' })).toBeInTheDocument()
-    expect(screen.getByText('2 recipes pinned')).toBeInTheDocument()
+    expect(screen.getByText('2 recipes in place')).toBeInTheDocument()
 
     const monday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-27' }).closest('.plan-edit-day') as HTMLElement
     await user.click(within(monday).getByRole('button', { name: 'Remove guests' }))
@@ -116,20 +131,49 @@ describe('PlanEditPage', () => {
     await user.clear(calorieBoost)
     await user.type(calorieBoost, '350')
 
-    const tuesday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-28' }).closest('.plan-edit-day') as HTMLElement
-    await user.click(within(tuesday).getByRole('button', { name: 'Add cooking day' }))
-
     const wednesday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-29' }).closest('.plan-edit-day') as HTMLElement
-    await user.click(within(wednesday).getByRole('button', { name: 'Remove day' }))
+    await user.click(within(wednesday).getByRole('button', { name: 'Remove cook day' }))
     await user.click(screen.getByRole('button', { name: 'Save plan changes' }))
 
     await waitFor(() => expect(edit).toHaveBeenCalledWith('plan-1', expect.objectContaining({
       expected_plan_version: 4,
-      removed_dates: ['2026-07-29'],
+      removed_dates: [],
       guest_days: [],
-      added_cook_days: [{ meal_date: '2026-07-28', meal_type: 'dinner' }],
+      added_cook_days: [],
+      removed_cook_days: [{ meal_date: '2026-07-29', meal_type: 'dinner' }],
       calorie_boosts: [expect.objectContaining({ meal_date: '2026-07-27', member_id: 'member-1', calories: 350 })],
     })))
     expect(await screen.findByText('Updated week')).toBeInTheDocument()
+  })
+
+  it('opens recipe selection immediately when adding a cooking day and preserves the draft', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'getPlan').mockResolvedValue(planDetail)
+    vi.spyOn(api, 'listMembers').mockResolvedValue([
+      { id: 'member-1', name: 'Alex', active: true, version: 1 },
+    ])
+
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/plan/plan-1/edit']}>
+          <Routes>
+            <Route path="/plan/:planId/edit" element={<PlanEditPage/>}/>
+            <Route path="/plan/:planId/occurrences/:occurrenceId/recipes" element={<div>Recipe selection opened</div>}/>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    await screen.findByRole('heading', { name: 'Adjust the week, keep the meals' })
+    const monday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-27' }).closest('.plan-edit-day') as HTMLElement
+    expect(within(monday).getByRole('button', { name: 'Swap Harissa chicken batch' })).toBeInTheDocument()
+    const tuesday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-28' }).closest('.plan-edit-day') as HTMLElement
+    await user.click(within(tuesday).getByRole('button', { name: 'Add cooking day' }))
+
+    expect(await screen.findByText('Recipe selection opened')).toBeInTheDocument()
+    expect(readPlanEditDraft('plan-1')).toEqual(expect.objectContaining({
+      planVersion: 4,
+      addedCookDays: {},
+    }))
   })
 })

@@ -6,6 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type { BackendPlanDetail } from '../api/client'
 import { PlanRecipePickerPage } from './PlanRecipePickerPage'
 import { readDemoPlan, storeDemoPlan } from './planner'
+import { readPlanEditDraft, writePlanEditDraft } from './planEditDraft'
 
 const demoPlan: BackendPlanDetail = {
   plan: {
@@ -56,6 +57,62 @@ describe('PlanRecipePickerPage', () => {
       expect(sides).toHaveLength(2)
       expect(sides.map(item => item.recipe_title)).toEqual(['Lemon garlic greens', 'Lemon garlic greens'])
       expect(sides.every(item => item.parent_batch_id === 'breakfast-batch')).toBe(true)
+    })
+  })
+
+  it('returns a selected new cook-day recipe to an accepted plan edit draft', async () => {
+    const user = userEvent.setup()
+    storeDemoPlan({
+      ...demoPlan,
+      plan: { ...demoPlan.plan, status: 'accepted' },
+    })
+    writePlanEditDraft('demo', {
+      planVersion: 1,
+      removedDates: [],
+      guests: {},
+      boosts: {},
+      addedCookDays: {},
+      removedCookDays: [],
+      recipeSwaps: {},
+    })
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan/demo/occurrences/tuesday-breakfast/recipes?mealType=breakfast&editMode=addCook']}><Routes><Route path="/plan/:planId/occurrences/:occurrenceId/recipes" element={<PlanRecipePickerPage/>}/><Route path="/plan/:planId/edit" element={<div>Back in editor</div>}/></Routes></MemoryRouter></QueryClientProvider>)
+
+    expect(screen.getByRole('heading', { name: 'Choose the new cook-day recipe' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Use this recipe' }))
+
+    expect(await screen.findByText('Back in editor')).toBeInTheDocument()
+    expect(readPlanEditDraft('demo')?.addedCookDays['2026-07-14::breakfast']).toEqual({
+      mealDate: '2026-07-14',
+      mealType: 'breakfast',
+      recipeId: 'shakshuka',
+      recipeTitle: 'Spiced shakshuka',
+    })
+  })
+
+  it('returns an accepted batch recipe swap to the plan edit draft', async () => {
+    const user = userEvent.setup()
+    storeDemoPlan({
+      ...demoPlan,
+      plan: { ...demoPlan.plan, status: 'accepted' },
+    })
+    writePlanEditDraft('demo', {
+      planVersion: 1,
+      removedDates: [],
+      guests: {},
+      boosts: {},
+      addedCookDays: {},
+      removedCookDays: [],
+      recipeSwaps: {},
+    })
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan/demo/occurrences/monday-breakfast/recipes?mealType=breakfast&editMode=swap']}><Routes><Route path="/plan/:planId/occurrences/:occurrenceId/recipes" element={<PlanRecipePickerPage/>}/><Route path="/plan/:planId/edit" element={<div>Back in editor</div>}/></Routes></MemoryRouter></QueryClientProvider>)
+
+    expect(screen.getByRole('heading', { name: 'Swap this batch recipe' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Use this recipe' }))
+
+    expect(await screen.findByText('Back in editor')).toBeInTheDocument()
+    expect(readPlanEditDraft('demo')?.recipeSwaps['breakfast-batch']).toEqual({
+      recipeId: 'shakshuka',
+      recipeTitle: 'Spiced shakshuka',
     })
   })
 })

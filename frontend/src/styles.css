@@ -1317,6 +1317,7 @@ button.tag { cursor: pointer; font: inherit; }
 .plan-edit-recipe { align-items:center;display:grid;gap:12px;grid-template-columns:24px minmax(0,1fr) auto;min-height:88px;padding:12px 0;position:relative; }
 .plan-edit-recipe+.plan-edit-recipe { border-top:1px dashed var(--border); }
 .plan-edit-recipe.starts-new-batch { background:linear-gradient(90deg,var(--warm-soft),transparent);margin-inline:-10px;padding-inline:10px; }
+.plan-edit-recipe.removes-batch { background:linear-gradient(90deg,var(--surface-2),transparent);filter:saturate(.8);margin-inline:-10px;padding-inline:10px; }
 .plan-edit-recipe-rail { align-self:stretch;align-items:center;color:var(--primary);display:flex;flex-direction:column;gap:4px; }
 .plan-edit-recipe-rail svg { background:var(--primary-soft);border-radius:50%;height:24px;padding:5px;width:24px;z-index:1; }
 .plan-edit-recipe-rail span { background:var(--border);flex:1;width:1px; }
@@ -1325,11 +1326,21 @@ button.tag { cursor: pointer; font: inherit; }
 .plan-edit-recipe-copy>span { color:var(--primary);font-size:.62rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase; }
 .plan-edit-recipe-copy strong { font-family:'Fraunces',Georgia,serif;font-size:1.02rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .plan-edit-recipe-copy small { color:var(--muted);font-size:.68rem; }
+.plan-edit-recipe-title { align-items:center;display:flex;gap:9px;min-width:0; }
+.plan-edit-recipe-title>strong { min-width:0; }
+.plan-edit-recipe-title>button { align-items:center;background:transparent;border:0;border-radius:999px;color:var(--primary);display:flex;font-size:.62rem;font-weight:850;gap:4px;padding:5px 7px;white-space:nowrap; }
+.plan-edit-recipe-title>button:hover { background:var(--primary-soft); }
+.plan-edit-recipe-title svg { height:13px;width:13px; }
 .plan-edit-cook-stamp,.plan-edit-cook-toggle { align-items:center;border-radius:999px;display:flex;font-size:.67rem;font-weight:800;gap:6px;white-space:nowrap; }
 .plan-edit-cook-stamp { background:var(--primary-soft);color:var(--primary);padding:7px 10px; }
 .plan-edit-cook-toggle { background:transparent;border:1px dashed var(--warm);color:var(--warm);padding:8px 11px;transition:background .18s,transform .18s; }
 .plan-edit-cook-toggle:hover,.plan-edit-cook-toggle.active { background:var(--warm-soft);transform:translateY(-1px); }
 .plan-edit-cook-toggle svg,.plan-edit-cook-stamp svg { height:14px;width:14px; }
+.plan-edit-cook-actions { align-items:flex-end;display:flex;flex-direction:column;gap:6px; }
+.plan-edit-cook-remove,.plan-edit-boundary-cancel { align-items:center;background:transparent;border:0;color:var(--muted);display:flex;font-size:.61rem;font-weight:800;gap:4px;padding:3px 5px;white-space:nowrap; }
+.plan-edit-cook-remove:hover,.plan-edit-cook-remove.active { color:var(--danger); }
+.plan-edit-cook-remove svg { height:13px;width:13px; }
+.plan-edit-boundary-cancel:hover { color:var(--danger);text-decoration:underline; }
 .plan-edit-adjustments { background:color-mix(in srgb,var(--surface-2) 72%,transparent);border-top:1px solid var(--border);display:grid;gap:24px;grid-template-columns:1fr 1fr;padding:18px 22px 22px; }
 .plan-edit-adjustments>section { display:grid;gap:12px; }
 .plan-edit-section-title { align-items:start;display:flex;gap:9px; }
