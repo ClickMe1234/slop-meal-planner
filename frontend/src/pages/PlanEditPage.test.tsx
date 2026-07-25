@@ -110,16 +110,16 @@ describe('PlanEditPage', () => {
     expect(await screen.findByRole('heading', { name: 'Adjust the week, keep the meals' })).toBeInTheDocument()
     expect(screen.getByText('2 recipes pinned')).toBeInTheDocument()
 
-    const monday = screen.getByRole('heading', { name: 'Monday 27 July' }).closest('.plan-edit-day') as HTMLElement
+    const monday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-27' }).closest('.plan-edit-day') as HTMLElement
     await user.click(within(monday).getByRole('button', { name: 'Remove guests' }))
     const calorieBoost = within(monday).getAllByRole('spinbutton')[1]
     await user.clear(calorieBoost)
     await user.type(calorieBoost, '350')
 
-    const tuesday = screen.getByRole('heading', { name: 'Tuesday 28 July' }).closest('.plan-edit-day') as HTMLElement
+    const tuesday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-28' }).closest('.plan-edit-day') as HTMLElement
     await user.click(within(tuesday).getByRole('button', { name: 'Add cooking day' }))
 
-    const wednesday = screen.getByRole('heading', { name: 'Wednesday 29 July' }).closest('.plan-edit-day') as HTMLElement
+    const wednesday = screen.getByRole('region', { name: 'Pinned recipes for 2026-07-29' }).closest('.plan-edit-day') as HTMLElement
     await user.click(within(wednesday).getByRole('button', { name: 'Remove day' }))
     await user.click(screen.getByRole('button', { name: 'Save plan changes' }))
 
