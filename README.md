@@ -101,6 +101,8 @@ Fuzzy matching of shopping list to pantry ingredients supported!
   recipe from the existing customisation screen.
 - Keep current plans, pantry reservations, and shopping lists synchronised
   when saved recipe ingredients change.
+- Pin patched frontend build dependencies to remove the `brace-expansion`
+  denial-of-service advisory from CI.
 
 ### 1.0.1 - 2026-07-24
 
