@@ -13,7 +13,7 @@ type NutritionTotals = { calories: number; protein: number; carbs: number; fat: 
 const emptyNutrition = (): NutritionTotals => ({ calories: 0, protein: 0, carbs: 0, fat: 0 })
 
 export function editPlanPath(planId: string): string {
-  return `/plan?plan=${encodeURIComponent(planId)}&edit=setup`
+  return `/plan/${encodeURIComponent(planId)}/edit`
 }
 
 export function WeekPage() {

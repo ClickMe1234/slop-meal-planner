@@ -78,6 +78,8 @@ def build_shopping_list(
     requirements: dict[tuple[str, str], dict[str, object]] = {}
     review_actions: dict[str, dict] = {}
     for batch in batches:
+        if batch.cooked_at is not None:
+            continue
         version = db.get(RecipeVersion, batch.recipe_version_id)
         if version is None or not version.yield_servings:
             raise DomainError("INVALID_BATCH", "A meal batch references an invalid recipe yield")

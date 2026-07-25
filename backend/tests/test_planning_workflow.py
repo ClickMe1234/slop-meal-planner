@@ -355,6 +355,152 @@ def test_calorie_boosts_raise_daily_portions_and_guests_scale_the_batch(client, 
     assert float(occurrence["batch_servings"]) == 6
 
 
+def test_preserving_edit_removes_day_and_adjustments_without_changing_recipes(
+    client, owner
+):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id, calorie_target=500)
+    recipe = _create_recipe(client, owner, "Keep this dinner", ["dinner"])
+    response = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={
+            "name": "Editable week",
+            "recipe_ids": [recipe["id"]],
+            "start_date": "2026-08-03",
+            "end_date": "2026-08-05",
+            "slots": [
+                {
+                    "meal_date": meal_date,
+                    "meal_type": "dinner",
+                    "participant_member_ids": [member_id],
+                    "batch_key": "shared-dinner",
+                }
+                for meal_date in ("2026-08-03", "2026-08-04", "2026-08-05")
+            ],
+            "calorie_boosts": [
+                {
+                    "meal_date": "2026-08-03",
+                    "member_id": member_id,
+                    "calories": 500,
+                }
+            ],
+            "guest_days": [
+                {"meal_date": "2026-08-04", "guest_count": 2}
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    plan = response.json()
+    accepted = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    )
+    assert accepted.status_code == 200, accepted.text
+    before = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    original_recipe_ids = {item["recipe_id"] for item in before["occurrences"]}
+
+    edited = client.put(
+        f"/api/v1/meal-plans/{plan['id']}/preserving-edit",
+        headers=_headers(owner),
+        json={
+            "expected_plan_version": accepted.json()["version"],
+            "removed_dates": ["2026-08-03"],
+            "calorie_boosts": [],
+            "guest_days": [],
+            "added_cook_days": [],
+        },
+    )
+
+    assert edited.status_code == 200, edited.text
+    detail = edited.json()
+    assert detail["plan"]["status"] == "accepted"
+    assert detail["plan"]["start_date"] == "2026-08-04"
+    assert detail["plan"]["calorie_boosts"] == []
+    assert detail["plan"]["guest_days"] == []
+    assert {item["meal_date"] for item in detail["occurrences"]} == {
+        "2026-08-04",
+        "2026-08-05",
+    }
+    assert {item["recipe_id"] for item in detail["occurrences"]} == original_recipe_ids
+    assert all(
+        item["planned_cook_date"] == "2026-08-04"
+        for item in detail["occurrences"]
+    )
+    assert all(float(item["portions"][0]["servings"]) == 1 for item in detail["occurrences"])
+    assert all(float(item["guest_servings"]) == 0 for item in detail["occurrences"])
+    shopping = client.get("/api/v1/shopping-lists/active")
+    assert shopping.status_code == 200
+    assert shopping.json()["meal_plan_id"] == plan["id"]
+
+
+def test_preserving_edit_adds_new_recipe_only_from_new_cook_day(client, owner):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id, calorie_target=500)
+    recipes = [
+        _create_recipe(client, owner, title, ["dinner"])
+        for title in ("First dinner", "Second dinner", "Third dinner")
+    ]
+    response = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={
+            "name": "Split cooking week",
+            "recipe_ids": [item["id"] for item in recipes],
+            "start_date": "2026-08-10",
+            "end_date": "2026-08-13",
+            "slots": [
+                {
+                    "meal_date": meal_date,
+                    "meal_type": "dinner",
+                    "participant_member_ids": [member_id],
+                    "batch_key": "week-dinner",
+                    "food_safety_acknowledged": True,
+                }
+                for meal_date in (
+                    "2026-08-10",
+                    "2026-08-11",
+                    "2026-08-12",
+                    "2026-08-13",
+                )
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    plan = response.json()
+    accepted = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    )
+    assert accepted.status_code == 200, accepted.text
+    before = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    original_recipe_id = before["occurrences"][0]["recipe_id"]
+
+    edited = client.put(
+        f"/api/v1/meal-plans/{plan['id']}/preserving-edit",
+        headers=_headers(owner),
+        json={
+            "expected_plan_version": accepted.json()["version"],
+            "removed_dates": [],
+            "calorie_boosts": [],
+            "guest_days": [],
+            "added_cook_days": [
+                {"meal_date": "2026-08-12", "meal_type": "dinner"}
+            ],
+        },
+    )
+
+    assert edited.status_code == 200, edited.text
+    by_date = {
+        item["meal_date"]: item
+        for item in edited.json()["occurrences"]
+        if item["component_slot"] == 0
+    }
+    assert by_date["2026-08-10"]["recipe_id"] == original_recipe_id
+    assert by_date["2026-08-11"]["recipe_id"] == original_recipe_id
+    assert by_date["2026-08-12"]["recipe_id"] != original_recipe_id
+    assert by_date["2026-08-13"]["recipe_id"] == by_date["2026-08-12"]["recipe_id"]
+    assert by_date["2026-08-12"]["planned_cook_date"] == "2026-08-12"
+
+
 def test_day_adjustments_apply_only_to_selected_meals(client, owner):
     member_id = client.get("/api/v1/auth/me").json()["member_id"]
     target = client.put(

@@ -13,7 +13,7 @@ function renderWeek() {
 
 describe('WeekPage', () => {
   it('builds a direct edit-workflow link for the current plan', () => {
-    expect(editPlanPath('plan with/slash')).toBe('/plan?plan=plan%20with%2Fslash&edit=setup')
+    expect(editPlanPath('plan with/slash')).toBe('/plan/plan%20with%2Fslash/edit')
   })
 
   it('starts daily nutrition at zero and adds a recipe when it is marked cooked', async () => {

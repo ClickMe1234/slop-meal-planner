@@ -404,6 +404,11 @@ export const api = {
     }),
   listPlans: () => request<BackendPlan[]>('/meal-plans'),
   getPlan: (id: string) => request<BackendPlanDetail>(`/meal-plans/${id}`),
+  editPlanPreservingRecipes: (id: string, payload: BackendPlanPreservingEditRequest) =>
+    request<BackendPlanDetail>(`/meal-plans/${id}/preserving-edit`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
   replacePlanRecipe: (planId: string, occurrenceId: string, recipeId: string, expectedPlanVersion: number, ignoreNutritionTolerances = false) =>
     request<BackendPlanDetail>(`/meal-plans/${planId}/occurrences/${occurrenceId}/recipe`, {
       method: 'PUT',
@@ -957,4 +962,22 @@ export interface BackendPlanDetail {
     totals: Record<string, number>
     members: Array<{ member_id: string; totals: Record<string, number> }>
   }>
+}
+
+export interface BackendPlanPreservingEditRequest {
+  expected_plan_version: number
+  removed_dates: string[]
+  calorie_boosts: Array<{
+    meal_date: string
+    member_id: string
+    calories: number
+    meal_allocations?: Array<{ meal_type: string; percentage: number }>
+  }>
+  guest_days: Array<{
+    meal_date: string
+    guest_count: number
+    meal_types?: string[]
+  }>
+  added_cook_days: Array<{ meal_date: string; meal_type: string }>
+  ignore_nutrition_tolerances?: boolean
 }

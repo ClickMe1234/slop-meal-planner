@@ -8,6 +8,7 @@ import { Loading } from './components/ui'
 import { CustomRecipePage, ImportReviewDrawer, ImportReviewPage, RecipeImportPage } from './pages/ImportPages'
 import { PantryPage } from './pages/PantryPage'
 import { PlanPage } from './pages/PlanPage'
+import { PlanEditPage } from './pages/PlanEditPage'
 import { PlanRecipePickerPage } from './pages/PlanRecipePickerPage'
 import { RecipesPage } from './pages/RecipesPage'
 import { ShoppingPage } from './pages/ShoppingPage'
@@ -29,6 +30,7 @@ export default function App() {
     <Route element={<ProtectedShell theme={theme} setTheme={setTheme}/> }>
       <Route path="/week" element={<WeekPage/>}/>
       <Route path="/plan" element={<PlanPage/>}/>
+      <Route path="/plan/:planId/edit" element={<PlanEditPage/>}/>
       <Route path="/plan/:planId/occurrences/:occurrenceId/recipes" element={<PlanRecipePickerPage/>}/>
       <Route path="/plan/:planId/batches/:batchId/sides/:componentSlot/recipes" element={<PlanRecipePickerPage/>}/>
       <Route path="/recipes" element={<RecipesPage/>}/>

@@ -601,6 +601,35 @@ class PlanRecipeReplaceRequest(APIModel):
     ignore_nutrition_tolerances: bool = False
 
 
+class PlanCookDayIn(APIModel):
+    meal_date: date
+    meal_type: MealType
+
+
+class PlanPreservingEditRequest(APIModel):
+    expected_plan_version: int = Field(ge=1)
+    removed_dates: list[date] = Field(default_factory=list, max_length=32)
+    calorie_boosts: list[DayCalorieBoostIn] = Field(default_factory=list, max_length=250)
+    guest_days: list[GuestDayIn] = Field(default_factory=list, max_length=250)
+    added_cook_days: list[PlanCookDayIn] = Field(default_factory=list, max_length=250)
+    ignore_nutrition_tolerances: bool = False
+
+    @model_validator(mode="after")
+    def validate_unique_edits(self):
+        if len(self.removed_dates) != len(set(self.removed_dates)):
+            raise ValueError("removed dates must be unique")
+        boost_keys = [(item.meal_date, item.member_id) for item in self.calorie_boosts]
+        if len(boost_keys) != len(set(boost_keys)):
+            raise ValueError("a member can only have one calorie boost per day")
+        guest_dates = [item.meal_date for item in self.guest_days]
+        if len(guest_dates) != len(set(guest_dates)):
+            raise ValueError("a date can only have one guest count")
+        cook_keys = [(item.meal_date, item.meal_type) for item in self.added_cook_days]
+        if len(cook_keys) != len(set(cook_keys)):
+            raise ValueError("a date and meal type can only add one cooking day")
+        return self
+
+
 class PlanSideCreateRequest(APIModel):
     recipe_id: str
     expected_plan_version: int = Field(ge=1)
