@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { BackendRecipeDetail } from '../api/client'
-import { importedRecipeNeedsReview, matchesSelectedCategories, nextCategorySelection, savedRecipePlanningBadge } from './RecipesPage'
+import type { BackendRecipe, BackendRecipeDetail } from '../api/client'
+import { importedRecipeNeedsReview, mapSavedRecipe, matchesSelectedCategories, nextCategorySelection, recipeNutritionHeading, savedRecipePlanningBadge } from './RecipesPage'
 
 describe('saved recipe planning status', () => {
   it('does not claim a tagged recipe is usable until its recipe data is ready', () => {
@@ -16,6 +16,41 @@ describe('saved recipe planning status', () => {
       tone: 'green',
       label: 'Used for planning',
     })
+  })
+
+  it('displays ingredient-calculated nutrition for a custom recipe', () => {
+    const customRecipe: BackendRecipe = {
+      id: 'protein-smoothie',
+      title: 'Protein smoothie',
+      eligibility: 'planner_ready',
+      source_type: 'custom',
+      version: 1,
+      yield_servings: 1,
+      calculated_nutrition: {
+        energy_kcal: 420,
+        protein_g: 35,
+        carbohydrate_g: 40,
+        fat_g: 12,
+      },
+      nutrition_method: 'complete',
+      review_count: 0,
+      meal_types: ['breakfast', 'snack'],
+      planner_eligible: true,
+      planner_warnings: [],
+    }
+
+    const mapped = mapSavedRecipe(customRecipe, new Map())
+
+    expect(mapped.nutrition).toEqual({
+      calories: 420,
+      protein: 35,
+      carbs: 40,
+      fat: 12,
+      basis: 'per_serving',
+    })
+    expect(mapped.nutritionSource).toBe('calculated')
+    expect(mapped.state).toBe('ready')
+    expect(recipeNutritionHeading(mapped, mapped.nutritionSourceName ?? '')).toBe('Nutrition calculated from ingredients')
   })
 })
 
