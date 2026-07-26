@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import App from './App'
 
 describe('App', () => {
@@ -89,6 +89,17 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: /harissa chicken with chickpeas/i })).toBeInTheDocument()
     expect(screen.getAllByText(/nutrition from good food/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/food-data match|match foods|fallback calculation/i)).not.toBeInTheDocument()
+  })
+
+  it('offers recipe deletion from the edit screen and confirms before leaving', async () => {
+    const user = userEvent.setup()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes/demo/review']}><App/></MemoryRouter></QueryClientProvider>)
+
+    await user.click(screen.getByRole('button', { name: 'Delete recipe' }))
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Existing meal plans keep their history.'))
+    expect(screen.getByRole('heading', { name: /find something delicious/i })).toBeInTheDocument()
   })
 
   it('asks for meal types before finishing a searched recipe save', async () => {
