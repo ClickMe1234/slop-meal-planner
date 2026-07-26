@@ -243,6 +243,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   getRecipe: (id: string) => request<BackendRecipeDetail>(`/recipes/${id}`),
+  deleteRecipe: (id: string) => request<void>(`/recipes/${id}`, { method: 'DELETE' }),
   saveRecipeReview: (
     id: string,
     payload: {

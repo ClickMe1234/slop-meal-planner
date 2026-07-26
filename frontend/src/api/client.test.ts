@@ -66,3 +66,18 @@ describe('saved food library', () => {
     ])
   })
 })
+
+describe('recipe deletion', () => {
+  it('sends a DELETE request for the selected recipe', async () => {
+    sessionStorage.setItem('slop-csrf', 'current-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const { api } = await import('./client')
+
+    await api.deleteRecipe('recipe-123')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/recipes/recipe-123', expect.objectContaining({
+      method: 'DELETE',
+      headers: expect.objectContaining({ 'X-CSRF-Token': 'current-token' }),
+    }))
+  })
+})

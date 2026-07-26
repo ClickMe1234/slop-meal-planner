@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, Query
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -548,9 +550,32 @@ def get_recipe(
     db: Session = Depends(get_db),
 ):
     recipe = db.get(Recipe, recipe_id)
-    if recipe is None or recipe.household_id != context.user.household_id:
+    if (
+        recipe is None
+        or recipe.household_id != context.user.household_id
+        or recipe.archived_at is not None
+    ):
         raise NotFoundError("Recipe")
     return _recipe_detail(db, recipe, context.user.ingredient_locale)
+
+
+@router.delete("/recipes/{recipe_id}", status_code=204)
+def delete_recipe(
+    recipe_id: str,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    recipe = db.get(Recipe, recipe_id)
+    if (
+        recipe is None
+        or recipe.household_id != context.user.household_id
+        or recipe.archived_at is not None
+    ):
+        raise NotFoundError("Recipe")
+    recipe.archived_at = datetime.now(timezone.utc)
+    recipe.eligibility = RecipeEligibility.ARCHIVED.value
+    recipe.version += 1
+    db.commit()
 
 
 @router.put("/recipes/{recipe_id}/review", response_model=RecipeDetail)
@@ -565,7 +590,11 @@ def save_recipe_review(
     recipe = db.scalar(
         select(Recipe).where(Recipe.id == recipe_id).with_for_update()
     )
-    if recipe is None or recipe.household_id != context.user.household_id:
+    if (
+        recipe is None
+        or recipe.household_id != context.user.household_id
+        or recipe.archived_at is not None
+    ):
         raise NotFoundError("Recipe")
     if recipe.version != payload.expected_version:
         raise DomainError(
@@ -649,7 +678,11 @@ def calculate(
     db: Session = Depends(get_db),
 ):
     recipe = db.get(Recipe, recipe_id)
-    if recipe is None or recipe.household_id != context.user.household_id:
+    if (
+        recipe is None
+        or recipe.household_id != context.user.household_id
+        or recipe.archived_at is not None
+    ):
         raise NotFoundError("Recipe")
     version = _latest_version(db, recipe.id)
     calculation = calculate_recipe(db, version.id)
