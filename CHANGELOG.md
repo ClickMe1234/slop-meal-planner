@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1 - 2026-07-26
+
+- Delete saved recipes from their edit screen while preserving existing meal
+  plan history.
+- Restore live barcode scanning by keeping ZXing attached to the active camera
+  video element.
+- Recognise rotated EAN barcodes in uploaded photos by enabling ZXing's
+  exhaustive scan and orientation handling.
+
 ## 1.1.0 - 2026-07-25
 
 - Fix recipe customisation search so typing no longer replaces the page, while

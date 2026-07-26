@@ -443,6 +443,7 @@ button.tag { cursor: pointer; font: inherit; }
 .field-help { color:var(--muted); display:block; font-size:.7rem; line-height:1.45; margin-top:7px; }
 .field-help--warning { color:var(--warning); }
 .review-summary { padding:22px;position:sticky;top:24px;}.review-summary>svg { color:var(--primary);}.review-summary .nutrition-strip { margin:20px 0 6px;}.review-summary>p { color:var(--muted);font-size:.68rem;text-align:center;}.review-summary dl { border-block:1px solid var(--border);margin:18px 0;padding:10px 0;}.review-summary dl div { display:flex;font-size:.72rem;justify-content:space-between;padding:6px 0;}.review-summary dt { color:var(--muted);}.review-summary dd { font-weight:700;margin:0;}.review-summary .notice { margin-bottom:14px;}.review-summary>.button { width:100%;}
+.recipe-delete-action { border-top:1px solid var(--border);display:grid;gap:10px;margin-top:18px;padding-top:18px;}.recipe-delete-action>p { color:var(--muted);font-size:.68rem;margin:0;text-align:center;}.recipe-delete-action>.button { width:100%;}
 
 /* recipe planning metadata and shopping-quantity review */
 .meal-type-picker { display:grid;gap:7px;min-width:230px;position:relative; }

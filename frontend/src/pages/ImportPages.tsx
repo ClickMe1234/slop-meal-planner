@@ -656,6 +656,11 @@ function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoT
   const navigate = useNavigate()
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const demoIngredients = ['600g boneless skinless chicken thighs', '2 x 400g cans chickpeas, drained', '2 tbsp rose harissa', 'a splash of olive oil', '1 lemon, zest and juice']
+  const deleteRecipe = () => {
+    if (!window.confirm(`Delete “${demoTitle}”? This removes it from your recipes. Existing meal plans keep their history.`)) return
+    if (onSaved) onSaved()
+    else navigate('/recipes')
+  }
   const content = (
     <div className="page page--wide">
       <div className="review-top">
@@ -711,6 +716,10 @@ function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoT
             />
             <p>Per serving · reported by Good Food · used for planning</p>
             <Button onClick={() => onSaved ? onSaved() : navigate('/recipes')}>Save recipe</Button>
+            <div className="recipe-delete-action">
+              <p>Remove this recipe from your collection.</p>
+              <Button type="button" variant="danger" onClick={deleteRecipe}><Trash2 />Delete recipe</Button>
+            </div>
           </Card>
         </aside>
       </div>
@@ -745,7 +754,9 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
   const [yieldServings, setYieldServings] = useState('')
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const [error, setError] = useState('')
+  const [deleteError, setDeleteError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const focusedIngredient = useRef('')
   const requestedReturnTo = searchParams.get('returnTo')
   const returnTo = requestedReturnTo?.startsWith('/') && !requestedReturnTo.startsWith('//') ? requestedReturnTo : '/recipes'
@@ -765,8 +776,9 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
     enabled: Boolean(recipeId),
   })
   const publisherIsPrimary = completePublisherNutrition(recipe.data)
+  const busy = saving || deleting
   const present = (content: ReactNode) => presentation === 'drawer' && onDismiss
-    ? <ImportReviewDrawerFrame saving={saving} onDismiss={onDismiss}>{content}</ImportReviewDrawerFrame>
+    ? <ImportReviewDrawerFrame saving={busy} onDismiss={onDismiss}>{content}</ImportReviewDrawerFrame>
     : content
 
   useEffect(() => {
@@ -806,6 +818,25 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
   }, [focusField, focusIngredient, rows])
 
   const update = (index: number, change: Partial<ImportedIngredientRow>) => setRows((all) => all.map((row, rowIndex) => (rowIndex === index ? { ...row, ...change } : row)))
+  const deleteRecipe = async () => {
+    if (!recipe.data || !window.confirm(`Delete “${recipe.data.title}”? This removes it from your recipes. Existing meal plans keep their history.`)) return
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      await api.deleteRecipe(recipe.data.id)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['recipes'] }),
+        queryClient.invalidateQueries({ queryKey: ['recipe', recipe.data.id] }),
+        queryClient.invalidateQueries({ queryKey: ['plan'] }),
+      ])
+      if (presentation === 'drawer' && onSaved) onSaved()
+      else navigate(returnTo)
+    } catch (reason) {
+      setDeleteError(reason instanceof ApiError ? reason.message : 'The recipe could not be deleted.')
+    } finally {
+      setDeleting(false)
+    }
+  }
   const save = async () => {
     if (!recipe.data) return
     if (!yieldServings) {
@@ -889,7 +920,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
     <div className="page page--wide">
       <IngredientUnitOptions />
       <div className="review-top">
-        {presentation === 'drawer' ? <button type="button" className="icon-link icon-link--button" disabled={saving} onClick={onDismiss}><ArrowLeft />Back to results</button> : <Link to={returnTo} className="icon-link"><ArrowLeft />Back</Link>}
+        {presentation === 'drawer' ? <button type="button" className="icon-link icon-link--button" disabled={busy} onClick={onDismiss}><ArrowLeft />Back to results</button> : <Link to={returnTo} className="icon-link"><ArrowLeft />Back</Link>}
         <Badge tone={publisherPreview ? 'green' : undefined}>Nutrition from {publisherName}</Badge>
       </div>
       <PageHeader
@@ -1049,9 +1080,17 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
                 {error}
               </Notice>
             )}
-            <Button disabled={saving} onClick={save}>
+            <Button disabled={busy} onClick={save}>
               {saving ? 'Saving…' : 'Save recipe'}
             </Button>
+            <div className="recipe-delete-action">
+              <p>Remove this recipe from your collection.</p>
+              {deleteError && <Notice tone="warning" title="Could not delete">{deleteError}</Notice>}
+              <Button type="button" variant="danger" disabled={busy} onClick={deleteRecipe}>
+                <Trash2 />
+                {deleting ? 'Deleting…' : 'Delete recipe'}
+              </Button>
+            </div>
           </Card>
         </aside>
       </div>

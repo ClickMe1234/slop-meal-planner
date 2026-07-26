@@ -265,6 +265,7 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
   const previewNutrition = completeNutrition(preview.data?.publisher_nutrition) ? mapNutrition(preview.data.publisher_nutrition) : undefined
   const nutrition = initialNutrition ?? previewNutrition
   const nutritionSource = preview.data?.publisher ?? recipe.nutritionSourceName ?? (recipe.source === 'Saved recipe' ? 'the recipe website' : recipe.source)
+  const nutritionHeading = recipeNutritionHeading(recipe, nutritionSource)
   const yieldServings = recipe.yield ?? preview.data?.yield_servings
   const loadingNutrition = shouldLoadPreview && (!previewEnabled || preview.isLoading)
   return <div ref={cardRef} className="recipe-card-observer"><Card className="recipe-card">
@@ -274,14 +275,22 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
       <RecipeRating rating={recipe.starRating} count={recipe.ratingCount}/>
       <p className="recipe-meta">{yieldServings ? `Serves ${yieldServings}` : 'Yield not reported'}{recipe.mealKinds.length ? ` · ${recipe.mealKinds.join(' · ')}` : ''}</p>
       {Boolean(recipe.publisherTags?.length) && <div className="recipe-publisher-tags" aria-label="Publisher categories">{recipe.publisherTags?.map(tag => <span key={tag}>{tag}</span>)}</div>}
-      {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>Nutrition from {nutritionSource} · per serving</span><Badge tone={planningBadge?.tone ?? 'green'}>{planningBadge?.label ?? 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
+      {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>{nutritionHeading} · per serving</span><Badge tone={planningBadge?.tone ?? 'green'}>{planningBadge?.label ?? 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
       {missingMealTypes && <div className="recipe-planning-note recipe-planning-note--warning" role="status"><strong>Not used for meal planning</strong><span>Add breakfast, lunch, dinner, snack or side so the planner knows where this recipe belongs.</span></div>}
       <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{recipe.reviewCount ? 'Review ingredients' : missingMealTypes ? 'Add meal types' : 'Edit recipe'}</Link> : <Button data-recipe-save-id={recipe.id} disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}</div>
     </div>
   </Card></div>
 }
 
-function completeNutrition(nutrition?: BackendRecipe['publisher_nutrition']): nutrition is NonNullable<BackendRecipe['publisher_nutrition']> {
+type NutritionValues = {
+  basis?: string
+  energy_kcal?: number
+  protein_g?: number
+  carbohydrate_g?: number
+  fat_g?: number
+}
+
+function completeNutrition(nutrition?: NutritionValues): nutrition is Required<Pick<NutritionValues, 'energy_kcal' | 'protein_g' | 'carbohydrate_g' | 'fat_g'>> & NutritionValues {
   const basis = nutrition?.basis?.replaceAll(' ', '').toLowerCase() ?? ''
   return Boolean(
     nutrition
@@ -294,7 +303,7 @@ function completeNutrition(nutrition?: BackendRecipe['publisher_nutrition']): nu
   )
 }
 
-function mapNutrition(nutrition: NonNullable<BackendRecipe['publisher_nutrition']>): Nutrition {
+function mapNutrition(nutrition: NutritionValues): Nutrition {
   return {
     calories: Number(nutrition.energy_kcal),
     protein: Number(nutrition.protein_g),
@@ -302,6 +311,12 @@ function mapNutrition(nutrition: NonNullable<BackendRecipe['publisher_nutrition'
     fat: Number(nutrition.fat_g),
     basis: 'per_serving',
   }
+}
+
+export function recipeNutritionHeading(recipe: Pick<Recipe, 'nutritionSource'>, sourceName: string): string {
+  return recipe.nutritionSource === 'calculated'
+    ? 'Nutrition calculated from ingredients'
+    : `Nutrition from ${sourceName}`
 }
 
 function sourceName(recipe: BackendRecipe): string {
@@ -313,8 +328,13 @@ function sourceName(recipe: BackendRecipe): string {
   }
 }
 
-function mapSavedRecipe(recipe: BackendRecipe, categoryLabels: Map<string, string>): Recipe {
+export function mapSavedRecipe(recipe: BackendRecipe, categoryLabels: Map<string, string>): Recipe {
   const reported = completeNutrition(recipe.publisher_nutrition) ? mapNutrition(recipe.publisher_nutrition) : undefined
+  const calculated = completeNutrition(recipe.calculated_nutrition) ? mapNutrition(recipe.calculated_nutrition) : undefined
+  const nutrition = recipe.nutrition_method === 'complete' ? calculated : reported
+  const nutritionSource = nutrition
+    ? (recipe.nutrition_method === 'complete' ? 'calculated' : 'publisher')
+    : undefined
   const categoryTags = (recipe.publisher_categories ?? []).map(category => categoryLabels.get(category) ?? category)
   const rawTags = (recipe.publisher_tags ?? [])
     .filter(tag => ['category', 'cuisine', 'diet'].includes(tag.kind))
@@ -326,10 +346,10 @@ function mapSavedRecipe(recipe: BackendRecipe, categoryLabels: Map<string, strin
     sourceUrl: recipe.source_url ?? '',
     imageUrl: recipe.image_url,
     yield: recipe.yield_servings,
-    nutrition: reported,
-    nutritionSource: reported ? 'publisher' : undefined,
+    nutrition,
+    nutritionSource,
     nutritionSourceName: sourceName(recipe),
-    state: recipe.review_count ? 'needs_review' : reported && recipe.yield_servings ? 'ready' : 'no_nutrition',
+    state: recipe.review_count ? 'needs_review' : nutrition && recipe.yield_servings ? 'ready' : 'no_nutrition',
     reviewCount: recipe.review_count ?? 0,
     mealKinds: mealKindLabels(recipe.meal_types),
     publisherTags: [...new Set([...categoryTags, ...rawTags])].slice(0, 4),
