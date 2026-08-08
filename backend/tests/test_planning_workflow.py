@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.models import MealPlan, PlanStatus, RecipeIngredient, RecipeVersion, ShoppingItem, ShoppingList
+from app.models import FoodRecord, MealPlan, PantryLot, PlanStatus, RecipeIngredient, RecipeVersion, ShoppingItem, ShoppingList
 
 
 PUBLISHER_NUTRITION = {
@@ -1606,7 +1606,13 @@ def test_accept_replaces_a_legacy_pre_accept_shopping_list(
                 "food_phrase": "rice",
                 "quantity_grams": 100,
                 "unit": "g",
-            }
+            },
+            {
+                "original_text": "50 g spinach",
+                "food_phrase": "spinach",
+                "quantity_grams": 50,
+                "unit": "g",
+            },
         ],
     )
     plan = _generate(
@@ -1624,6 +1630,35 @@ def test_accept_replaces_a_legacy_pre_accept_shopping_list(
 
     with session_factory() as db:
         stored_plan = db.get(MealPlan, plan["id"])
+        spinach_food = FoodRecord(
+            provider="test",
+            provider_record_id="fresh-spinach",
+            dataset_version="1",
+            name="Spinach",
+        )
+        db.add(spinach_food)
+        db.flush()
+        latest_version = db.scalar(
+            select(RecipeVersion)
+            .where(RecipeVersion.recipe_id == recipe["id"])
+            .order_by(RecipeVersion.version_number.desc())
+        )
+        spinach_ingredient = db.scalar(
+            select(RecipeIngredient).where(
+                RecipeIngredient.recipe_version_id == latest_version.id,
+                RecipeIngredient.food_phrase == "spinach",
+            )
+        )
+        spinach_ingredient.food_record_id = spinach_food.id
+        db.add(
+            PantryLot(
+                household_id=stored_plan.household_id,
+                food_record_id=spinach_food.id,
+                display_name="Spinach",
+                initial_quantity=10000,
+                unit="g",
+            )
+        )
         stale = ShoppingList(
             household_id=stored_plan.household_id,
             meal_plan_id=stored_plan.id,
@@ -1632,7 +1667,7 @@ def test_accept_replaces_a_legacy_pre_accept_shopping_list(
         )
         db.add(stale)
         db.flush()
-        db.add(
+        db.add_all([
             ShoppingItem(
                 shopping_list_id=stale.id,
                 display_name="rice",
@@ -1640,10 +1675,20 @@ def test_accept_replaces_a_legacy_pre_accept_shopping_list(
                 purchase_quantity=1,
                 unit="g",
                 category="Other",
-                checked=False,
+                checked=True,
                 manual=False,
-            )
-        )
+            ),
+            ShoppingItem(
+                shopping_list_id=stale.id,
+                display_name="old manual item",
+                exact_quantity=1,
+                purchase_quantity=1,
+                unit="item",
+                category="Other",
+                checked=True,
+                manual=True,
+            ),
+        ])
         db.commit()
         stale_id = stale.id
 
@@ -1658,6 +1703,10 @@ def test_accept_replaces_a_legacy_pre_accept_shopping_list(
     assert active["items"][0]["display_name"] == "rice"
     assert active["items"][0]["exact_quantity"] == "100"
     assert active["items"][0]["exact_quantity_display"] == "100 g"
+    assert active["items"][0]["checked"] is False
+    assert {item["display_name"] for item in active["items"]}.isdisjoint(
+        {"spinach", "old manual item"}
+    )
 
     with session_factory() as db:
         assert db.get(ShoppingList, stale_id).active is False

@@ -16,6 +16,27 @@ export function editPlanPath(planId: string): string {
   return `/plan/${encodeURIComponent(planId)}/edit`
 }
 
+export const planNextWeekPath = '/plan'
+
+export function localDateKey(value = new Date()): string {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+export function initialPlanDate(dates: string[], today = localDateKey()): string | undefined {
+  const plannedDates = Array.from(new Set(dates)).sort()
+  return plannedDates.find(date => date >= today) ?? plannedDates.at(-1)
+}
+
+export function sortWeekPeople<T extends { id?: string; name: string }>(people: T[]): T[] {
+  return [...people].sort((left, right) =>
+    left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+    || (left.id ?? '').localeCompare(right.id ?? ''),
+  )
+}
+
 export function WeekPage() {
   return isDemoMode ? <DemoWeekPage/> : <LiveWeekPage/>
 }
@@ -95,8 +116,9 @@ export function occurrenceWeightPortions(
     name: members.find(member => member.id === portion.member_id)?.name ?? (portion.member_id === currentMemberId ? 'You' : `Person ${index + 1}`),
     servings: Number(portion.servings),
   }))
+  const sortedHouseholdRows = sortWeekPeople(householdRows)
   const totalGuestServings = Number(occurrence.guest_servings ?? 0)
-  if (guestCount <= 0 || totalGuestServings <= 0) return householdRows
+  if (guestCount <= 0 || totalGuestServings <= 0) return sortedHouseholdRows
   const servingsPerGuest = totalGuestServings / guestCount
   const guestRows: BatchWeightPortion[] = Array.from({ length: guestCount }, (_, index) => ({
     id: `${occurrence.id}:guest-${index + 1}`,
@@ -105,7 +127,7 @@ export function occurrenceWeightPortions(
     servings: servingsPerGuest,
     guest: true,
   }))
-  return [...householdRows, ...guestRows]
+  return [...sortedHouseholdRows, ...guestRows]
 }
 
 export function BatchWeightControl({ servings, portions, savedWeight, draft, pending = false, onDraftChange, onSave, onClear }: {
@@ -175,7 +197,7 @@ function DemoWeekPage() {
   }), emptyNutrition()), [cooked, day])
 
   return <div className="page">
-    <PageHeader eyebrow="13–19 July" title="This week" description="Everything is planned. Make changes without losing the meals you want to keep." actions={<><Button variant="secondary"><RefreshCw size={17}/>Regenerate unlocked</Button><Button>Plan next week</Button></>}/>
+    <PageHeader eyebrow="13–19 July" title="This week" description="Everything is planned. Make changes without losing the meals you want to keep." actions={<><Button variant="secondary"><RefreshCw size={17}/>Regenerate unlocked</Button><Link className="button" to={planNextWeekPath}>Plan next week</Link></>}/>
     <div className="week-toolbar"><button aria-label="Previous week"><ChevronLeft/></button><strong>13 – 19 July 2026</strong><button aria-label="Next week"><ChevronRight/></button><Badge tone="green">Within targets</Badge></div>
     <div className="day-tabs" style={{ '--day-count': demoWeek.length } as CSSProperties}>{demoWeek.map((item, index) => <button key={item.date} className={selected === index ? 'active' : ''} onClick={() => setSelected(index)}><span>{item.day.slice(0, 3)}</span><strong>{item.shortDate.split(' ')[0]}</strong></button>)}</div>
     <div className="week-layout">
@@ -238,7 +260,7 @@ export function calorieBoostForDate(plan: BackendPlanDetail['plan'], mealDate: s
 
 function LiveWeekPage() {
   const queryClient = useQueryClient()
-  const [selected, setSelected] = useState(0)
+  const [selectedDate, setSelectedDate] = useState<string>()
   const [cookedOverrides, setCookedOverrides] = useState<Record<string, boolean>>({})
   const [pendingBatches, setPendingBatches] = useState<string[]>([])
   const [pendingWeights, setPendingWeights] = useState<string[]>([])
@@ -255,7 +277,7 @@ function LiveWeekPage() {
   if (!current || !detail.data) return <div className="page"><PageHeader eyebrow="Meal planning" title="This week" description="Your accepted plan will appear here."/><EmptyState icon={<Clock3/>} title="No active plan" description="Generate a plan after adding planner-ready recipes."/></div>
 
   const dates = Array.from(new Set(detail.data.occurrences.map(item => item.meal_date))).sort()
-  const date = dates[Math.min(selected, Math.max(0, dates.length - 1))]
+  const date = selectedDate && dates.includes(selectedDate) ? selectedDate : initialPlanDate(dates)!
   const meals = detail.data.occurrences.filter(item => item.meal_date === date).sort((left, right) => compareMealTypes(left.meal_type, right.meal_type))
   const mealGroups = groupByMealType(meals, meal => meal.meal_type)
   const memberId = session.data?.member_id
@@ -329,10 +351,10 @@ function LiveWeekPage() {
   }
 
   return <div className="page">
-    <PageHeader eyebrow={`${current.start_date} – ${current.end_date}`} title="This week" description="Accepted batches reserve pantry stock and consume it only when you mark them cooked." actions={<><Link className="button button--secondary" to={editPlanPath(current.id)}><PencilLine size={17}/>Edit meal plan</Link><Button>Plan next week</Button></>}/>
+    <PageHeader eyebrow={`${current.start_date} – ${current.end_date}`} title="This week" description="Accepted batches reserve pantry stock and consume it only when you mark them cooked." actions={<><Link className="button button--secondary" to={editPlanPath(current.id)}><PencilLine size={17}/>Edit meal plan</Link><Link className="button" to={planNextWeekPath}>Plan next week</Link></>}/>
     {current.status === 'ready' && <Notice tone="warning" title="Draft plan">Accept this plan from the Plan page before pantry stock is reserved.</Notice>}
     {cookError && <Notice tone="warning" title="Cooking update failed">{cookError}</Notice>}
-    <div className="day-tabs" style={{ '--day-count': dates.length } as CSSProperties}>{dates.map((item, index) => <button key={item} className={selected === index ? 'active' : ''} onClick={() => setSelected(index)}><span>{new Date(`${item}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{new Date(`${item}T12:00:00`).getDate()}</strong></button>)}</div>
+    <div className="day-tabs" style={{ '--day-count': dates.length } as CSSProperties}>{dates.map(item => <button key={item} className={date === item ? 'active' : ''} onClick={() => setSelectedDate(item)}><span>{new Date(`${item}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short' })}</span><strong>{new Date(`${item}T12:00:00`).getDate()}</strong></button>)}</div>
     <div className="week-layout">
       <section>
         <div className="section-heading"><div><h2>{new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long' })}</h2><p>{date} · {meals.length} planned meals</p></div></div>

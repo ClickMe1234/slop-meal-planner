@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2 - 2026-08-08
+
+- Select the local current day in Week view, with sensible plan-boundary and
+  sparse-date fallbacks, and route “Plan next week” to the planner.
+- Sort household people alphabetically in planning and Week views.
+- Rebuild each plan's shopping list from its requirements and pantry stock
+  without carrying checked or manual items from an older list.
+- Start recipe imports with an empty link field.
+
 ## 1.1.1 - 2026-07-26
 
 - Delete saved recipes from their edit screen while preserving existing meal
