@@ -263,9 +263,11 @@ function IngredientFoodMatch({ term, selectedId, selectedName, onSelect }: { ter
   )
 }
 
+export const initialRecipeImportUrl = ''
+
 export function RecipeImportPage() {
   const navigate = useNavigate()
-  const [url, setUrl] = useState('https://www.bbcgoodfood.com/recipes/')
+  const [url, setUrl] = useState(initialRecipeImportUrl)
   const [stage, setStage] = useState<'idle' | 'working' | 'done'>('idle')
   const [jobId, setJobId] = useState('demo')
   const [recipe, setRecipe] = useState<BackendRecipeDetail | null>(null)

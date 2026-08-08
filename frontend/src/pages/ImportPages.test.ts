@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { compactNutrition } from './ImportPages'
+import { compactNutrition, initialRecipeImportUrl } from './ImportPages'
 
 describe('compactNutrition', () => {
+  it('starts recipe link imports with an empty URL', () => {
+    expect(initialRecipeImportUrl).toBe('')
+  })
+
   it('shows calories, carbs, fat and protein in the recipe search format', () => {
     expect(compactNutrition({
       energy_kcal: 100,

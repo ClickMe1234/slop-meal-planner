@@ -2,18 +2,39 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import type { BackendPlanDetail } from '../api/client'
-import { BatchWeightControl, WeekPage, calorieBoostForDate, editPlanPath, guestCountForOccurrence, occurrenceWeightPortions } from './WeekPage'
+import { BatchWeightControl, WeekPage, calorieBoostForDate, editPlanPath, guestCountForOccurrence, initialPlanDate, localDateKey, occurrenceWeightPortions, planNextWeekPath } from './WeekPage'
 
 function renderWeek() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}><WeekPage/></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><MemoryRouter><WeekPage/></MemoryRouter></QueryClientProvider>)
 }
 
 describe('WeekPage', () => {
   it('builds a direct edit-workflow link for the current plan', () => {
     expect(editPlanPath('plan with/slash')).toBe('/plan/plan%20with%2Fslash/edit')
+  })
+
+  it('selects today or the next sparse plan date, clamped to the plan range', () => {
+    const dates = ['2026-07-24', '2026-07-20', '2026-07-22']
+
+    expect(initialPlanDate(dates, '2026-07-22')).toBe('2026-07-22')
+    expect(initialPlanDate(dates, '2026-07-21')).toBe('2026-07-22')
+    expect(initialPlanDate(dates, '2026-07-01')).toBe('2026-07-20')
+    expect(initialPlanDate(dates, '2026-08-01')).toBe('2026-07-24')
+    expect(initialPlanDate([], '2026-07-22')).toBeUndefined()
+  })
+
+  it('formats the current date from local calendar fields', () => {
+    expect(localDateKey(new Date(2026, 6, 23, 23, 59))).toBe('2026-07-23')
+  })
+
+  it('links the next plan action to the planner', () => {
+    renderWeek()
+    expect(planNextWeekPath).toBe('/plan')
+    expect(screen.getByRole('link', { name: 'Plan next week' })).toHaveAttribute('href', planNextWeekPath)
   })
 
   it('starts daily nutrition at zero and adds a recipe when it is marked cooked', async () => {
@@ -106,7 +127,7 @@ describe('WeekPage', () => {
       guest_days: [{ meal_date: '2026-07-23', guest_count: 2, meal_types: ['dinner'] }],
     }
     const portions = occurrenceWeightPortions(occurrences[0], [
-      { id: 'alice', name: 'Alice' }, { id: 'zach', name: 'Zach' },
+      { id: 'zach', name: 'Zach' }, { id: 'alice', name: 'Alice' },
     ], 'zach', guestCountForOccurrence(plan, occurrences[0]))
 
     expect(portions.reduce((sum, portion) => sum + portion.servings, 0)).toBe(8)
@@ -115,6 +136,7 @@ describe('WeekPage', () => {
       expect.objectContaining({ name: 'Guest 2', servings: 2 }),
     ])
     expect(portions).toHaveLength(4)
+    expect(portions.map(portion => portion.name)).toEqual(['Alice', 'Zach', 'Guest 1', 'Guest 2'])
 
     render(<BatchWeightControl servings={12} portions={portions} draft="1200" onDraftChange={() => undefined} onSave={() => undefined} onClear={() => undefined}/>)
     const firstGuestRow = screen.getByText('Guest 1').closest('.batch-weight__portion') as HTMLElement

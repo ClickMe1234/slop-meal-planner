@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import { ApiError, type BackendPlanDetail } from '../api/client'
-import { buildRecipeImpactDecks, PlanGenerationError, PlanPage } from './PlanPage'
+import { buildRecipeImpactDecks, PlanGenerationError, PlanPage, sortPlannerPeople } from './PlanPage'
 import { storeDemoPlan } from './planner'
 
 function renderPlanner() {
@@ -12,6 +12,17 @@ function renderPlanner() {
 }
 
 describe('PlanPage wizard', () => {
+  it('sorts household people alphabetically with stable name tie-breaking', () => {
+    const people = [
+      { id: 'z', name: 'Zach' },
+      { id: 'b', name: 'alice' },
+      { id: 'a', name: 'Alice' },
+    ]
+
+    expect(sortPlannerPeople(people).map(person => person.id)).toEqual(['a', 'b', 'z'])
+    expect(people.map(person => person.id)).toEqual(['z', 'b', 'a'])
+  })
+
   it('groups nutrition failures by day and matching household members', () => {
     const violations = [{ nutrient: 'protein', actual: '119', low: '120', kind: 'minimum' as const, message: 'Protein: 119 g (minimum 120 g after tolerance)' }]
     const error = new ApiError(
