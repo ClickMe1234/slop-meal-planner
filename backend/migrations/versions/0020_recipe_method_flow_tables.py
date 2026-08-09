@@ -48,7 +48,6 @@ def upgrade() -> None:
             ["reviewed_by_user_id"], ["app_user.id"], ondelete="SET NULL"
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("recipe_method_snapshot_id"),
     )
     op.create_index(
         "ix_recipe_method_table_snapshot_recipe_method_snapshot_id",
