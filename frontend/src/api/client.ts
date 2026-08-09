@@ -276,6 +276,7 @@ export const api = {
   },
   extractRecipeMethod: (recipeId: string, expectedVersion?: number) => request<BackendMethodView>(`/recipes/${recipeId}/method/extract`, { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) }),
   saveRecipeMethod: (recipeId: string, payload: BackendMethodUpdate) => request<BackendMethodView>(`/recipes/${recipeId}/method`, { method: 'PUT', body: JSON.stringify(payload) }),
+  saveRecipeMethodTable: (recipeId: string, payload: BackendMethodTableUpdate) => request<BackendMethodView>(`/recipes/${recipeId}/method/table`, { method: 'PUT', body: JSON.stringify(payload) }),
   previewMethodRefresh: (recipeId: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/refresh-preview`, { method: 'POST' }),
   applyMethodRefresh: (recipeId: string, expectedVersion: number, previewToken: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/refresh`, { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion, preview_token: previewToken }) }),
   startImport: (url: string) =>
@@ -501,7 +502,7 @@ export const isDemoMode = import.meta.env.VITE_DEMO_MODE !== 'false'
 
 export type BackendMealType = 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'side'
 export type IngredientLocale = 'uk' | 'us'
-export type MethodViewPreference = 'summary' | 'written'
+export type MethodViewPreference = 'summary' | 'table' | 'written'
 export type MeasurementSystem = 'source' | 'metric' | 'us'
 
 export interface UserPreferenceUpdate {
@@ -629,6 +630,7 @@ export interface BackendMethodAction {
   text: string
   source_annotation_ids: string[]
   duration_minutes?: number
+  duration_text?: string
   temperature_value?: number
   temperature_unit?: 'c' | 'f'
   equipment: string[]
@@ -641,6 +643,7 @@ export interface BackendMethodBinding {
   action_id: string
   ingredient_lineage_id: string
   annotation_id?: string
+  role?: 'input' | 'reference'
   portion_mode: 'all' | 'fraction' | 'absolute' | 'remainder' | 'unspecified'
   portion_value?: number
   portion_unit?: string
@@ -654,6 +657,7 @@ export interface BackendMethodEdge {
   to_action_id: string
   kind: 'sequence' | 'merge'
   confidence: number
+  accepted?: boolean
 }
 
 export interface BackendMethodDocument {
@@ -664,6 +668,87 @@ export interface BackendMethodDocument {
   actions: BackendMethodAction[]
   ingredient_bindings: BackendMethodBinding[]
   edges: BackendMethodEdge[]
+}
+
+export interface BackendMethodTableLabel {
+  action_id: string
+  text: string
+  origin: 'automatic' | 'user'
+  confidence: number
+  accepted: boolean
+}
+
+export interface BackendMethodTableColumnHint {
+  action_id: string
+  preferred_column: number
+}
+
+export interface BackendMethodTableOmission {
+  id: string
+  entity_kind: 'ingredient' | 'action'
+  referenced_id: string
+  reason: string
+  accepted: boolean
+}
+
+export interface BackendMethodTableDocument {
+  schema_version: 1
+  labels: BackendMethodTableLabel[]
+  row_order: string[]
+  column_hints: BackendMethodTableColumnHint[]
+  setup_action_ids: string[]
+  terminal_action_ids: string[]
+  omissions: BackendMethodTableOmission[]
+}
+
+export interface BackendMethodTableCoverage {
+  total_actions: number
+  represented_actions: number
+  total_included_ingredient_lineages: number
+  represented_ingredient_lineages: number
+  ingredient_use_rows: number
+  explicitly_omitted_ingredients: number
+  explicitly_omitted_actions: number
+  unplaced_ingredients: number
+  disconnected_components: number
+  low_confidence_labels: number
+  low_confidence_bindings: number
+  low_confidence_edges: number
+  blocking_warnings: number
+  non_blocking_warnings: number
+}
+
+export interface BackendMethodTableWarning {
+  code: string
+  message: string
+  blocking: boolean
+  entity_kind?: 'ingredient' | 'action' | 'binding' | 'edge' | 'table' | 'graph'
+  entity_id?: string
+}
+
+export interface BackendMethodTableIngredientUse {
+  binding_id: string
+  ingredient_lineage_id: string
+  target_action_id: string
+  name: string
+  quantity?: number
+  quantity_text?: string
+  unit?: string
+  portion_mode: 'all' | 'fraction' | 'absolute' | 'remainder' | 'unspecified'
+  portion_value?: number
+  portion_unit?: string
+  optional: boolean
+  preparation?: string
+  display: string
+}
+
+export interface BackendMethodTableView {
+  status: 'needs_review' | 'reviewed'
+  confidence?: number
+  coverage: BackendMethodTableCoverage
+  document: BackendMethodTableDocument
+  rendered_ingredient_uses: BackendMethodTableIngredientUse[]
+  warnings: BackendMethodTableWarning[]
 }
 
 export interface BackendMethodIngredient {
@@ -701,6 +786,7 @@ export interface BackendMethodView {
   source_kind: string
   source_blocks: BackendMethodSourceBlock[]
   method: BackendMethodDocument
+  table?: BackendMethodTableView
   coverage: { total_clauses: number; represented: number; omitted: number; unreviewed: number }
   confidence?: number
   household_notes?: string
@@ -730,8 +816,15 @@ export interface BackendMethodUpdate {
   method: BackendMethodDocument
   household_notes?: string
   mark_reviewed: boolean
-  source_kind?: 'custom' | 'publisher' | 'manual_paste'
+  source_kind?: 'custom' | 'publisher' | 'manual_paste' | 'table_only'
   source_blocks?: BackendMethodSourceBlock[]
+}
+
+export interface BackendMethodTableUpdate {
+  expected_version: number
+  method: BackendMethodDocument
+  table: BackendMethodTableDocument
+  mark_reviewed: boolean
 }
 
 export interface BackendFood {

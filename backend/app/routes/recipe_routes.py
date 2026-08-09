@@ -64,6 +64,7 @@ from ..services.regional_ingredients import convert_ingredient_text, equivalent_
 from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
 from ..services.recipe_plan_sync import sync_recipe_versions_to_current_plans
 from ..services.recipe_methods import clone_method_snapshot, snapshot_values
+from ..services.recipe_tables import table_snapshot_for_method
 from ..services.saved_foods import accessible_food_record
 
 router = APIRouter(tags=["recipes and food data"])
@@ -543,18 +544,19 @@ def create_recipe(
                 "text": payload.custom_instructions.strip(),
             }
         ]
-        db.add(
-            RecipeMethodSnapshot(
-                recipe_version_id=version.id,
-                **snapshot_values(
-                    blocks=blocks,
-                    ingredients=created_ingredients,
-                    source_kind="custom" if payload.source_type == "custom" else "manual_paste",
-                    extractor_version="user-authored",
-                    created_by_user_id=context.user.id,
-                ),
-            )
+        snapshot = RecipeMethodSnapshot(
+            recipe_version_id=version.id,
+            **snapshot_values(
+                blocks=blocks,
+                ingredients=created_ingredients,
+                source_kind="custom" if payload.source_type == "custom" else "manual_paste",
+                extractor_version="user-authored",
+                created_by_user_id=context.user.id,
+            ),
         )
+        db.add(snapshot)
+        db.flush()
+        db.add(table_snapshot_for_method(snapshot, created_ingredients, created_by_user_id=context.user.id))
     if payload.source_type == "custom":
         try:
             calculate_recipe(db, version.id)

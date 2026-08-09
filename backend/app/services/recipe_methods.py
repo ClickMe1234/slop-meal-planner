@@ -8,7 +8,13 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
-from ..models import FoodRecord, RecipeIngredient, RecipeMethodSnapshot, RecipeVersion
+from ..models import (
+    FoodRecord,
+    RecipeIngredient,
+    RecipeMethodSnapshot,
+    RecipeMethodTableSnapshot,
+    RecipeVersion,
+)
 from ..schemas import MethodDocument, MethodSourceBlock
 from .measurement_conversion import (
     convert_quantity_to_unit,
@@ -18,11 +24,15 @@ from .measurement_conversion import (
 from .regional_ingredients import convert_ingredient_text
 
 
-METHOD_PARSER_VERSION = "method-rules-1"
+METHOD_PARSER_VERSION = "method-rules-2"
 METHOD_SCHEMA_VERSION = 1
 
 _CLAUSE_RE = re.compile(r"[^.!?;\n]+(?:[.!?;]+|$)")
 _THEN_RE = re.compile(r"\s+then\s+", re.IGNORECASE)
+_SEPARATE_OPERATION_RE = re.compile(
+    r"\s+and\s+(?=(?:bake|boil|grill|roast|simmer|serve|transfer|pour|place)\b)",
+    re.IGNORECASE,
+)
 _ACTION_RE = re.compile(
     r"\b(add|arrange|assemble|bake|beat|blend|boil|bring|brown|brush|chill|chop|"
     r"combine|cook|cover|cut|drain|fold|fry|grill|heat|knead|layer|leave|melt|mix|"
@@ -73,6 +83,16 @@ _STOP_TERMS = {
     "to",
 }
 
+# Keep punctuation rules explicit so copied publisher text remains portable
+# across Windows and Linux locale/encoding defaults.
+_DURATION_RE = re.compile(
+    r"\b(\d+(?:\.\d+)?)(?:\s*[-\u2013\u2014]\s*(\d+(?:\.\d+)?))?\s*"
+    r"(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b",
+    re.IGNORECASE,
+)
+_TEMPERATURE_RE = re.compile(r"\b(\d{2,3})\s*(?:\u00b0|degrees?\s*)?([cf])\b", re.IGNORECASE)
+_OMIT_RE = re.compile(r"^\s*(?:tip|note|variation|optional idea)\s*[:\-\u2013\u2014]", re.IGNORECASE)
+
 
 def _value(row: object, name: str, default: Any = None) -> Any:
     return row.get(name, default) if isinstance(row, dict) else getattr(row, name, default)
@@ -103,14 +123,22 @@ def _clause_spans(text: str) -> list[tuple[int, int, str]]:
         pieces = list(_THEN_RE.finditer(raw))
         boundaries = [0, *(piece.end() for piece in pieces), len(raw)]
         for index in range(len(boundaries) - 1):
-            start = raw_start + boundaries[index]
-            end = raw_start + boundaries[index + 1]
-            while start < end and text[start].isspace():
-                start += 1
-            while end > start and text[end - 1].isspace():
-                end -= 1
-            if end > start:
-                spans.append((start, end, text[start:end]))
+            segment_start = raw_start + boundaries[index]
+            segment_end = raw_start + boundaries[index + 1]
+            segment = text[segment_start:segment_end]
+            split = _SEPARATE_OPERATION_RE.search(segment)
+            local_ranges = [(0, len(segment))]
+            if split and re.match(r"\s*(?:pour|transfer|place|tip|spread)\b", segment, re.IGNORECASE):
+                local_ranges = [(0, split.start()), (split.end(), len(segment))]
+            for local_start, local_end in local_ranges:
+                start = segment_start + local_start
+                end = segment_start + local_end
+                while start < end and text[start].isspace():
+                    start += 1
+                while end > start and text[end - 1].isspace():
+                    end -= 1
+                if end > start:
+                    spans.append((start, end, text[start:end]))
     return spans
 
 
@@ -197,6 +225,7 @@ def parse_method_document(
     edges: list[dict[str, Any]] = []
     latest_by_stage: dict[str, str] = {}
     stage_by_heading: dict[str, str] = {}
+    seen_lineages: set[str] = set()
     total = represented = omitted = unreviewed = 0
 
     def ensure_stage(title: str) -> str:
@@ -308,6 +337,7 @@ def parse_method_document(
                 "text": clause.strip(" \t\r\n.;"),
                 "source_annotation_ids": [action_annotation_id],
                 "duration_minutes": _minutes(duration_match),
+                "duration_text": duration_match.group(0).strip() if duration_match else None,
                 "temperature_value": Decimal(temperature_match.group(1)) if temperature_match else None,
                 "temperature_unit": temperature_match.group(2).casefold() if temperature_match else None,
                 "equipment": equipment,
@@ -366,12 +396,23 @@ def parse_method_document(
                     found.start(),
                     ingredient_starts,
                 )
+                additive_context = bool(
+                    re.search(
+                        r"\b(?:add|pour|fold|combine|mix|sprinkle|season|place|arrange|layer)\b|\bstir\s+(?:in|through|into)\b",
+                        clause,
+                        re.IGNORECASE,
+                    )
+                )
+                role = "input" if lineage_id not in seen_lineages or portion_mode in {"fraction", "remainder"} or additive_context else "reference"
+                if role == "input":
+                    seen_lineages.add(lineage_id)
                 bindings.append(
                     {
                         "id": f"binding-{len(bindings) + 1}",
                         "action_id": action_id,
                         "ingredient_lineage_id": lineage_id,
                         "annotation_id": annotation_id,
+                        "role": role,
                         "portion_mode": portion_mode,
                         "portion_value": portion_value,
                         "confidence": Decimal("0.9" if len(terms) else "0.55"),
@@ -456,7 +497,7 @@ def clone_method_snapshot(
     created_by_user_id: str | None,
     force_needs_review: bool = False,
 ) -> RecipeMethodSnapshot:
-    return RecipeMethodSnapshot(
+    cloned = RecipeMethodSnapshot(
         recipe_version_id=recipe_version_id,
         source_kind=previous.source_kind,
         source_text=previous.source_text,
@@ -473,6 +514,20 @@ def clone_method_snapshot(
         reviewed_by_user_id=None if force_needs_review else previous.reviewed_by_user_id,
         reviewed_at=None if force_needs_review else previous.reviewed_at,
     )
+    if previous.table_snapshot is not None:
+        cloned.table_snapshot = RecipeMethodTableSnapshot(
+            parser_version=previous.table_snapshot.parser_version,
+            status=("needs_review" if force_needs_review else previous.table_snapshot.status),
+            confidence=previous.table_snapshot.confidence,
+            coverage=dict(previous.table_snapshot.coverage or {}),
+            document=dict(previous.table_snapshot.document or {}),
+            created_by_user_id=created_by_user_id,
+            reviewed_by_user_id=(
+                None if force_needs_review else previous.table_snapshot.reviewed_by_user_id
+            ),
+            reviewed_at=None if force_needs_review else previous.table_snapshot.reviewed_at,
+        )
+    return cloned
 
 
 def _display_number(value: Decimal | None) -> str | None:
