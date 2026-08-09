@@ -16,6 +16,7 @@ import { ShoppingIngredientChangePage, ShoppingItemDetailPage } from './pages/Sh
 import { AppearanceSettings, DataSettings, HouseholdSettings, PreferenceSettings, SystemSettings, TargetSettings } from './pages/SettingsPage'
 import { WeekPage } from './pages/WeekPage'
 import { IngredientsPage } from './pages/IngredientsPage'
+import { MethodPage, MethodPreviewPage } from './pages/MethodPage'
 
 export default function App() {
   const { theme, setTheme } = useTheme()
@@ -34,11 +35,13 @@ export default function App() {
       <Route path="/plan/:planId/occurrences/:occurrenceId/recipes" element={<PlanRecipePickerPage/>}/>
       <Route path="/plan/:planId/batches/:batchId/sides/:componentSlot/recipes" element={<PlanRecipePickerPage/>}/>
       <Route path="/recipes" element={<RecipesPage/>}/>
+      <Route path="/recipes/method-preview" element={<MethodPreviewPage/>}/>
       <Route path="/ingredients" element={<IngredientsPage/>}/>
       <Route path="/recipes/new" element={<CustomRecipePage/>}/>
       <Route path="/recipes/import" element={<RecipeImportPage/>}/>
       <Route path="/imports/:jobId/review" element={<ImportReviewPage/>}/>
       <Route path="/recipes/:recipeId/review" element={<ImportReviewPage/>}/>
+      <Route path="/recipes/:recipeId/method" element={<MethodPage/>}/>
       <Route path="/pantry" element={<PantryPage/>}/>
       <Route path="/shopping" element={<ShoppingPage/>}/>
       <Route path="/shopping/:listId/items/:itemId" element={<ShoppingItemDetailPage/>}/>

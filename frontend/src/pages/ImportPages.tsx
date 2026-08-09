@@ -263,9 +263,11 @@ function IngredientFoodMatch({ term, selectedId, selectedName, onSelect }: { ter
   )
 }
 
+export const initialRecipeImportUrl = ''
+
 export function RecipeImportPage() {
   const navigate = useNavigate()
-  const [url, setUrl] = useState('https://www.bbcgoodfood.com/recipes/')
+  const [url, setUrl] = useState(initialRecipeImportUrl)
   const [stage, setStage] = useState<'idle' | 'working' | 'done'>('idle')
   const [jobId, setJobId] = useState('demo')
   const [recipe, setRecipe] = useState<BackendRecipeDetail | null>(null)
@@ -357,7 +359,7 @@ export function RecipeImportPage() {
             </div>
           </div>
           <div>
-            <p>We do not store the publisher's instructions. You will always cook from the original page.</p>
+            <p>The written method is fetched only when you open it. Slop then keeps the attributed source wording and builds a concise, editable cooking flow.</p>
             <div className="button-row">
               <Button variant="secondary" disabled={!safeExternalUrl(url)} onClick={() => openExternalUrl(url)}>
                 <ExternalLink size={17} />
@@ -375,7 +377,7 @@ export function RecipeImportPage() {
         <ShieldCheck />
         <div>
           <strong>Designed for your private household</strong>
-          <p>Imported recipes retain their source and attribution. Only the details needed for planning are stored.</p>
+          <p>Imported recipes retain their source and attribution. Cooking instructions are fetched on demand, never during search.</p>
         </div>
       </div>
     </div>
@@ -427,7 +429,7 @@ export function CustomRecipePage() {
         navigate('/recipes')
         return
       }
-      await api.createRecipe({
+      const saved = await api.createRecipe({
         title,
         yield_servings: Number(yieldServings),
         source_type: 'custom',
@@ -450,7 +452,7 @@ export function CustomRecipePage() {
         }),
       })
       await queryClient.invalidateQueries({ queryKey: ['recipes'] })
-      navigate('/recipes')
+      navigate(instructions.trim() ? `/recipes/${saved.id}/method` : '/recipes')
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'The custom recipe could not be saved.')
     } finally {

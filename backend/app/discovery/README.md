@@ -24,4 +24,6 @@ not guarantee a publisher will continue to permit or expose search.
 Recipe-page extraction prefers Schema.org `Recipe` JSON-LD, then uses a limited
 semantic HTML fallback. Imports retain quantities, ranges, optional ingredients,
 units and serving yield for recipe and shopping use, but food-record matches are
-not requested. Publisher cooking instructions are not copied.
+not requested. Search never fetches cooking instructions. A separate explicit
+method request may extract ordered Schema.org instruction blocks for an
+attributed, private recipe-version snapshot.

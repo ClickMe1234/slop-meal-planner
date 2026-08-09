@@ -133,6 +133,13 @@ const demoPantryItems: BackendPantryItem[] = [
   { id: 'demo-miso', display_name: 'White miso', initial_quantity: 1, unit: 'jar', always_have: false, use_soon: false, on_hand_quantity: 1, reserved_quantity: 0, usable_quantity: 1, initial_quantity_display: '1 jar', on_hand_quantity_display: '1 jar', reserved_quantity_display: '0 jars', usable_quantity_display: '1 jar', version: 1 },
 ]
 
+export function sortPlannerPeople<T extends { id: string; name: string }>(people: T[]): T[] {
+  return [...people].sort((left, right) =>
+    left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+    || left.id.localeCompare(right.id),
+  )
+}
+
 function localToday(): string {
   const value = new Date()
   const year = value.getFullYear()
@@ -179,7 +186,7 @@ export function PlanPage() {
     enabled: !isDemoMode,
   })
   const members = useMemo(
-    () => isDemoMode ? [demoMember] : (membersQuery.data ?? []).filter(member => member.active),
+    () => sortPlannerPeople(isDemoMode ? [demoMember] : (membersQuery.data ?? []).filter(member => member.active)),
     [membersQuery.data],
   )
 

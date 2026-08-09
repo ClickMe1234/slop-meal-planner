@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -51,7 +52,7 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0018_shopping_recipe_links (head)" in current.stdout
+    assert "0019_recipe_methods (head)" in current.stdout
     assert len("0017_quarantine_urls") <= 32
     assert "recipe_publisher_tag" in _tables(database)
 
@@ -104,6 +105,56 @@ def test_upgrade_from_0007_preserves_existing_recipe_and_marks_backfill(tmp_path
         assert recipe["version"] == 3
         assert recipe["publisher_metadata_status"] == "pending"
         assert recipe["publisher_metadata_attempts"] == 0
+
+
+def test_upgrade_from_0018_migrates_custom_instructions_to_method_snapshot(tmp_path):
+    database = tmp_path / "method-migration.db"
+    _alembic(database, "upgrade", "0018_shopping_recipe_links")
+
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO household
+                (id, name, timezone, created_at, updated_at, version)
+            VALUES
+                ('household-method', 'Method household', 'Europe/London',
+                 '2026-08-08T00:00:00+00:00', '2026-08-08T00:00:00+00:00', 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO recipe
+                (id, household_id, title, eligibility, source_type, created_at, updated_at, version)
+            VALUES
+                ('recipe-method', 'household-method', 'Family soup', 'draft', 'custom',
+                 '2026-08-08T00:00:00+00:00', '2026-08-08T00:00:00+00:00', 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO recipe_version
+                (id, recipe_id, version_number, title, yield_servings,
+                 custom_instructions, created_at)
+            VALUES
+                ('version-method', 'recipe-method', 1, 'Family soup', 4,
+                 'Simmer gently. Serve hot.', '2026-08-08T00:00:00+00:00')
+            """
+        )
+        connection.commit()
+
+    _alembic(database, "upgrade", "head")
+
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        snapshot = connection.execute(
+            "SELECT * FROM recipe_method_snapshot WHERE recipe_version_id = 'version-method'"
+        ).fetchone()
+        assert snapshot is not None
+        assert snapshot["source_kind"] == "custom"
+        assert snapshot["source_text"] == "Simmer gently. Serve hot."
+        assert json.loads(snapshot["source_blocks"])[0]["text"] == snapshot["source_text"]
+        assert json.loads(snapshot["document"])["schema_version"] == 1
+        assert json.loads(snapshot["coverage"])["unreviewed"] == 1
 
 
 def test_historical_migrations_do_not_import_live_application_models():

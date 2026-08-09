@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.2.0 - 2026-08-08
+
+- Add on-demand cooking-method extraction for saved and discovered Good Food
+  and Allrecipes recipes without fetching instructions during search.
+- Store attributed written methods and deterministic, immutable summary graphs
+  with ingredient lineage, source annotations, confidence, and coverage data.
+- Scale ingredient quantities to an entered serving count or authoritative meal
+  batch, while keeping cooked historical recipe versions unchanged.
+- Add written and summary cooking views to recipe cards and planned batches,
+  with per-user view, measurement, language, and tutorial preferences.
+- Add a touch, pointer, and keyboard-accessible method editor for tagging source
+  text, grouping ingredients and actions, arranging stages, and resolving
+  concurrent edits.
+- Include recipe methods in full and selective backups and migrate existing
+  custom instructions into reviewable method snapshots.
+
+## 1.1.2 - 2026-08-08
+
+- Select the local current day in Week view, with sensible plan-boundary and
+  sparse-date fallbacks, and route “Plan next week” to the planner.
+- Sort household people alphabetically in planning and Week views.
+- Rebuild each plan's shopping list from its requirements and pantry stock
+  without carrying checked or manual items from an older list.
+- Start recipe imports with an empty link field.
+
 ## 1.1.1 - 2026-07-26
 
 - Delete saved recipes from their edit screen while preserving existing meal

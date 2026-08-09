@@ -55,12 +55,6 @@ def build_shopping_list(
         .where(ShoppingList.household_id == household_id, ShoppingList.active.is_(True))
         .order_by(ShoppingList.updated_at.desc())
     ).all()
-    previous = previous_lists[0] if previous_lists else None
-    previous_items = []
-    if previous is not None:
-        previous_items = db.scalars(
-            select(ShoppingItem).where(ShoppingItem.shopping_list_id == previous.id)
-        ).all()
     name_overrides = household_name_overrides(db, household_id)
     for previous_list in previous_lists:
         previous_list.active = False
@@ -223,11 +217,6 @@ def build_shopping_list(
                         if ingredient.food_record_id and density is not None
                         else {}
                     ),
-                    "cross_dimension": density is not None,
-                    "profile_name": profile.canonical_name if profile is not None else None,
-                    "explicit_display_unit": bool(
-                        ingredient.shopping_measurement_overridden
-                    ),
                     "sources": [],
                     "exact": Decimal("0"),
                 },
@@ -241,10 +230,6 @@ def build_shopping_list(
             if requirement["density"] is None and density is not None:
                 requirement["density"] = density
             requirement["source_keys"].update(source_keys)
-            requirement["cross_dimension"] = bool(requirement["cross_dimension"]) or density is not None
-            requirement["explicit_display_unit"] = bool(
-                requirement["explicit_display_unit"]
-            ) or bool(ingredient.shopping_measurement_overridden)
             requirement["sources"].append(
                 {
                     "recipe_id": version.recipe_id,
@@ -365,46 +350,7 @@ def build_shopping_list(
             if remaining <= 0:
                 break
         if remaining > 0:
-            matching_prior = []
-            for item in previous_items:
-                if item.manual:
-                    continue
-                identity_match = (
-                    item.food_record_id is not None and item.food_record_id in food_ids
-                ) or bool(
-                    source_keys.intersection(
-                        item.source_name_keys
-                        or [canonical_ingredient_key(db, item.display_name)]
-                    )
-                )
-                if not identity_match and requirement["profile_name"] is not None:
-                    previous_profile = resolve_measurement_profile(item.display_name)
-                    identity_match = (
-                        previous_profile is not None
-                        and previous_profile.canonical_name == requirement["profile_name"]
-                    )
-                if identity_match:
-                    matching_prior.append(item)
-            if not bool(requirement["cross_dimension"]):
-                target_dimension = measurement_dimension(unit)
-                matching_prior = [
-                    item
-                    for item in matching_prior
-                    if (
-                        measurement_dimension(item.unit) == target_dimension
-                        if target_dimension is not None
-                        else canonical_quantity_unit(item.unit) == unit
-                    )
-                ]
-            checked = bool(matching_prior) and all(item.checked for item in matching_prior)
-            valid_display_units = available_display_units(unit, default_density)
             display_unit = str(requirement["display_unit"])
-            if not bool(requirement["explicit_display_unit"]):
-                for prior in matching_prior:
-                    prior_display = canonical_quantity_unit(prior.display_unit or prior.unit)
-                    if prior_display in valid_display_units:
-                        display_unit = prior_display
-                        break
             db.add(
                 ShoppingItem(
                     shopping_list_id=shopping_list.id,
@@ -416,30 +362,11 @@ def build_shopping_list(
                     density_g_per_ml=default_density,
                     display_unit=display_unit,
                     category="Other",
-                    checked=checked,
+                    checked=False,
                     manual=False,
                     source_name_keys=sorted(source_keys),
                     source_ingredients=list(requirement["sources"]),
                     pantry_unit_conflicts=pantry_unit_conflicts,
-                )
-            )
-    for item in previous_items:
-        if item.manual:
-            db.add(
-                ShoppingItem(
-                    shopping_list_id=shopping_list.id,
-                    food_record_id=item.food_record_id,
-                    display_name=item.display_name,
-                    exact_quantity=round_quantity(item.exact_quantity, item.unit),
-                    purchase_quantity=round_purchase(item.purchase_quantity, item.unit),
-                    unit=canonical_quantity_unit(item.unit),
-                    density_g_per_ml=item.density_g_per_ml,
-                    display_unit=item.display_unit or canonical_quantity_unit(item.unit),
-                    category=item.category,
-                    checked=item.checked,
-                    manual=True,
-                    source_name_keys=list(item.source_name_keys or []),
-                    source_ingredients=[],
                 )
             )
     db.flush()

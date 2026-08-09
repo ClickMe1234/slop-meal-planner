@@ -1,8 +1,8 @@
-import { Archive, Bell, Check, ChevronRight, Database, Download, ExternalLink, HardDrive, KeyRound, LockKeyhole, Moon, Network, RefreshCw, Server, Shield, Sun, Upload, UserRound, Users } from 'lucide-react'
+import { Archive, Bell, BookOpenText, Check, ChevronRight, Database, Download, ExternalLink, HardDrive, KeyRound, LockKeyhole, Moon, Network, RefreshCw, Ruler, Server, Shield, Sun, Upload, UserRound, Users } from 'lucide-react'
 import { FormEvent, ReactNode, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink } from 'react-router-dom'
-import { api, ApiError, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type RestoreComponent } from '../api/client'
+import { api, ApiError, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type MeasurementSystem, type MethodViewPreference, type RestoreComponent } from '../api/client'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import type { ThemeChoice } from '../types'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
@@ -510,6 +510,18 @@ export function PreferenceSettings() {
       setSaving(false)
     }
   }
+  const saveMethodPreference = async (update: { method_view_preference?: MethodViewPreference; measurement_system?: MeasurementSystem; method_tutorial_version_seen?: number }) => {
+    setSaving(true)
+    setError('')
+    try {
+      await api.updateMe(update)
+      await queryClient.invalidateQueries({ queryKey: ['session'] })
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : 'The cooking method preference could not be saved.')
+    } finally {
+      setSaving(false)
+    }
+  }
   const refresh = () =>
     queryClient.invalidateQueries({
       queryKey: ['restrictions', selectedMemberId],
@@ -578,6 +590,45 @@ export function PreferenceSettings() {
           <span>Also converts</span>
           <strong>{session.data?.ingredient_locale === 'us' ? 'aubergine → eggplant · coriander → cilantro' : 'eggplant → aubergine · cilantro → coriander'}</strong>
         </div>
+      </Card>
+      <Card className="settings-section method-preference-card">
+        <div className="settings-section-heading">
+          <span className="settings-icon"><BookOpenText /></span>
+          <div>
+            <p className="eyebrow">Cooking method</p>
+            <h3>How should recipes open?</h3>
+            <p className="muted">The week view remembers this choice. You can still switch between the concise flow and original wording on every recipe.</p>
+          </div>
+        </div>
+        <Segmented
+          value={session.data?.method_view_preference ?? 'summary'}
+          onChange={(value) => void saveMethodPreference({ method_view_preference: value })}
+          label="Default cooking method view"
+          options={[
+            { value: 'summary', label: 'Summary flow' },
+            { value: 'written', label: 'Written method' },
+          ]}
+        />
+        <div className="settings-section-heading settings-section-heading--compact">
+          <span className="settings-icon"><Ruler /></span>
+          <div>
+            <h3>Measurements</h3>
+            <p className="muted">Keep the publisher’s units or convert quantities when the method is displayed.</p>
+          </div>
+        </div>
+        <Segmented
+          value={session.data?.measurement_system ?? 'source'}
+          onChange={(value) => void saveMethodPreference({ measurement_system: value })}
+          label="Method measurement system"
+          options={[
+            { value: 'source', label: 'As written' },
+            { value: 'metric', label: 'Metric' },
+            { value: 'us', label: 'US customary' },
+          ]}
+        />
+        <Button variant="ghost" disabled={saving} onClick={() => void saveMethodPreference({ method_tutorial_version_seen: 0 })}>
+          Replay the method editor tutorial next time
+        </Button>
       </Card>
       <Card className="settings-section">
         <label>

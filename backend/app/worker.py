@@ -22,6 +22,7 @@ from .models import (
     Recipe,
     RecipeEligibility,
     RecipeIngredient,
+    RecipeMethodSnapshot,
     RecipePublisherTag,
     RecipeVersion,
     PublisherMetadataStatus,
@@ -30,6 +31,7 @@ from .models import (
 from .services.ingredient_names import ingredient_name_keys, preferred_ingredient_name
 from .services.ingredients import PARSER_VERSION, parse_ingredient
 from .services.nutrition import publisher_values
+from .services.recipe_methods import snapshot_values, source_blocks_from_extracted
 
 celery_app = Celery(
     "meal_planner",
@@ -248,6 +250,7 @@ def process_recipe_import(self, job_id: str) -> dict:
             )
             db.add(version)
             db.flush()
+            created_ingredients = []
             for position, line in enumerate(extracted.ingredient_lines):
                 parsed = parse_ingredient(line)
                 name_keys = ingredient_name_keys(db, parsed.food_phrase)
@@ -257,8 +260,7 @@ def process_recipe_import(self, job_id: str) -> dict:
                     name_keys,
                     parsed.food_phrase,
                 )
-                db.add(
-                    RecipeIngredient(
+                ingredient = RecipeIngredient(
                         recipe_version_id=version.id,
                         position=position,
                         original_text=line,
@@ -279,6 +281,22 @@ def process_recipe_import(self, job_id: str) -> dict:
                         included=not parsed.optional,
                         optional=parsed.optional,
                         needs_review=parsed.needs_review and not remembered,
+                    )
+                db.add(ingredient)
+                created_ingredients.append(ingredient)
+            db.flush()
+            blocks = source_blocks_from_extracted(extracted.instruction_blocks)
+            if blocks:
+                db.add(
+                    RecipeMethodSnapshot(
+                        recipe_version_id=version.id,
+                        **snapshot_values(
+                            blocks=blocks,
+                            ingredients=created_ingredients,
+                            source_kind="publisher",
+                            extractor_version=extracted.extraction_method,
+                            created_by_user_id=job.user_id,
+                        ),
                     )
                 )
             if publisher_values(version) is not None and version.yield_servings:

@@ -33,6 +33,30 @@ def test_serving_range_prefills_midpoint_and_flags_confirmation():
     assert any("midpoint" in reason for reason in result.review_reasons)
 
 
+def test_nested_schema_org_instructions_keep_exact_order_and_section_headings():
+    html = '''<script type="application/ld+json">{
+      "@type": "Recipe", "name": "Layered supper", "recipeYield": "4",
+      "recipeIngredient": ["2 onions", "400 g tomatoes"],
+      "recipeInstructions": [
+        {"@type": "HowToStep", "text": "Heat the oven to 200C."},
+        {"@type": "HowToSection", "name": "Make the sauce", "itemListElement": [
+          {"@type": "HowToStep", "text": "Fry the onions for 5 minutes."},
+          {"@type": "HowToStep", "text": "Add the tomatoes; simmer until thick."}
+        ]},
+        "Serve straight away."
+      ]
+    }</script>'''
+
+    result = extract_recipe(html, "https://www.bbcgoodfood.com/recipes/layered-supper")
+
+    assert [(block.heading, block.text) for block in result.instruction_blocks] == [
+        (None, "Heat the oven to 200C."),
+        ("Make the sauce", "Fry the onions for 5 minutes."),
+        ("Make the sauce", "Add the tomatoes; simmer until thick."),
+        (None, "Serve straight away."),
+    ]
+
+
 def test_semantic_fallback_is_explicit_and_incomplete():
     result = extract_recipe(
         (FIXTURES / "recipe_semantic.html").read_text(encoding="utf-8"),
