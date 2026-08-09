@@ -73,7 +73,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["recipe_version_id"], ["recipe_version.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["reviewed_by_user_id"], ["app_user.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("recipe_version_id"),
     )
     op.create_index(
         "ix_recipe_method_snapshot_recipe_version_id",
