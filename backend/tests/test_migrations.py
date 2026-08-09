@@ -52,7 +52,7 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0019_recipe_methods (head)" in current.stdout
+    assert "0020_recipe_method_flow_tables (head)" in current.stdout
     assert len("0017_quarantine_urls") <= 32
     assert "recipe_publisher_tag" in _tables(database)
 
@@ -155,6 +155,13 @@ def test_upgrade_from_0018_migrates_custom_instructions_to_method_snapshot(tmp_p
         assert json.loads(snapshot["source_blocks"])[0]["text"] == snapshot["source_text"]
         assert json.loads(snapshot["document"])["schema_version"] == 1
         assert json.loads(snapshot["coverage"])["unreviewed"] == 1
+        table_snapshot = connection.execute(
+            "SELECT * FROM recipe_method_table_snapshot WHERE recipe_method_snapshot_id = ?",
+            (snapshot["id"],),
+        ).fetchone()
+        assert table_snapshot is not None
+        assert table_snapshot["status"] == "needs_review"
+        assert json.loads(table_snapshot["document"])["schema_version"] == 1
 
 
 def test_historical_migrations_do_not_import_live_application_models():

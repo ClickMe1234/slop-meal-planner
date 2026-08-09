@@ -89,6 +89,169 @@ def test_rule_parser_builds_actions_semantics_portions_and_edges():
     assert document.edges[0].kind == "sequence"
 
 
+def test_rule_parser_marks_later_non_additive_mentions_as_references():
+    ingredients = [
+        {
+            "lineage_id": "onion-lineage",
+            "food_phrase": "onion",
+            "original_text": "1 onion",
+            "parser_name_keys": ["onion"],
+        }
+    ]
+    document, _, _ = parse_method_document(
+        [{"id": "block-1", "position": 0, "text": "Cook the onion for 4–6 minutes. Stir the onion until soft."}],
+        ingredients,
+    )
+
+    assert document.actions[0].duration_text == "4–6 minutes"
+    assert [binding.role for binding in document.ingredient_bindings] == ["input", "reference"]
+
+    split_document, _, _ = parse_method_document(
+        [{"id": "block-2", "position": 0, "text": "Pour into the prepared tin and bake at 180C for 30–35 minutes."}],
+        [],
+    )
+    assert [action.text for action in split_document.actions] == [
+        "Pour into the prepared tin",
+        "bake at 180C for 30–35 minutes",
+    ]
+    assert split_document.actions[1].duration_text == "30–35 minutes"
+
+
+def test_flow_table_save_has_independent_review_status_and_scales_uses(client, owner):
+    recipe = _custom_recipe(client, owner)
+    initial = client.get(f"/api/v1/recipes/{recipe['id']}/method?servings=8")
+    assert initial.status_code == 200, initial.text
+    method = initial.json()
+    table = method["table"]
+    assert table["status"] == "needs_review"
+    assert len(table["rendered_ingredient_uses"]) == 2
+    assert {use["quantity_text"] for use in table["rendered_ingredient_uses"]} == {"2"}
+
+    malformed_table = dict(table["document"])
+    malformed_table["row_order"] = ["missing-binding"]
+    malformed = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method/table",
+        headers=_headers(owner),
+        json={
+            "expected_version": method["recipe_version"],
+            "method": method["method"],
+            "table": malformed_table,
+            "mark_reviewed": False,
+        },
+    )
+    assert malformed.status_code == 422
+    assert malformed.json()["code"] == "TABLE_STRUCTURE_INVALID"
+
+    updated_table = table["document"]
+    updated_table["labels"][0]["text"] = "fry courgette · 5 min"
+    saved = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method/table",
+        headers=_headers(owner),
+        json={
+            "expected_version": method["recipe_version"],
+            "method": method["method"],
+            "table": updated_table,
+            "mark_reviewed": True,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    payload = saved.json()
+    assert payload["method_status"] == "needs_review"
+    assert payload["table"]["status"] == "reviewed"
+    assert payload["table"]["document"]["labels"][0]["text"] == "fry courgette · 5 min"
+
+    conflict = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method/table",
+        headers=_headers(owner),
+        json={
+            "expected_version": method["recipe_version"],
+            "method": method["method"],
+            "table": updated_table,
+            "mark_reviewed": False,
+        },
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "VERSION_CONFLICT"
+
+
+def test_custom_recipe_without_written_method_can_start_a_flow_table(client, owner):
+    response = client.post(
+        "/api/v1/recipes",
+        headers=_headers(owner),
+        json={
+            "title": "Table-only potatoes",
+            "source_type": "custom",
+            "yield_servings": 2,
+            "meal_types": ["dinner"],
+            "ingredients": [
+                {
+                    "original_text": "4 potatoes",
+                    "quantity": 4,
+                    "unit": "item",
+                    "food_phrase": "potatoes",
+                    "included": True,
+                }
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    recipe = response.json()
+    draft_response = client.get(f"/api/v1/recipes/{recipe['id']}/method")
+    assert draft_response.status_code == 200, draft_response.text
+    draft = draft_response.json()
+    assert draft["source_kind"] == "table_only"
+    assert draft["source_blocks"] == []
+    assert draft["table"]["status"] == "needs_review"
+
+    lineage_id = draft["ingredients"][0]["lineage_id"]
+    method = {
+        "schema_version": 1,
+        "annotations": [],
+        "omissions": [],
+        "stages": [{"id": "stage-1", "title": "Cook", "position": 0}],
+        "actions": [{"id": "action-1", "stage_id": "stage-1", "position": 0, "text": "Boil potatoes", "source_annotation_ids": [], "equipment": ["pan"], "confidence": 1}],
+        "ingredient_bindings": [{"id": "binding-1", "action_id": "action-1", "ingredient_lineage_id": lineage_id, "role": "input", "portion_mode": "all", "confidence": 1, "accepted": True}],
+        "edges": [],
+    }
+    table = {
+        "schema_version": 1,
+        "labels": [{"action_id": "action-1", "text": "boil potatoes", "origin": "user", "confidence": 1, "accepted": True}],
+        "row_order": ["binding-1"],
+        "column_hints": [],
+        "setup_action_ids": [],
+        "terminal_action_ids": ["action-1"],
+        "omissions": [],
+    }
+    saved = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method/table",
+        headers=_headers(owner),
+        json={"expected_version": draft["recipe_version"], "method": method, "table": table, "mark_reviewed": True},
+    )
+    assert saved.status_code == 200, saved.text
+    payload = saved.json()
+    assert payload["source_kind"] == "table_only"
+    assert payload["source_blocks"] == []
+    assert payload["table"]["status"] == "reviewed"
+    assert payload["table"]["rendered_ingredient_uses"][0]["display"] == "4 item potatoes"
+
+    written = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method",
+        headers=_headers(owner),
+        json={
+            "expected_version": payload["recipe_version"],
+            "method": payload["method"],
+            "source_kind": "table_only",
+            "source_blocks": [{"id": "written-1", "position": 0, "text": "Boil the potatoes until tender."}],
+            "mark_reviewed": False,
+        },
+    )
+    assert written.status_code == 200, written.text
+    written_payload = written.json()
+    assert written_payload["source_kind"] == "custom"
+    assert written_payload["source_blocks"][0]["text"] == "Boil the potatoes until tender."
+    assert written_payload["table"]["status"] == "reviewed"
+
+
 def test_custom_method_is_saved_scaled_localised_and_versioned(client, owner, session_factory):
     from app.models import IngredientNameEquivalent
 
@@ -174,6 +337,14 @@ def test_method_preferences_are_user_scoped_and_partially_update(client, owner):
     assert response.json()["method_view_preference"] == "written"
     assert response.json()["measurement_system"] == "metric"
     assert response.json()["method_tutorial_version_seen"] == 1
+
+    table_preference = client.patch(
+        "/api/v1/auth/me",
+        headers=_headers(owner),
+        json={"method_view_preference": "table"},
+    )
+    assert table_preference.status_code == 200, table_preference.text
+    assert table_preference.json()["method_view_preference"] == "table"
 
 
 def test_method_document_rejects_edges_to_unknown_actions():

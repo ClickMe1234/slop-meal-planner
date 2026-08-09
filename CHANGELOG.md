@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0 - 2026-08-09
+
+- Add a deterministic Flow table cooking view with scaled ingredient-use rows,
+  branch and merge connectors, compact operation labels, and prominent draft
+  uncertainty warnings.
+- Persist table projections independently from written/summary method review,
+  including migration backfill, selective restore support, and a dedicated save
+  endpoint.
+
 ## 1.2.0 - 2026-08-08
 
 - Add on-demand cooking-method extraction for saved and discovered Good Food
