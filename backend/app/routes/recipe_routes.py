@@ -27,6 +27,7 @@ from ..models import (
     RecipeEligibility,
     RecipeIngredient,
     RecipeMealType,
+    RecipeMethodSnapshot,
     RecipePublisherTag,
     RecipeVersion,
     PublisherMetadataStatus,
@@ -62,6 +63,7 @@ from ..services.integration_credentials import effective_usda_key
 from ..services.regional_ingredients import convert_ingredient_text, equivalent_terms, query_for_locale
 from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
 from ..services.recipe_plan_sync import sync_recipe_versions_to_current_plans
+from ..services.recipe_methods import clone_method_snapshot, snapshot_values
 from ..services.saved_foods import accessible_food_record
 
 router = APIRouter(tags=["recipes and food data"])
@@ -134,6 +136,8 @@ def _ingredient_values(
             db, household_id, keys, automatic_name
         )
     values = row.model_dump()
+    if not values.get("lineage_id"):
+        values.pop("lineage_id", None)
     if values["quantity"] is None and values["unit"] is None:
         values["quantity"] = parsed.quantity
         values["unit"] = parsed.unit
@@ -308,6 +312,8 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         publisher_tags=publisher_tags,
         publisher_categories=publisher_categories,
         publisher_metadata_status=recipe.publisher_metadata_status,
+        method_available=version.method_snapshot is not None,
+        method_status=version.method_snapshot.status if version.method_snapshot is not None else None,
     )
     return RecipeDetail(
         **summary.model_dump(),
@@ -522,9 +528,33 @@ def create_recipe(
     )
     db.add(version)
     db.flush()
+    created_ingredients = []
     for position, item in enumerate(ingredient_values):
-        db.add(RecipeIngredient(recipe_version_id=version.id, position=position, **item))
+        ingredient = RecipeIngredient(recipe_version_id=version.id, position=position, **item)
+        db.add(ingredient)
+        created_ingredients.append(ingredient)
     db.flush()
+    if payload.custom_instructions and payload.custom_instructions.strip():
+        blocks = [
+            {
+                "id": "block-1",
+                "position": 0,
+                "heading": None,
+                "text": payload.custom_instructions.strip(),
+            }
+        ]
+        db.add(
+            RecipeMethodSnapshot(
+                recipe_version_id=version.id,
+                **snapshot_values(
+                    blocks=blocks,
+                    ingredients=created_ingredients,
+                    source_kind="custom" if payload.source_type == "custom" else "manual_paste",
+                    extractor_version="user-authored",
+                    created_by_user_id=context.user.id,
+                ),
+            )
+        )
     if payload.source_type == "custom":
         try:
             calculate_recipe(db, version.id)
@@ -616,21 +646,38 @@ def save_recipe_review(
     )
     db.add(next_version)
     db.flush()
-    ingredient_values = [
-        _ingredient_values(
+    ingredient_values = []
+    for position, item in enumerate(payload.ingredients):
+        values = _ingredient_values(
             db,
             context.user.household_id,
             item,
             reviewed=True,
         )
-        for item in payload.ingredients
-    ]
+        if "lineage_id" not in values and position < len(previous.ingredients):
+            values["lineage_id"] = previous.ingredients[position].lineage_id
+        ingredient_values.append(values)
+    new_ingredients = []
     for position, item in enumerate(ingredient_values):
+        ingredient = RecipeIngredient(
+            recipe_version_id=next_version.id,
+            position=position,
+            **item,
+        )
         db.add(
-            RecipeIngredient(
+            ingredient
+        )
+        new_ingredients.append(ingredient)
+    db.flush()
+    if previous.method_snapshot is not None:
+        old_lineages = {item.lineage_id for item in previous.ingredients}
+        new_lineages = {item.lineage_id for item in new_ingredients}
+        db.add(
+            clone_method_snapshot(
+                previous.method_snapshot,
                 recipe_version_id=next_version.id,
-                position=position,
-                **item,
+                created_by_user_id=context.user.id,
+                force_needs_review=old_lineages != new_lineages,
             )
         )
     if payload.meal_types is not None:

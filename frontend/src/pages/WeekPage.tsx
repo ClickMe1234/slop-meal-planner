@@ -1,4 +1,4 @@
-import { Check, ChefHat, ChevronLeft, ChevronRight, Clock3, ExternalLink, PencilLine, RefreshCw, Scale } from 'lucide-react'
+import { BookOpenText, Check, ChefHat, ChevronLeft, ChevronRight, Clock3, ExternalLink, PencilLine, RefreshCw, Scale } from 'lucide-react'
 import { useMemo, useState, type CSSProperties } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
@@ -367,7 +367,10 @@ function LiveWeekPage() {
               <RecipePreview imageUrl={meal.image_url}/>
               <MealBatchInfo label={meal.component_slot > 0 ? `Side ${meal.component_slot}` : 'Batch'} servings={`${meal.batch_servings} servings`}/>
               <div className="meal-body"><div><RecipeTitle title={meal.recipe_title} sourceUrl={meal.source_url}/><p>{Number(meal.portions.find(portion => portion.member_id === memberId)?.servings ?? 0)} serving · {Math.round(nutrition.calories)} kcal</p></div><div className="meal-macros"><span>P <strong>{Math.round(nutrition.protein)}g</strong></span><span>C <strong>{Math.round(nutrition.carbs)}g</strong></span><span>F <strong>{Math.round(nutrition.fat)}g</strong></span></div></div>
-              <div className="meal-actions"><CookControl cooked={cooked} pending={pendingBatches.includes(meal.batch_id)} onClick={() => toggleCooked(meal.batch_id, cooked)}/></div>
+              <div className="meal-actions">
+                <Link className="button button--secondary" to={`/recipes/${meal.recipe_id}/method?batch=${encodeURIComponent(meal.batch_id)}`}><BookOpenText size={16}/>View method</Link>
+                <CookControl cooked={cooked} pending={pendingBatches.includes(meal.batch_id)} onClick={() => toggleCooked(meal.batch_id, cooked)}/>
+              </div>
               {cooked && <BatchWeightControl
                 servings={Number(meal.batch_servings)}
                 portions={occurrenceWeightPortions(meal, members.data, memberId, guestCountForOccurrence(detail.data.plan, meal))}

@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     remote_food_search_enabled: bool = True
     open_food_facts_enabled: bool = True
     open_food_facts_user_agent: str = (
-        "SlopMealPlanner/1.1.2 (https://github.com/ClickMe1234/slop-meal-planner)"
+        "SlopMealPlanner/1.2.0 (https://github.com/ClickMe1234/slop-meal-planner)"
     )
     open_food_facts_timeout_seconds: float = 10.0
 
