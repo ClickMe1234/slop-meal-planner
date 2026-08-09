@@ -85,6 +85,13 @@ function CookControl({ cooked, pending = false, onClick }: { cooked: boolean; pe
   </button>
 }
 
+function MealActionRail({ recipeId, batchId, cooked, pending, onCookedToggle }: { recipeId: string; batchId: string; cooked: boolean; pending?: boolean; onCookedToggle: () => void }) {
+  return <div className="meal-actions" role="group" aria-label="Recipe actions">
+    <Link className="button button--secondary" to={`/recipes/${encodeURIComponent(recipeId)}/method?batch=${encodeURIComponent(batchId)}`}><BookOpenText size={16}/>View method</Link>
+    <CookControl cooked={cooked} pending={pending} onClick={onCookedToggle}/>
+  </div>
+}
+
 export type BatchWeightPortion = {
   id?: string
   memberId: string
@@ -212,13 +219,13 @@ function DemoWeekPage() {
               <RecipePreview imageUrl={recipe?.imageUrl}/>
               <MealBatchInfo label={meal.batchLabel ? 'Batch plan' : 'Portion'} servings={meal.batchLabel ?? `${meal.portions} serving`}/>
               <div className="meal-body"><div><RecipeTitle title={meal.title} sourceUrl={recipe?.sourceUrl}/><p>{meal.portions} serving · {meal.nutrition.calories} kcal</p></div><div className="meal-macros"><span>P <strong>{meal.nutrition.protein}g</strong></span><span>C <strong>{meal.nutrition.carbs}g</strong></span><span>F <strong>{meal.nutrition.fat}g</strong></span></div></div>
-              <div className="meal-actions"><CookControl cooked={isCooked} onClick={() => {
+              <MealActionRail recipeId={recipe?.id ?? meal.id} batchId={meal.id} cooked={isCooked} onCookedToggle={() => {
                 setCooked(items => isCooked ? items.filter(id => id !== meal.id) : [...items, meal.id])
                 if (isCooked) {
                   setBatchWeights(items => { const next = { ...items }; delete next[meal.id]; return next })
                   setWeightDrafts(items => { const next = { ...items }; delete next[meal.id]; return next })
                 }
-              }}/></div>
+              }}/>
               {isCooked && <BatchWeightControl
                 servings={meal.portions}
                 portions={[{ memberId: 'demo', name: 'You', servings: meal.portions }]}
@@ -367,10 +374,7 @@ function LiveWeekPage() {
               <RecipePreview imageUrl={meal.image_url}/>
               <MealBatchInfo label={meal.component_slot > 0 ? `Side ${meal.component_slot}` : 'Batch'} servings={`${meal.batch_servings} servings`}/>
               <div className="meal-body"><div><RecipeTitle title={meal.recipe_title} sourceUrl={meal.source_url}/><p>{Number(meal.portions.find(portion => portion.member_id === memberId)?.servings ?? 0)} serving · {Math.round(nutrition.calories)} kcal</p></div><div className="meal-macros"><span>P <strong>{Math.round(nutrition.protein)}g</strong></span><span>C <strong>{Math.round(nutrition.carbs)}g</strong></span><span>F <strong>{Math.round(nutrition.fat)}g</strong></span></div></div>
-              <div className="meal-actions">
-                <Link className="button button--secondary" to={`/recipes/${meal.recipe_id}/method?batch=${encodeURIComponent(meal.batch_id)}`}><BookOpenText size={16}/>View method</Link>
-                <CookControl cooked={cooked} pending={pendingBatches.includes(meal.batch_id)} onClick={() => toggleCooked(meal.batch_id, cooked)}/>
-              </div>
+              <MealActionRail recipeId={meal.recipe_id} batchId={meal.batch_id} cooked={cooked} pending={pendingBatches.includes(meal.batch_id)} onCookedToggle={() => void toggleCooked(meal.batch_id, cooked)}/>
               {cooked && <BatchWeightControl
                 servings={Number(meal.batch_servings)}
                 portions={occurrenceWeightPortions(meal, members.data, memberId, guestCountForOccurrence(detail.data.plan, meal))}

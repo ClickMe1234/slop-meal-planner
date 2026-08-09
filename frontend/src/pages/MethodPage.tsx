@@ -81,6 +81,23 @@ const semanticTools: Array<{ kind: MethodSemanticKind; label: string; icon: type
 ]
 
 const localId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`
+const REVIEW_CONFIDENCE_THRESHOLD = .65
+
+function isUnreviewedClause(annotation: BackendMethodAnnotation) {
+  return annotation.kind === 'action' && Number(annotation.confidence) < REVIEW_CONFIDENCE_THRESHOLD && !annotation.accepted
+}
+
+function unreviewedClauses(sourceBlocks: BackendMethodSourceBlock[], annotations: BackendMethodAnnotation[]) {
+  const blocks = new Map(sourceBlocks.map(block => [block.id, block]))
+  return annotations
+    .filter(isUnreviewedClause)
+    .map(annotation => {
+      const block = blocks.get(annotation.block_id)
+      const text = block?.text.slice(annotation.start, annotation.end).trim() ?? ''
+      return { annotation, text }
+    })
+    .filter(item => item.text)
+}
 
 function annotatedSource(block: BackendMethodSourceBlock, annotations: BackendMethodAnnotation[]) {
   const ordered = annotations
@@ -95,9 +112,19 @@ function annotatedSource(block: BackendMethodSourceBlock, annotations: BackendMe
     cursor = annotation.end
   }
   if (cursor < block.text.length) parts.push({ text: block.text.slice(cursor) })
-  return parts.map((part, index) => part.annotation
-    ? <mark key={`${part.annotation.id}-${index}`} className={`semantic-mark semantic-mark--${part.annotation.kind}${part.annotation.accepted ? ' accepted' : ''}`} title={`${part.annotation.kind}${part.annotation.confidence < .65 ? ' · check this suggestion' : ''}`}>{part.text}</mark>
-    : <span key={`text-${index}`}>{part.text}</span>)
+  return parts.map((part, index) => {
+    if (!part.annotation) return <span key={`text-${index}`}>{part.text}</span>
+    const unreviewed = isUnreviewedClause(part.annotation)
+    return <mark
+      key={`${part.annotation.id}-${index}`}
+      id={unreviewed ? `unreviewed-clause-${part.annotation.id}` : undefined}
+      data-unreviewed-clause={unreviewed ? 'true' : undefined}
+      tabIndex={unreviewed ? -1 : undefined}
+      className={`semantic-mark semantic-mark--${part.annotation.kind}${part.annotation.accepted ? ' accepted' : ''}${unreviewed ? ' semantic-mark--unreviewed' : ''}`}
+      title={unreviewed ? 'Unaccounted source clause' : `${part.annotation.kind}${part.annotation.confidence < REVIEW_CONFIDENCE_THRESHOLD ? ' · check this suggestion' : ''}`}
+      aria-label={unreviewed ? `Unaccounted source clause: ${part.text}` : undefined}
+    >{part.text}</mark>
+  })
 }
 
 function manualDocument(text: string): { blocks: BackendMethodSourceBlock[]; method: BackendMethodDocument } {
@@ -168,6 +195,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const [sourceBlocks, setSourceBlocks] = useState<BackendMethodSourceBlock[]>([])
   const [notes, setNotes] = useState('')
   const [editing, setEditing] = useState(false)
+  const [savePending, setSavePending] = useState<'draft' | 'review' | null>(null)
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -247,7 +275,8 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   })
 
   const saveMethod = async (markReviewed = false) => {
-    if (!recipeId || !method || !data?.recipe_version) return
+    if (!recipeId || preview || !method || !data?.recipe_version || savePending || (markReviewed && data.method_status !== 'needs_review')) return
+    setSavePending(markReviewed ? 'review' : 'draft')
     setError(''); setMessage('')
     try {
       const result = await api.saveRecipeMethod(recipeId, {
@@ -269,6 +298,8 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
       if (reason instanceof ApiError && reason.status === 409) {
         try { setConflictLatest(await api.getRecipeMethod(recipeId, { batchId })) } catch { setError(reason.message) }
       } else setError(reason instanceof Error ? reason.message : 'The method could not be saved.')
+    } finally {
+      setSavePending(null)
     }
   }
 
@@ -438,6 +469,8 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const stages = [...method.stages].sort((a, b) => a.position - b.position)
   const unreviewed = Number(data.coverage.unreviewed ?? 0)
   const lowConfidence = method.annotations.filter(item => item.confidence < .65 && !item.accepted).length + method.ingredient_bindings.filter(item => item.confidence < .65 && !item.accepted).length
+  const unresolvedClauses = unreviewedClauses(sourceBlocks, method.annotations)
+  const reviewBlocked = unreviewed > 0 || lowConfidence > 0
   return <div className="page page--wide method-page">
     <PageHeader
       eyebrow={data.batch_context ? `Batch method · ${data.batch_context.servings} servings` : preview ? 'Method preview' : 'Cooking method'}
@@ -447,11 +480,13 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         <Link className="button button--ghost" to={batchId ? '/week' : '/recipes'}><ArrowLeft size={17}/>Back</Link>
         {safeExternalUrl(data.source_url) && <a className="button button--secondary" href={safeExternalUrl(data.source_url) ?? undefined} target="_blank" rel="noreferrer">Source <ExternalLink size={16}/></a>}
         {!preview && data.source_kind === 'publisher' && <Button variant="secondary" disabled={refreshPreview.isPending} onClick={() => refreshPreview.mutate()}><RefreshCw className={refreshPreview.isPending ? 'spin' : ''} size={16}/>{refreshPreview.isPending ? 'Checking…' : 'Check source'}</Button>}
+        {!preview && data.method_status === 'needs_review' && <Button type="button" disabled={reviewBlocked || savePending !== null || Boolean(conflictLatest)} title={reviewBlocked ? 'Resolve the review blockers before marking this method as reviewed.' : undefined} onClick={() => void saveMethod(true)} aria-label="Mark as reviewed"><Check size={16}/>{savePending === 'review' ? 'Saving…' : 'Mark as reviewed'}</Button>}
         {!preview && <Button variant="secondary" onClick={() => setEditing(value => !value)}><PencilLine size={16}/>{editing ? 'Close editor' : 'Edit method'}</Button>}
       </>}
     />
     {error && <Notice tone="warning" title="Method update failed">{error}</Notice>}
     {message && <Notice tone="success" title="Saved">{message}</Notice>}
+    <div className="method-status" aria-live="polite"><Badge tone={data.method_status === 'reviewed' ? 'green' : 'warning'}>{data.method_status === 'reviewed' ? 'Reviewed' : 'Needs review'}</Badge></div>
     {data.method_status === 'needs_review' && <Notice tone="warning" title="Automatically generated draft">Use it now, or review {unreviewed ? `${unreviewed} unaccounted clause${unreviewed === 1 ? '' : 's'}` : 'the highlighted suggestions'} before marking it reviewed.</Notice>}
     {data.batch_context && <Card className="method-batch-banner"><Flame/><div><strong>Cook the whole batch: {data.batch_context.servings} servings</strong><span>{data.batch_context.occurrences.map(item => `${item.date} ${item.meal_type}`).join(' · ')}</span></div></Card>}
     <div className="method-toolbar">
@@ -472,6 +507,14 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         </aside>
         <section className="method-source-editor">
           <div className="method-section-heading"><div><span className="eyebrow">1 · Mark up the source</span><h2>Original written method</h2></div><Badge>{data.source_kind === 'publisher' ? 'Read-only source' : 'Editable source'}</Badge></div>
+          {unreviewed > 0 && <div className="method-unreviewed" role="region" aria-labelledby="method-unreviewed-title">
+            <div className="method-unreviewed__heading"><strong id="method-unreviewed-title">{unreviewed} unaccounted clause{unreviewed === 1 ? '' : 's'}</strong><span>Review the exact highlighted wording before saving this method.</span></div>
+            {unresolvedClauses.length > 0 && <ol>{unresolvedClauses.map(({ annotation, text }, index) => <li key={annotation.id}><button type="button" onClick={() => {
+              const target = document.getElementById(`unreviewed-clause-${annotation.id}`)
+              target?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+              target?.focus({ preventScroll: true })
+            }} aria-label={`Locate unaccounted clause ${index + 1}: ${text}`}><span aria-hidden="true">{index + 1}</span><strong>{text}</strong><Link2 size={14} aria-hidden="true"/></button></li>)}</ol>}
+          </div>}
           {sourceBlocks.map((block, index) => <article className="method-source-block" key={block.id}>
             {block.heading && <h3>{block.heading}</h3>}
             {data.source_kind === 'publisher' ? <p ref={node => { sourceRefs.current[block.id] = node }} onPointerUp={() => captureSelection(block)}>{annotatedSource(block, method.annotations)}</p> : <textarea value={block.text} rows={5} onChange={event => { const text = event.target.value; setSourceBlocks(items => items.map((item, itemIndex) => itemIndex === index ? { ...item, text } : item)); setDirty(true) }}/>}
@@ -484,7 +527,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
           <div className="method-ingredient-palette">{data.ingredients.map(ingredient => <DraggableIngredient key={ingredient.lineage_id} ingredient={ingredient} selected={selectedIngredients.has(ingredient.lineage_id)} onSelect={() => setSelectedIngredients(current => { const next = new Set(current); next.has(ingredient.lineage_id) ? next.delete(ingredient.lineage_id) : next.add(ingredient.lineage_id); return next })}/>)}</div>
           <div className="method-stage-list">{stages.map(stage => <DroppableStage key={stage.id} stage={stage} actions={method.actions.filter(action => action.stage_id === stage.id).sort((a,b) => a.position-b.position)} method={method} ingredients={data.ingredients} selectedActions={selectedActions} setSelectedActions={setSelectedActions} updateDocument={updateDocument} breakingAction={breakingAction} breakingStrength={breakingStrength} justGrouped={justGrouped}/>)}</div>
         </section>
-        <section className="method-editor-save"><label>Household notes<textarea rows={3} value={notes} onChange={event => { setNotes(event.target.value); setDirty(true) }} placeholder="Add adaptations or reminders without changing the publisher wording."/></label><div><Button variant="secondary" onClick={() => void saveMethod(false)}><Save size={16}/>Save draft</Button><Button disabled={unreviewed > 0 || lowConfidence > 0} onClick={() => void saveMethod(true)}><Check size={16}/>Mark reviewed</Button></div></section>
+        <section className="method-editor-save"><label>Household notes<textarea rows={3} value={notes} onChange={event => { setNotes(event.target.value); setDirty(true) }} placeholder="Add adaptations or reminders without changing the publisher wording."/></label><div><Button type="button" variant="secondary" disabled={savePending !== null} onClick={() => void saveMethod(false)}><Save size={16}/>{savePending === 'draft' ? 'Saving…' : 'Save draft'}</Button><Button type="button" disabled={reviewBlocked || savePending !== null || Boolean(conflictLatest)} onClick={() => void saveMethod(true)}><Check size={16}/>{savePending === 'review' ? 'Saving…' : 'Mark as reviewed'}</Button></div></section>
       </div>
       <DragOverlay>{activeDrag && <div className={`method-drag-overlay method-drag-overlay--${activeDrag.type}`}><GripVertical size={15}/>{activeDrag.label}</div>}</DragOverlay>
     </DndContext> : view === 'summary' ? <MethodSummary data={data}/> : <WrittenMethod data={data}/>}
