@@ -50,6 +50,25 @@ describe('API CSRF recovery', () => {
   })
 })
 
+describe('login persistence', () => {
+  it('sends the keep-signed-in choice to the server', async () => {
+    sessionStorage.setItem('slop-csrf', 'pre-login-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({
+      user: { id: 'user-1', username: 'owner', must_change_password: false },
+      csrf_token: 'csrf-token',
+    }))
+    const { api } = await import('./client')
+
+    await api.login('owner', 'password', false)
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      username: 'owner',
+      password: 'password',
+      remember_me: false,
+    })
+  })
+})
+
 describe('saved food library', () => {
   it('loads every page so client-side ingredient searching uses the whole household library', async () => {
     const first = { id: 'food-1', display_name: 'Greek yoghurt' }
