@@ -373,7 +373,6 @@ class MethodAction(APIModel):
     text: str = Field(min_length=1, max_length=500)
     source_annotation_ids: list[str] = Field(default_factory=list, max_length=100)
     duration_minutes: Decimal | None = Field(default=None, ge=0, le=100_000)
-    duration_text: str | None = Field(default=None, max_length=100)
     temperature_value: Decimal | None = Field(default=None, ge=-273, le=2000)
     temperature_unit: Literal["c", "f"] | None = None
     equipment: list[str] = Field(default_factory=list, max_length=30)
@@ -386,7 +385,6 @@ class MethodIngredientBinding(APIModel):
     action_id: str = Field(min_length=1, max_length=80)
     ingredient_lineage_id: str
     annotation_id: str | None = None
-    role: Literal["input", "reference"] = "input"
     portion_mode: Literal["all", "fraction", "absolute", "remainder", "unspecified"] = "unspecified"
     portion_value: Decimal | None = Field(default=None, ge=0)
     portion_unit: str | None = Field(default=None, max_length=40)
@@ -408,7 +406,6 @@ class MethodEdge(APIModel):
     to_action_id: str = Field(min_length=1, max_length=80)
     kind: Literal["sequence", "merge"] = "sequence"
     confidence: Decimal = Field(default=Decimal("1"), ge=0, le=1)
-    accepted: bool = False
 
 
 class MethodDocument(APIModel):
@@ -451,103 +448,6 @@ class MethodDocument(APIModel):
         return self
 
 
-class MethodTableLabel(APIModel):
-    action_id: str = Field(min_length=1, max_length=80)
-    text: str = Field(min_length=1, max_length=120)
-    origin: Literal["automatic", "user"] = "automatic"
-    confidence: Decimal = Field(default=Decimal("1"), ge=0, le=1)
-    accepted: bool = False
-
-
-class MethodTableColumnHint(APIModel):
-    action_id: str = Field(min_length=1, max_length=80)
-    preferred_column: int = Field(ge=0, le=10_000)
-
-
-class MethodTableOmission(APIModel):
-    id: str = Field(min_length=1, max_length=80)
-    entity_kind: Literal["ingredient", "action"]
-    referenced_id: str = Field(min_length=1, max_length=80)
-    reason: str = Field(min_length=1, max_length=300)
-    accepted: bool = False
-
-
-class MethodTableDocument(APIModel):
-    schema_version: Literal[1] = 1
-    labels: list[MethodTableLabel] = Field(default_factory=list, max_length=2000)
-    row_order: list[BoundedIdentifier] = Field(default_factory=list, max_length=5000)
-    column_hints: list[MethodTableColumnHint] = Field(default_factory=list, max_length=2000)
-    setup_action_ids: list[BoundedIdentifier] = Field(default_factory=list, max_length=2000)
-    terminal_action_ids: list[BoundedIdentifier] = Field(default_factory=list, max_length=2000)
-    omissions: list[MethodTableOmission] = Field(default_factory=list, max_length=2000)
-
-    @model_validator(mode="after")
-    def validate_ids(self):
-        collections = {
-            "table label": [item.action_id for item in self.labels],
-            "column hint": [item.action_id for item in self.column_hints],
-            "setup action": list(self.setup_action_ids),
-            "terminal action": list(self.terminal_action_ids),
-            "table omission": [item.id for item in self.omissions],
-        }
-        for label, identifiers in collections.items():
-            if len(identifiers) != len(set(identifiers)):
-                raise ValueError(f"{label} identifiers must be unique")
-        if len(self.row_order) != len(set(self.row_order)):
-            raise ValueError("table row_order identifiers must be unique")
-        return self
-
-
-class MethodTableCoverage(APIModel):
-    total_actions: int = Field(default=0, ge=0)
-    represented_actions: int = Field(default=0, ge=0)
-    total_included_ingredient_lineages: int = Field(default=0, ge=0)
-    represented_ingredient_lineages: int = Field(default=0, ge=0)
-    ingredient_use_rows: int = Field(default=0, ge=0)
-    explicitly_omitted_ingredients: int = Field(default=0, ge=0)
-    explicitly_omitted_actions: int = Field(default=0, ge=0)
-    unplaced_ingredients: int = Field(default=0, ge=0)
-    disconnected_components: int = Field(default=0, ge=0)
-    low_confidence_labels: int = Field(default=0, ge=0)
-    low_confidence_bindings: int = Field(default=0, ge=0)
-    low_confidence_edges: int = Field(default=0, ge=0)
-    blocking_warnings: int = Field(default=0, ge=0)
-    non_blocking_warnings: int = Field(default=0, ge=0)
-
-
-class MethodTableWarning(APIModel):
-    code: str = Field(min_length=1, max_length=80)
-    message: str = Field(min_length=1, max_length=500)
-    blocking: bool = False
-    entity_kind: Literal["ingredient", "action", "binding", "edge", "table", "graph"] | None = None
-    entity_id: str | None = None
-
-
-class MethodTableIngredientUse(APIModel):
-    binding_id: str
-    ingredient_lineage_id: str
-    target_action_id: str
-    name: str
-    quantity: Decimal | None = None
-    quantity_text: str | None = None
-    unit: str | None = None
-    portion_mode: Literal["all", "fraction", "absolute", "remainder", "unspecified"]
-    portion_value: Decimal | None = None
-    portion_unit: str | None = None
-    optional: bool = False
-    preparation: str | None = None
-    display: str
-
-
-class MethodTableViewOut(APIModel):
-    status: Literal["needs_review", "reviewed"]
-    confidence: Decimal | None = None
-    coverage: MethodTableCoverage
-    document: MethodTableDocument
-    rendered_ingredient_uses: list[MethodTableIngredientUse] = Field(default_factory=list)
-    warnings: list[MethodTableWarning] = Field(default_factory=list)
-
-
 class MethodPreviewCreate(APIModel):
     url: str = Field(min_length=1, max_length=4096)
 
@@ -572,14 +472,8 @@ class MethodUpdate(VersionedUpdate):
     method: MethodDocument
     household_notes: str | None = Field(default=None, max_length=20_000)
     mark_reviewed: bool = False
-    source_kind: Literal["custom", "publisher", "manual_paste", "table_only"] | None = None
+    source_kind: Literal["custom", "publisher", "manual_paste"] | None = None
     source_blocks: list[MethodSourceBlock] | None = Field(default=None, min_length=1, max_length=1000)
-
-
-class MethodTableUpdate(VersionedUpdate):
-    method: MethodDocument
-    table: MethodTableDocument
-    mark_reviewed: bool = False
 
 
 class MethodRefreshApply(VersionedUpdate):
@@ -599,7 +493,6 @@ class MethodViewOut(APIModel):
     source_kind: str
     source_blocks: list[MethodSourceBlock]
     method: MethodDocument
-    table: MethodTableViewOut | None = None
     coverage: dict[str, int]
     confidence: Decimal | None = None
     household_notes: str | None = None

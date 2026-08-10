@@ -44,7 +44,6 @@ class IngredientLocale(str, enum.Enum):
 
 class MethodViewPreference(str, enum.Enum):
     SUMMARY = "summary"
-    TABLE = "table"
     WRITTEN = "written"
 
 
@@ -371,34 +370,6 @@ class RecipeMethodSnapshot(IdMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     recipe_version: Mapped[RecipeVersion] = relationship(back_populates="method_snapshot")
-    table_snapshot: Mapped[RecipeMethodTableSnapshot | None] = relationship(
-        back_populates="method_snapshot", cascade="all, delete-orphan", uselist=False
-    )
-
-
-class RecipeMethodTableSnapshot(IdMixin, Base):
-    __tablename__ = "recipe_method_table_snapshot"
-
-    recipe_method_snapshot_id: Mapped[str] = mapped_column(
-        ForeignKey("recipe_method_snapshot.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
-    )
-    parser_version: Mapped[str] = mapped_column(String(80), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(30), default=RecipeMethodStatus.NEEDS_REVIEW.value, nullable=False, index=True
-    )
-    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
-    coverage: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    document: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    created_by_user_id: Mapped[str | None] = mapped_column(
-        ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True
-    )
-    reviewed_by_user_id: Mapped[str | None] = mapped_column(
-        ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True
-    )
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-    method_snapshot: Mapped[RecipeMethodSnapshot] = relationship(back_populates="table_snapshot")
 
 
 class FoodRecord(IdMixin, AuditMixin, Base):
