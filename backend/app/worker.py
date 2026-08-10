@@ -32,7 +32,6 @@ from .services.ingredient_names import ingredient_name_keys, preferred_ingredien
 from .services.ingredients import PARSER_VERSION, parse_ingredient
 from .services.nutrition import publisher_values
 from .services.recipe_methods import snapshot_values, source_blocks_from_extracted
-from .services.recipe_tables import table_snapshot_for_method
 
 celery_app = Celery(
     "meal_planner",
@@ -288,19 +287,18 @@ def process_recipe_import(self, job_id: str) -> dict:
             db.flush()
             blocks = source_blocks_from_extracted(extracted.instruction_blocks)
             if blocks:
-                snapshot = RecipeMethodSnapshot(
-                    recipe_version_id=version.id,
-                    **snapshot_values(
-                        blocks=blocks,
-                        ingredients=created_ingredients,
-                        source_kind="publisher",
-                        extractor_version=extracted.extraction_method,
-                        created_by_user_id=job.user_id,
-                    ),
+                db.add(
+                    RecipeMethodSnapshot(
+                        recipe_version_id=version.id,
+                        **snapshot_values(
+                            blocks=blocks,
+                            ingredients=created_ingredients,
+                            source_kind="publisher",
+                            extractor_version=extracted.extraction_method,
+                            created_by_user_id=job.user_id,
+                        ),
+                    )
                 )
-                db.add(snapshot)
-                db.flush()
-                db.add(table_snapshot_for_method(snapshot, created_ingredients, created_by_user_id=job.user_id))
             if publisher_values(version) is not None and version.yield_servings:
                 recipe.eligibility = RecipeEligibility.PLANNER_READY.value
             else:

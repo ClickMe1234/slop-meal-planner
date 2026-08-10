@@ -27,7 +27,6 @@ from ..models import (
     RecipeIngredient,
     RecipeMealType,
     RecipeMethodSnapshot,
-    RecipeMethodTableSnapshot,
     RecipeVersion,
     new_id,
 )
@@ -38,8 +37,6 @@ from ..schemas import (
     MethodPreviewSave,
     MethodRefreshApply,
     MethodSourceBlock,
-    MethodTableDocument,
-    MethodTableUpdate,
     MethodUpdate,
     MethodViewOut,
 )
@@ -55,12 +52,6 @@ from ..services.recipe_methods import (
     source_blocks_from_extracted,
     source_text_from_blocks,
     validate_method_for_review,
-)
-from ..services.recipe_tables import (
-    table_snapshot_for_method,
-    table_view_for_snapshot,
-    validate_table_structure,
-    validate_table_for_review,
 )
 from ..services.recipe_plan_sync import sync_recipe_versions_to_current_plans
 from .discovery_routes import _live_service
@@ -196,15 +187,6 @@ def _preview_view(preview: _MethodPreview, context: AuthContext, db: Session) ->
         source_kind=preview.snapshot.source_kind,
         source_blocks=preview.snapshot.source_blocks,
         method=preview.snapshot.document,
-        table=table_view_for_snapshot(
-            db,
-            version,
-            preview.snapshot,
-            None,
-            ingredients,
-            requested_servings=requested,
-            measurement_system=context.user.measurement_system,
-        ),
         coverage=preview.snapshot.coverage,
         confidence=preview.snapshot.confidence,
         ingredients=ingredients,
@@ -339,27 +321,6 @@ def _validate_bindings(document: MethodDocument, ingredients: list[RecipeIngredi
         )
 
 
-def _add_table_snapshot(
-    db: Session,
-    snapshot: RecipeMethodSnapshot,
-    ingredients: list[RecipeIngredient],
-    user_id: str | None,
-    *,
-    existing: MethodTableDocument | dict[str, Any] | None = None,
-    status: str = "needs_review",
-) -> RecipeMethodTableSnapshot:
-    db.flush()
-    table_snapshot = table_snapshot_for_method(
-        snapshot,
-        ingredients,
-        created_by_user_id=user_id,
-        existing=existing,
-        status=status,
-    )
-    db.add(table_snapshot)
-    return table_snapshot
-
-
 def _method_view(
     db: Session,
     recipe: Recipe,
@@ -390,15 +351,6 @@ def _method_view(
         source_kind=snapshot.source_kind,
         source_blocks=snapshot.source_blocks,
         method=snapshot.document,
-        table=table_view_for_snapshot(
-            db,
-            version,
-            snapshot,
-            snapshot.table_snapshot,
-            ingredients,
-            requested_servings=requested_servings,
-            measurement_system=context.user.measurement_system,
-        ),
         coverage=snapshot.coverage,
         confidence=snapshot.confidence,
         household_notes=snapshot.household_notes,
@@ -500,18 +452,18 @@ def save_method_preview(
         db.add(ingredient)
         saved_ingredients.append(ingredient)
     db.flush()
-    snapshot = RecipeMethodSnapshot(
-        recipe_version_id=version.id,
-        **snapshot_values(
-            blocks=preview.blocks,
-            ingredients=saved_ingredients,
-            source_kind="publisher",
-            extractor_version=preview.extracted.extraction_method,
-            created_by_user_id=context.user.id,
-        ),
+    db.add(
+        RecipeMethodSnapshot(
+            recipe_version_id=version.id,
+            **snapshot_values(
+                blocks=preview.blocks,
+                ingredients=saved_ingredients,
+                source_kind="publisher",
+                extractor_version=preview.extracted.extraction_method,
+                created_by_user_id=context.user.id,
+            ),
+        )
     )
-    db.add(snapshot)
-    _add_table_snapshot(db, snapshot, saved_ingredients, context.user.id)
     if publisher_values(version) is not None and version.yield_servings:
         recipe.eligibility = RecipeEligibility.PLANNER_READY.value
     db.commit()
@@ -577,38 +529,6 @@ def get_recipe_method(
                     }
                 ],
             )
-        if recipe.source_type == "custom":
-            snapshot = RecipeMethodSnapshot(
-                id="table-only-preview",
-                recipe_version_id=version.id,
-                source_kind="table_only",
-                source_text="",
-                source_blocks=[],
-                source_checksum=hashlib.sha256(b"").hexdigest(),
-                extractor_version="user-authored",
-                parser_version=METHOD_PARSER_VERSION,
-                status="needs_review",
-                confidence=Decimal("1"),
-                coverage={"total_clauses": 0, "represented": 0, "omitted": 0, "unreviewed": 0},
-                document=MethodDocument(
-                    schema_version=1,
-                    annotations=[],
-                    omissions=[],
-                    stages=[{"id": "stage-1", "title": "Method", "position": 0}],
-                    actions=[],
-                    ingredient_bindings=[],
-                    edges=[],
-                ).model_dump(mode="json"),
-            )
-            return _method_view(
-                db,
-                recipe,
-                version,
-                snapshot,
-                context,
-                requested_servings=requested,
-                batch_context=batch_context,
-            )
         raise DomainError(
             "METHOD_NOT_AVAILABLE",
             "This recipe has no saved method yet.",
@@ -673,7 +593,6 @@ async def extract_saved_recipe_method(
         ),
     )
     db.add(snapshot)
-    _add_table_snapshot(db, snapshot, ingredients, context.user.id)
     locked.version += 1
     sync_recipe_versions_to_current_plans(
         db, context.user.household_id, {previous.id: next_version.id}
@@ -734,8 +653,6 @@ def update_recipe_method(
         if not blocks:
             raise DomainError("METHOD_SOURCE_REQUIRED", "Write or paste method text first.", 422)
         source_kind = payload.source_kind or (old_snapshot.source_kind if old_snapshot else "custom")
-        if source_kind == "table_only":
-            source_kind = "custom"
         extractor_version = "user-authored"
     source_text = source_text_from_blocks(blocks)
     _, parsed_coverage, confidence = parse_method_document(blocks, ingredients)
@@ -750,26 +667,6 @@ def update_recipe_method(
             validate_method_for_review(payload.method, coverage)
         except ValueError as exc:
             raise DomainError("METHOD_REVIEW_INCOMPLETE", str(exc), 422) from exc
-    previous_document = (
-        MethodDocument.model_validate(old_snapshot.document)
-        if old_snapshot is not None
-        else None
-    )
-    semantic_changed = previous_document is None or any(
-        getattr(previous_document, key) != getattr(payload.method, key)
-        for key in ("stages", "actions", "ingredient_bindings", "edges")
-    )
-    previous_table = old_snapshot.table_snapshot if old_snapshot is not None else None
-    preserved_table = previous_table.document if previous_table is not None else None
-    if semantic_changed and previous_table is not None:
-        previous_table_document = MethodTableDocument.model_validate(previous_table.document)
-        preserved_table = previous_table_document.model_copy(
-            update={
-                "labels": [
-                    label for label in previous_table_document.labels if label.origin == "user"
-                ]
-            }
-        )
     now = datetime.now(timezone.utc)
     snapshot = RecipeMethodSnapshot(
         recipe_version_id=next_version.id,
@@ -789,125 +686,6 @@ def update_recipe_method(
         reviewed_at=now if payload.mark_reviewed else None,
     )
     db.add(snapshot)
-    table_snapshot = _add_table_snapshot(
-        db,
-        snapshot,
-        ingredients,
-        context.user.id,
-        existing=preserved_table,
-        status=(previous_table.status if previous_table is not None and not semantic_changed else "needs_review"),
-    )
-    if previous_table is not None and not semantic_changed:
-        table_snapshot.confidence = previous_table.confidence
-        table_snapshot.coverage = dict(previous_table.coverage or {})
-        table_snapshot.reviewed_by_user_id = previous_table.reviewed_by_user_id
-        table_snapshot.reviewed_at = previous_table.reviewed_at
-    if semantic_changed:
-        snapshot.status = "needs_review" if not payload.mark_reviewed else snapshot.status
-    recipe.version += 1
-    sync_recipe_versions_to_current_plans(
-        db, context.user.household_id, {previous.id: next_version.id}
-    )
-    db.commit()
-    return _method_view(
-        db,
-        recipe,
-        next_version,
-        snapshot,
-        context,
-        requested_servings=next_version.yield_servings,
-    )
-
-
-@router.put("/recipes/{recipe_id}/method/table", response_model=MethodViewOut)
-def update_recipe_method_table(
-    recipe_id: str,
-    payload: MethodTableUpdate,
-    context: AuthContext = Depends(require_csrf),
-    db: Session = Depends(get_db),
-):
-    """Save the Flow table projection without conflating its review status."""
-
-    recipe = db.scalar(select(Recipe).where(Recipe.id == recipe_id).with_for_update())
-    if recipe is None or recipe.household_id != context.user.household_id or recipe.archived_at is not None:
-        raise NotFoundError("Recipe")
-    if recipe.version != payload.expected_version:
-        raise DomainError(
-            "VERSION_CONFLICT",
-            "This recipe changed while the Flow table was open. Your draft has been kept for comparison.",
-            409,
-            actions=[{"kind": "compare_method", "label": "Compare with latest"}],
-        )
-    previous = _latest_version(db, recipe.id)
-    if previous is None:
-        raise DomainError("CORRUPT_RECIPE", "The recipe has no version.", 500)
-    _validate_bindings(payload.method, previous.ingredients)
-    try:
-        validate_table_structure(payload.method, payload.table, previous.ingredients)
-        if payload.mark_reviewed:
-            validate_table_for_review(payload.method, payload.table, previous.ingredients)
-    except ValueError as exc:
-        raise DomainError(
-            "TABLE_STRUCTURE_INVALID" if not payload.mark_reviewed else "TABLE_REVIEW_INCOMPLETE",
-            str(exc),
-            422,
-        ) from exc
-
-    next_version, ingredients = _clone_version(db, previous)
-    previous_document = MethodDocument.model_validate(previous.method_snapshot.document) if previous.method_snapshot else None
-    semantic_changed = previous_document is None or any(
-        getattr(previous_document, key) != getattr(payload.method, key)
-        for key in ("stages", "actions", "ingredient_bindings", "edges")
-    )
-    old_snapshot = previous.method_snapshot
-    if old_snapshot is None:
-        source_kind = "table_only"
-        source_text = ""
-        source_blocks: list[dict[str, Any]] = []
-        source_checksum = hashlib.sha256(b"").hexdigest()
-        extractor_version = "user-authored"
-        coverage: dict[str, Any] = {"total_clauses": 0, "represented": 0, "omitted": 0, "unreviewed": 0}
-        confidence = Decimal("1")
-        notes = None
-    else:
-        source_kind = old_snapshot.source_kind
-        source_text = old_snapshot.source_text
-        source_blocks = list(old_snapshot.source_blocks or [])
-        source_checksum = old_snapshot.source_checksum
-        extractor_version = old_snapshot.extractor_version
-        coverage = dict(old_snapshot.coverage or {})
-        confidence = old_snapshot.confidence
-        notes = old_snapshot.household_notes
-    now = datetime.now(timezone.utc)
-    snapshot = RecipeMethodSnapshot(
-        recipe_version_id=next_version.id,
-        source_kind=source_kind,
-        source_text=source_text,
-        source_blocks=source_blocks,
-        source_checksum=source_checksum,
-        extractor_version=extractor_version,
-        parser_version=old_snapshot.parser_version if old_snapshot is not None else METHOD_PARSER_VERSION,
-        status=(old_snapshot.status if old_snapshot is not None and not semantic_changed else "needs_review"),
-        confidence=confidence,
-        coverage=coverage,
-        document=payload.method.model_dump(mode="json"),
-        household_notes=notes,
-        created_by_user_id=context.user.id,
-        reviewed_by_user_id=(old_snapshot.reviewed_by_user_id if old_snapshot is not None and not semantic_changed else None),
-        reviewed_at=(old_snapshot.reviewed_at if old_snapshot is not None and not semantic_changed else None),
-    )
-    db.add(snapshot)
-    table_snapshot = _add_table_snapshot(
-        db,
-        snapshot,
-        ingredients,
-        context.user.id,
-        existing=payload.table,
-        status="reviewed" if payload.mark_reviewed else "needs_review",
-    )
-    if payload.mark_reviewed:
-        table_snapshot.reviewed_by_user_id = context.user.id
-        table_snapshot.reviewed_at = now
     recipe.version += 1
     sync_recipe_versions_to_current_plans(
         db, context.user.household_id, {previous.id: next_version.id}
@@ -982,7 +760,6 @@ def apply_method_refresh(
         ),
     )
     db.add(snapshot)
-    _add_table_snapshot(db, snapshot, ingredients, context.user.id)
     recipe.version += 1
     sync_recipe_versions_to_current_plans(
         db, context.user.household_id, {previous.id: next_version.id}

@@ -597,7 +597,7 @@ export function PreferenceSettings() {
           <div>
             <p className="eyebrow">Cooking method</p>
             <h3>How should recipes open?</h3>
-            <p className="muted">The week view remembers this choice. You can still switch between the summary, Flow table, and original wording on every recipe.</p>
+            <p className="muted">The week view remembers this choice. You can still switch between the concise flow and original wording on every recipe.</p>
           </div>
         </div>
         <Segmented
@@ -605,9 +605,8 @@ export function PreferenceSettings() {
           onChange={(value) => void saveMethodPreference({ method_view_preference: value })}
           label="Default cooking method view"
           options={[
-            { value: 'summary', label: 'Summary' },
-            { value: 'table', label: 'Flow table' },
-            { value: 'written', label: 'Written' },
+            { value: 'summary', label: 'Summary flow' },
+            { value: 'written', label: 'Written method' },
           ]}
         />
         <div className="settings-section-heading settings-section-heading--compact">

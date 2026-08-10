@@ -61,7 +61,6 @@ import {
   type BackendMethodIngredient,
   type BackendMethodSourceBlock,
   type BackendMethodStage,
-  type BackendMethodTableDocument,
   type BackendMethodView,
   type BackendRecipeDetail,
   type MethodSemanticKind,
@@ -70,9 +69,8 @@ import {
 import { MealTypePicker, type RecipeMealType } from '../components/MealTypePicker'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import { safeExternalUrl } from '../lib/safeUrls'
-import { emptyTableDocument, RecipeFlowTable } from '../components/RecipeFlowTable'
 
-const TUTORIAL_VERSION = 2
+const TUTORIAL_VERSION = 1
 const semanticTools: Array<{ kind: MethodSemanticKind; label: string; icon: typeof Tag }> = [
   { kind: 'ingredient', label: 'Ingredient', icon: Tag },
   { kind: 'action', label: 'Action', icon: Sparkles },
@@ -171,33 +169,6 @@ function manualDocument(text: string): { blocks: BackendMethodSourceBlock[]; met
   }
 }
 
-function draftTableDocument(method: BackendMethodDocument): BackendMethodTableDocument {
-  const inputBindings = method.ingredient_bindings.filter(binding => binding.role !== 'reference')
-  const outgoing = new Set(method.edges.map(edge => edge.from_action_id))
-  return {
-    ...emptyTableDocument(),
-    labels: method.actions.map(action => ({ action_id: action.id, text: action.text.slice(0, 120), origin: 'automatic' as const, confidence: action.confidence, accepted: action.confidence >= REVIEW_CONFIDENCE_THRESHOLD })),
-    row_order: inputBindings.map(binding => binding.id),
-    setup_action_ids: method.actions.filter(action => !inputBindings.some(binding => binding.action_id === action.id)).map(action => action.id),
-    terminal_action_ids: method.actions.filter(action => !outgoing.has(action.id)).map(action => action.id),
-  }
-}
-
-function wouldCreateCycle(document: BackendMethodDocument, fromActionId: string, toActionId: string) {
-  const outgoing = new Map<string, string[]>(document.actions.map(action => [action.id, []]))
-  document.edges.forEach(edge => outgoing.get(edge.from_action_id)?.push(edge.to_action_id))
-  const pending = [toActionId]
-  const visited = new Set<string>()
-  while (pending.length) {
-    const current = pending.pop()!
-    if (current === fromActionId) return true
-    if (visited.has(current)) continue
-    visited.add(current)
-    pending.push(...(outgoing.get(current) ?? []))
-  }
-  return false
-}
-
 export function MethodPreviewPage() {
   return <MethodPage preview />
 }
@@ -221,11 +192,9 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   })
   const [data, setData] = useState<BackendMethodView | null>(null)
   const [method, setMethod] = useState<BackendMethodDocument | null>(null)
-  const [table, setTable] = useState<BackendMethodTableDocument | null>(null)
   const [sourceBlocks, setSourceBlocks] = useState<BackendMethodSourceBlock[]>([])
   const [notes, setNotes] = useState('')
   const [editing, setEditing] = useState(false)
-  const [editorPane, setEditorPane] = useState<'source' | 'flow'>('flow')
   const [savePending, setSavePending] = useState<'draft' | 'review' | null>(null)
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState('')
@@ -236,9 +205,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const [selectedActions, setSelectedActions] = useState<Set<string>>(new Set())
   const [selection, setSelection] = useState<{ blockId: string; start: number; end: number; text: string } | null>(null)
   const [annotationIngredient, setAnnotationIngredient] = useState('')
-  const [activeDrag, setActiveDrag] = useState<{ id: string; type: 'ingredient' | 'action' | 'flow-action' | 'binding-row'; label: string } | null>(null)
-  const [pendingPlacement, setPendingPlacement] = useState<{ lineageId: string; actionId: string } | null>(null)
-  const [placementAmount, setPlacementAmount] = useState('0.5')
+  const [activeDrag, setActiveDrag] = useState<{ id: string; type: 'ingredient' | 'action'; label: string } | null>(null)
   const [breakingAction, setBreakingAction] = useState<string | null>(null)
   const [breakingStrength, setBreakingStrength] = useState(0)
   const [justGrouped, setJustGrouped] = useState<string | null>(null)
@@ -254,7 +221,6 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     if (!methodQuery.data || dirty) return
     setData(methodQuery.data)
     setMethod(structuredClone(methodQuery.data.method))
-    setTable(structuredClone(methodQuery.data.table?.document ?? draftTableDocument(methodQuery.data.method)))
     setSourceBlocks(structuredClone(methodQuery.data.source_blocks))
     setNotes(methodQuery.data.household_notes ?? '')
     setAnnotationIngredient(methodQuery.data.ingredients[0]?.lineage_id ?? '')
@@ -279,7 +245,6 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     mutationFn: () => api.extractRecipeMethod(recipeId!, recipe.data?.version),
     onSuccess: result => {
       setData(result); setMethod(structuredClone(result.method)); setSourceBlocks(structuredClone(result.source_blocks)); setMessage('Method draft created.'); setError('')
-      setTable(structuredClone(result.table?.document ?? draftTableDocument(result.method)))
       void queryClient.invalidateQueries({ queryKey: ['recipes'] })
     },
     onError: reason => setError(reason instanceof Error ? reason.message : 'The method could not be extracted.'),
@@ -302,7 +267,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const applyRefresh = useMutation({
     mutationFn: () => api.applyMethodRefresh(recipeId!, data!.recipe_version!, refreshCandidate!.preview_token!),
     onSuccess: result => {
-      setData(result); setMethod(structuredClone(result.method)); setTable(structuredClone(result.table?.document ?? draftTableDocument(result.method))); setSourceBlocks(structuredClone(result.source_blocks)); setRefreshCandidate(null); setDirty(false)
+      setData(result); setMethod(structuredClone(result.method)); setSourceBlocks(structuredClone(result.source_blocks)); setRefreshCandidate(null); setDirty(false)
       setMessage('The latest source method is ready for review.')
       void queryClient.invalidateQueries({ queryKey: ['recipes'] })
     },
@@ -322,7 +287,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         source_kind: data.source_kind as 'custom' | 'publisher' | 'manual_paste',
         source_blocks: data.source_kind === 'publisher' ? undefined : sourceBlocks,
       })
-      setData(result); setMethod(structuredClone(result.method)); setTable(structuredClone(result.table?.document ?? draftTableDocument(result.method))); setSourceBlocks(structuredClone(result.source_blocks)); setDirty(false); setEditing(false)
+      setData(result); setMethod(structuredClone(result.method)); setSourceBlocks(structuredClone(result.source_blocks)); setDirty(false); setEditing(false)
       setMessage(markReviewed ? 'Method reviewed and saved.' : 'Method draft saved.')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['recipes'] }),
@@ -333,38 +298,6 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
       if (reason instanceof ApiError && reason.status === 409) {
         try { setConflictLatest(await api.getRecipeMethod(recipeId, { batchId })) } catch { setError(reason.message) }
       } else setError(reason instanceof Error ? reason.message : 'The method could not be saved.')
-    } finally {
-      setSavePending(null)
-    }
-  }
-
-  const saveTable = async (markReviewed = false) => {
-    if (!recipeId || preview || !method || !table || !data?.recipe_version || savePending) return
-    setSavePending(markReviewed ? 'review' : 'draft')
-    setError(''); setMessage('')
-    try {
-      const result = await api.saveRecipeMethodTable(recipeId, {
-        expected_version: data.recipe_version,
-        method,
-        table,
-        mark_reviewed: markReviewed,
-      })
-      setData(result)
-      setMethod(structuredClone(result.method))
-      setTable(structuredClone(result.table?.document ?? table))
-      setSourceBlocks(structuredClone(result.source_blocks))
-      setDirty(false)
-      setEditing(false)
-      setMessage(markReviewed ? 'Flow table reviewed and saved.' : 'Flow table draft saved.')
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['recipes'] }),
-        queryClient.invalidateQueries({ queryKey: ['recipe', recipeId] }),
-        queryClient.invalidateQueries({ queryKey: ['recipe-method', recipeId] }),
-      ])
-    } catch (reason) {
-      if (reason instanceof ApiError && reason.status === 409) {
-        try { setConflictLatest(await api.getRecipeMethod(recipeId, { batchId })) } catch { setError(reason.message) }
-      } else setError(reason instanceof Error ? reason.message : 'The Flow table could not be saved.')
     } finally {
       setSavePending(null)
     }
@@ -391,7 +324,6 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
       scaling_available: Boolean(recipe.data.yield_servings),
     })
     setMethod(generated.method); setSourceBlocks(generated.blocks); setDirty(true); setEditing(true); setError('')
-    setTable(draftTableDocument(generated.method))
   }
 
   const updateDocument = (updater: (current: BackendMethodDocument) => BackendMethodDocument) => {
@@ -442,29 +374,12 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     actions: current.actions.map(item => ({ ...item, source_annotation_ids: item.source_annotation_ids.filter(annotationId => annotationId !== id) })),
   }))
 
-  const commitIngredientPlacement = (lineageId: string, actionId: string, portionMode: BackendMethodBinding['portion_mode'] = 'unspecified', portionValue?: number) => {
-    if (method?.ingredient_bindings.some(item => item.action_id === actionId && item.ingredient_lineage_id === lineageId && item.portion_mode === portionMode && item.portion_value === portionValue)) return
-    const bindingId = localId('binding')
-    updateDocument(current => current.ingredient_bindings.some(item => item.action_id === actionId && item.ingredient_lineage_id === lineageId && item.portion_mode === portionMode && item.portion_value === portionValue) ? current : ({
-      ...current,
-      ingredient_bindings: [...current.ingredient_bindings, { id: bindingId, action_id: actionId, ingredient_lineage_id: lineageId, portion_mode: portionMode, portion_value: portionValue, confidence: 1, accepted: true }],
-    }))
-    setTable(current => current ? { ...current, row_order: current.row_order.includes(bindingId) ? current.row_order : [...current.row_order, bindingId] } : current)
-    setJustGrouped(actionId); window.setTimeout(() => setJustGrouped(value => value === actionId ? null : value), 520)
-  }
   const attachIngredient = (lineageId: string, actionId: string) => {
-    if (method?.ingredient_bindings.some(item => item.role !== 'reference' && item.ingredient_lineage_id === lineageId)) {
-      setPendingPlacement({ lineageId, actionId })
-      return
-    }
-    commitIngredientPlacement(lineageId, actionId)
-  }
-  const chooseIngredientPlacement = (portionMode: BackendMethodBinding['portion_mode']) => {
-    if (!pendingPlacement) return
-    const amount = Number(placementAmount)
-    if ((portionMode === 'fraction' || portionMode === 'absolute') && (!Number.isFinite(amount) || amount <= 0)) return
-    commitIngredientPlacement(pendingPlacement.lineageId, pendingPlacement.actionId, portionMode, portionMode === 'fraction' || portionMode === 'absolute' ? amount : undefined)
-    setPendingPlacement(null)
+    updateDocument(current => current.ingredient_bindings.some(item => item.action_id === actionId && item.ingredient_lineage_id === lineageId) ? current : ({
+      ...current,
+      ingredient_bindings: [...current.ingredient_bindings, { id: localId('binding'), action_id: actionId, ingredient_lineage_id: lineageId, portion_mode: 'unspecified', confidence: 1, accepted: true }],
+    }))
+    setJustGrouped(actionId); window.setTimeout(() => setJustGrouped(value => value === actionId ? null : value), 520)
   }
   const groupSelection = () => {
     if (!method) return
@@ -492,7 +407,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
   const handleDragStart = (event: DragStartEvent) => {
-    const type = event.active.data.current?.type as 'ingredient' | 'action' | 'flow-action' | 'binding-row'
+    const type = event.active.data.current?.type as 'ingredient' | 'action'
     setActiveDrag({ id: String(event.active.id), type, label: String(event.active.data.current?.label ?? '') })
   }
   const handleDragMove = (event: DragMoveEvent) => {
@@ -509,43 +424,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     const activeType = event.active.data.current?.type
     const activeId = String(event.active.id)
     const overId = event.over ? String(event.over.id) : ''
-    if (activeType === 'ingredient' && ['action', 'flow-action'].includes(String(event.over?.data.current?.type))) attachIngredient(activeId.replace('ingredient:', ''), overId.replace(/^(?:action|flow-action):/, ''))
-    if (activeType === 'binding-row' && event.over?.data.current?.type === 'binding-row' && table) {
-      const current = table.row_order.length ? [...table.row_order] : method?.ingredient_bindings.filter(binding => binding.role !== 'reference').map(binding => binding.id) ?? []
-      const fromId = activeId.replace('binding:', '')
-      const toId = overId.replace('binding:', '')
-      const fromIndex = current.indexOf(fromId)
-      const toIndex = current.indexOf(toId)
-      if (fromIndex >= 0 && toIndex >= 0 && fromIndex !== toIndex) {
-        const next = [...current]
-        ;[next[fromIndex], next[toIndex]] = [next[toIndex], next[fromIndex]]
-        setTable({ ...table, row_order: next }); setDirty(true)
-      }
-    }
-    if (activeType === 'flow-action' && method && event.over) {
-      const actionId = activeId.replace('flow-action:', '')
-      const targetType = String(event.over.data.current?.type ?? '')
-      const targetId = String(event.over.data.current?.actionId ?? '').replace(/^flow-action:/, '')
-      if (targetId && targetId !== actionId && ['flow-before', 'flow-after'].includes(targetType)) {
-        updateDocument(current => {
-          const ordered = [...current.actions].sort((left, right) => left.position - right.position)
-          const fromIndex = ordered.findIndex(action => action.id === actionId)
-          const targetIndex = ordered.findIndex(action => action.id === targetId)
-          if (fromIndex < 0 || targetIndex < 0) return current
-          const [moved] = ordered.splice(fromIndex, 1)
-          ordered.splice(targetType === 'flow-before' ? ordered.findIndex(action => action.id === targetId) : ordered.findIndex(action => action.id === targetId) + 1, 0, moved)
-          return { ...current, actions: ordered.map((action, index) => ({ ...action, position: index })) }
-        })
-      }
-      if (targetId && targetId !== actionId && targetType === 'flow-merge' && !method.edges.some(edge => edge.from_action_id === actionId && edge.to_action_id === targetId)) {
-        if (wouldCreateCycle(method, actionId, targetId)) {
-          setError('That merge would create a cycle. Choose an operation later in the flow.')
-          setActiveDrag(null); setBreakingAction(null); setBreakingStrength(0)
-          return
-        }
-        updateDocument(current => ({ ...current, edges: [...current.edges, { id: localId('edge'), from_action_id: actionId, to_action_id: targetId, kind: 'merge', confidence: 1, accepted: true }] }))
-      }
-    }
+    if (activeType === 'ingredient' && event.over?.data.current?.type === 'action') attachIngredient(activeId.replace('ingredient:', ''), overId.replace('action:', ''))
     if (activeType === 'action' && method) {
       const actionId = activeId.replace('action:', '')
       if (Math.abs(event.delta.x) > 120 && breakingAction) {
@@ -591,7 +470,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const unreviewed = Number(data.coverage.unreviewed ?? 0)
   const lowConfidence = method.annotations.filter(item => item.confidence < .65 && !item.accepted).length + method.ingredient_bindings.filter(item => item.confidence < .65 && !item.accepted).length
   const unresolvedClauses = unreviewedClauses(sourceBlocks, method.annotations)
-  const reviewBlocked = data.source_kind === 'table_only' || unreviewed > 0 || lowConfidence > 0
+  const reviewBlocked = unreviewed > 0 || lowConfidence > 0
   return <div className="page page--wide method-page">
     <PageHeader
       eyebrow={data.batch_context ? `Batch method · ${data.batch_context.servings} servings` : preview ? 'Method preview' : 'Cooking method'}
@@ -602,16 +481,16 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         {safeExternalUrl(data.source_url) && <a className="button button--secondary" href={safeExternalUrl(data.source_url) ?? undefined} target="_blank" rel="noreferrer">Source <ExternalLink size={16}/></a>}
         {!preview && data.source_kind === 'publisher' && <Button variant="secondary" disabled={refreshPreview.isPending} onClick={() => refreshPreview.mutate()}><RefreshCw className={refreshPreview.isPending ? 'spin' : ''} size={16}/>{refreshPreview.isPending ? 'Checking…' : 'Check source'}</Button>}
         {!preview && data.method_status === 'needs_review' && <Button type="button" disabled={reviewBlocked || savePending !== null || Boolean(conflictLatest)} title={reviewBlocked ? 'Resolve the review blockers before marking this method as reviewed.' : undefined} onClick={() => void saveMethod(true)} aria-label="Mark as reviewed"><Check size={16}/>{savePending === 'review' ? 'Saving…' : 'Mark as reviewed'}</Button>}
-        {!preview && <Button variant="secondary" onClick={() => setEditing(value => !value)}><PencilLine size={16}/>{editing ? 'Close editor' : data.source_kind === 'table_only' ? 'Start flow table' : 'Edit method'}</Button>}
+        {!preview && <Button variant="secondary" onClick={() => setEditing(value => !value)}><PencilLine size={16}/>{editing ? 'Close editor' : 'Edit method'}</Button>}
       </>}
     />
     {error && <Notice tone="warning" title="Method update failed">{error}</Notice>}
     {message && <Notice tone="success" title="Saved">{message}</Notice>}
-    <div className="method-status" aria-live="polite"><Badge tone={data.method_status === 'reviewed' ? 'green' : 'warning'}>{data.method_status === 'reviewed' ? 'Reviewed' : 'Needs review'}</Badge><Badge tone={data.table?.status === 'reviewed' ? 'green' : 'warning'}>{data.table?.status === 'reviewed' ? 'Flow table reviewed' : 'Flow table needs review'}</Badge></div>
+    <div className="method-status" aria-live="polite"><Badge tone={data.method_status === 'reviewed' ? 'green' : 'warning'}>{data.method_status === 'reviewed' ? 'Reviewed' : 'Needs review'}</Badge></div>
     {data.method_status === 'needs_review' && <Notice tone="warning" title="Automatically generated draft">Use it now, or review {unreviewed ? `${unreviewed} unaccounted clause${unreviewed === 1 ? '' : 's'}` : 'the highlighted suggestions'} before marking it reviewed.</Notice>}
     {data.batch_context && <Card className="method-batch-banner"><Flame/><div><strong>Cook the whole batch: {data.batch_context.servings} servings</strong><span>{data.batch_context.occurrences.map(item => `${item.date} ${item.meal_type}`).join(' · ')}</span></div></Card>}
     <div className="method-toolbar">
-      <Segmented value={view} onChange={toggleView} label="Method view" options={[{ value: 'summary', label: 'Summary' }, { value: 'table', label: 'Flow table' }, { value: 'written', label: 'Written' }]}/>
+      <Segmented value={view} onChange={toggleView} label="Method view" options={[{ value: 'summary', label: 'Summary' }, { value: 'written', label: 'Written' }]}/>
       {!data.batch_context && data.scaling_available && <label className="method-serving-control">Servings<input type="number" min=".25" step=".25" value={servings ?? data.requested_servings ?? ''} onChange={event => setServings(Number(event.target.value) || undefined)}/></label>}
       <button className="method-help-button" type="button" onClick={() => setTutorialStep(0)}><CircleHelp size={17}/>How to edit</button>
     </div>
@@ -619,18 +498,14 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     {preview && <Card className="method-preview-save"><div><span className="eyebrow">Keep this recipe</span><strong>Save ingredients, written method and summary together</strong></div><MealTypePicker value={mealTypes} onChange={setMealTypes}/><Button disabled={!mealTypes.length || savePreview.isPending} onClick={() => savePreview.mutate()}><Save size={16}/>{savePreview.isPending ? 'Saving…' : 'Save recipe'}</Button></Card>}
 
     {editing ? <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragMove={handleDragMove} onDragCancel={() => { setActiveDrag(null); setBreakingAction(null); setBreakingStrength(0) }} onDragEnd={handleDragEnd}>
-      <div className="method-editor-tabs" role="tablist" aria-label="Method editor sections">
-        <button type="button" role="tab" aria-selected={editorPane === 'source'} className={editorPane === 'source' ? 'active' : ''} onClick={() => setEditorPane('source')}><BookOpenText size={15}/>Source mapping</button>
-        <button type="button" role="tab" aria-selected={editorPane === 'flow'} className={editorPane === 'flow' ? 'active' : ''} onClick={() => setEditorPane('flow')}><Layers3 size={15}/>Flow table</button>
-      </div>
       <div className="method-editor-shell">
         <aside className="method-editor-guide">
           <p className="eyebrow">Review path</p>
-          <ol><li className="done"><Check/>Ingredient mentions</li><li className={method.annotations.length ? 'done' : ''}><Check/>Semantic spans</li><li className={method.actions.length ? 'done' : ''}><Check/>Flow table rows</li><li className={data.method_status === 'reviewed' ? 'done' : ''}><Check/>Review and save</li></ol>
-          <div className="method-editor-selection"><strong>Table editor</strong><span className="muted">Place every required ingredient, then review the warnings.</span></div>
+          <ol><li className="done"><Check/>Ingredient mentions</li><li className={method.annotations.length ? 'done' : ''}><Check/>Semantic spans</li><li className={method.actions.length ? 'done' : ''}><Check/>Arrange the graph</li><li className={data.method_status === 'reviewed' ? 'done' : ''}><Check/>Review and save</li></ol>
+          <div className="method-editor-selection"><strong>{selectedIngredients.size} ingredients · {selectedActions.size} actions</strong><Button variant="secondary" disabled={!((selectedIngredients.size && selectedActions.size === 1) || selectedActions.size > 1)} onClick={groupSelection}><Layers3 size={15}/>Group</Button><Button variant="ghost" disabled={!selectedActions.size} onClick={ungroupActions}><Split size={15}/>Ungroup</Button></div>
           {lowConfidence > 0 && <Button variant="ghost" onClick={acceptSuggestions}><Check size={15}/>Accept {lowConfidence} suggestions</Button>}
         </aside>
-        <section className={`method-source-editor method-editor-pane${editorPane === 'source' ? ' method-editor-pane--active' : ''}`}>
+        <section className="method-source-editor">
           <div className="method-section-heading"><div><span className="eyebrow">1 · Mark up the source</span><h2>Original written method</h2></div><Badge>{data.source_kind === 'publisher' ? 'Read-only source' : 'Editable source'}</Badge></div>
           {unreviewed > 0 && <div className="method-unreviewed" role="region" aria-labelledby="method-unreviewed-title">
             <div className="method-unreviewed__heading"><strong id="method-unreviewed-title">{unreviewed} unaccounted clause{unreviewed === 1 ? '' : 's'}</strong><span>Review the exact highlighted wording before saving this method.</span></div>
@@ -640,25 +515,23 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
               target?.focus({ preventScroll: true })
             }} aria-label={`Locate unaccounted clause ${index + 1}: ${text}`}><span aria-hidden="true">{index + 1}</span><strong>{text}</strong><Link2 size={14} aria-hidden="true"/></button></li>)}</ol>}
           </div>}
-           {sourceBlocks.map((block, index) => <article className="method-source-block" key={block.id}>
-             {block.heading && <h3>{block.heading}</h3>}
-             {data.source_kind === 'publisher' ? <p ref={node => { sourceRefs.current[block.id] = node }} onPointerUp={() => captureSelection(block)}>{annotatedSource(block, method.annotations)}</p> : <textarea value={block.text} rows={5} onChange={event => { const text = event.target.value; setSourceBlocks(items => items.map((item, itemIndex) => itemIndex === index ? { ...item, text } : item)); setDirty(true) }}/>}
-             <div className="method-source-tags">{method.annotations.filter(item => item.block_id === block.id).map(annotation => <button type="button" className={`semantic-chip semantic-chip--${annotation.kind}`} key={annotation.id} title="Remove this label" onClick={() => removeAnnotation(annotation.id)}><span>{annotation.kind}: {block.text.slice(annotation.start, annotation.end)}</span><X size={12}/></button>)}</div>
-           </article>)}
-           {!sourceBlocks.length && data.source_kind === 'table_only' && <article className="method-source-block method-source-block--empty"><h3>Add written instructions later</h3><p className="muted">The Flow table is already saved. Paste the original wording here whenever you want a Written view too.</p><textarea aria-label="Add written cooking method" rows={8} value={manualText} onChange={event => { const text = event.target.value; setManualText(text); setSourceBlocks([{ id: 'block-table-only', position: 0, text }]); setDirty(true) }} placeholder="Cook the potatoes until tender. Drain and serve."/></article>}
+          {sourceBlocks.map((block, index) => <article className="method-source-block" key={block.id}>
+            {block.heading && <h3>{block.heading}</h3>}
+            {data.source_kind === 'publisher' ? <p ref={node => { sourceRefs.current[block.id] = node }} onPointerUp={() => captureSelection(block)}>{annotatedSource(block, method.annotations)}</p> : <textarea value={block.text} rows={5} onChange={event => { const text = event.target.value; setSourceBlocks(items => items.map((item, itemIndex) => itemIndex === index ? { ...item, text } : item)); setDirty(true) }}/>}
+            <div className="method-source-tags">{method.annotations.filter(item => item.block_id === block.id).map(annotation => <button type="button" className={`semantic-chip semantic-chip--${annotation.kind}`} key={annotation.id} title="Remove this label" onClick={() => removeAnnotation(annotation.id)}><span>{annotation.kind}: {block.text.slice(annotation.start, annotation.end)}</span><X size={12}/></button>)}</div>
+          </article>)}
           {selection && <div className="semantic-toolbar" role="toolbar" aria-label="Mark selected recipe text"><div><strong>“{selection.text.slice(0, 56)}{selection.text.length > 56 ? '…' : ''}”</strong><span>What does this text mean?</span></div>{semanticTools.map(tool => { const Icon = tool.icon; return <button type="button" key={tool.kind} onClick={() => tagSelection(tool.kind)}><Icon size={15}/>{tool.label}</button> })}<button type="button" onClick={() => { updateDocument(current => ({ ...current, omissions: [...current.omissions, { id: localId('omission'), block_id: selection.blockId, start: selection.start, end: selection.end, reason: 'Omitted from concise summary', accepted: true }] })); setSelection(null) }}><Trash2 size={15}/>Omit</button>{annotationIngredient && <select aria-label="Ingredient for selected text" value={annotationIngredient} onChange={event => setAnnotationIngredient(event.target.value)}>{data.ingredients.map(item => <option key={item.lineage_id} value={item.lineage_id}>{item.name}</option>)}</select>}</div>}
         </section>
-        <section className={`method-canvas-editor method-editor-pane${editorPane === 'flow' ? ' method-editor-pane--active' : ''}`}>
-          <div className="method-section-heading"><div><span className="eyebrow">2 · Arrange the flow</span><h2>Flow table</h2></div><Badge tone="blue">Canonical visual editor</Badge></div>
-          {table && <RecipeFlowTable data={{ ...data, table: data.table ?? { status: 'needs_review', coverage: { total_actions: method.actions.length, represented_actions: method.actions.length, total_included_ingredient_lineages: data.ingredients.length, represented_ingredient_lineages: 0, ingredient_use_rows: method.ingredient_bindings.filter(binding => binding.role !== 'reference').length, explicitly_omitted_ingredients: 0, explicitly_omitted_actions: 0, unplaced_ingredients: data.ingredients.length, disconnected_components: 0, low_confidence_labels: 0, low_confidence_bindings: 0, low_confidence_edges: 0, blocking_warnings: 0, non_blocking_warnings: 0 }, document: table, rendered_ingredient_uses: [], warnings: [] } }} method={method} table={table} editable onTableChange={next => { setTable(next); setDirty(true) }} onMethodChange={next => { setMethod(next); setDirty(true) }}/>}
-          <div className="flow-editor-save-row"><Button type="button" variant="secondary" disabled={savePending !== null} onClick={() => void saveTable(false)}><Save size={16}/>{savePending === 'draft' ? 'Saving…' : 'Save flow draft'}</Button><Button type="button" disabled={savePending !== null || Boolean(conflictLatest) || Number(data.table?.coverage.blocking_warnings ?? 0) > 0} title={Number(data.table?.coverage.blocking_warnings ?? 0) > 0 ? 'Resolve the Flow table warnings before reviewing it.' : undefined} onClick={() => void saveTable(true)}><Check size={16}/>{savePending === 'review' ? 'Saving…' : 'Mark flow table reviewed'}</Button></div>
+        <section className="method-canvas-editor">
+          <div className="method-section-heading"><div><span className="eyebrow">2 · Arrange the summary</span><h2>Cooking flow</h2></div><Button variant="ghost" onClick={() => updateDocument(current => ({ ...current, stages: [...current.stages, { id: localId('stage'), title: `Stage ${current.stages.length + 1}`, position: current.stages.length }] }))}><Plus size={15}/>Stage</Button></div>
+          <div className="method-ingredient-palette">{data.ingredients.map(ingredient => <DraggableIngredient key={ingredient.lineage_id} ingredient={ingredient} selected={selectedIngredients.has(ingredient.lineage_id)} onSelect={() => setSelectedIngredients(current => { const next = new Set(current); next.has(ingredient.lineage_id) ? next.delete(ingredient.lineage_id) : next.add(ingredient.lineage_id); return next })}/>)}</div>
+          <div className="method-stage-list">{stages.map(stage => <DroppableStage key={stage.id} stage={stage} actions={method.actions.filter(action => action.stage_id === stage.id).sort((a,b) => a.position-b.position)} method={method} ingredients={data.ingredients} selectedActions={selectedActions} setSelectedActions={setSelectedActions} updateDocument={updateDocument} breakingAction={breakingAction} breakingStrength={breakingStrength} justGrouped={justGrouped}/>)}</div>
         </section>
         <section className="method-editor-save"><label>Household notes<textarea rows={3} value={notes} onChange={event => { setNotes(event.target.value); setDirty(true) }} placeholder="Add adaptations or reminders without changing the publisher wording."/></label><div><Button type="button" variant="secondary" disabled={savePending !== null} onClick={() => void saveMethod(false)}><Save size={16}/>{savePending === 'draft' ? 'Saving…' : 'Save draft'}</Button><Button type="button" disabled={reviewBlocked || savePending !== null || Boolean(conflictLatest)} onClick={() => void saveMethod(true)}><Check size={16}/>{savePending === 'review' ? 'Saving…' : 'Mark as reviewed'}</Button></div></section>
       </div>
       <DragOverlay>{activeDrag && <div className={`method-drag-overlay method-drag-overlay--${activeDrag.type}`}><GripVertical size={15}/>{activeDrag.label}</div>}</DragOverlay>
-    </DndContext> : view === 'summary' ? <MethodSummary data={data}/> : view === 'table' ? <RecipeFlowTable data={data} method={method} table={table ?? draftTableDocument(method)}/> : <WrittenMethod data={data}/>}
+    </DndContext> : view === 'summary' ? <MethodSummary data={data}/> : <WrittenMethod data={data}/>}
 
-    {pendingPlacement && <div className="modal-backdrop" role="presentation"><Card className="flow-placement-dialog" role="dialog" aria-modal="true" aria-labelledby="flow-placement-title"><div><p className="eyebrow">Repeated ingredient use</p><h2 id="flow-placement-title">How much enters this operation?</h2><p>{data.ingredients.find(item => item.lineage_id === pendingPlacement.lineageId)?.name ?? 'Ingredient'} already has a row. Keep the use explicit so the table never hides a quantity.</p><label>Fraction or absolute amount<input aria-label="Portion amount" type="number" min="0.01" step="0.01" value={placementAmount} onChange={event => setPlacementAmount(event.target.value)}/></label><div className="button-row"><Button variant="ghost" onClick={() => setPendingPlacement(null)}>Cancel</Button><Button variant="secondary" onClick={() => chooseIngredientPlacement('all')}>Use all</Button><Button variant="secondary" onClick={() => chooseIngredientPlacement('fraction')}>Use a fraction</Button><Button variant="secondary" onClick={() => chooseIngredientPlacement('absolute')}>Use an absolute amount</Button><Button onClick={() => chooseIngredientPlacement('remainder')}>Use the remainder</Button></div></div></Card></div>}
     {conflictLatest && <div className="modal-backdrop" role="presentation"><Card className="method-conflict" role="dialog" aria-modal="true" aria-labelledby="method-conflict-title"><AlertTriangle/><div><p className="eyebrow">Version conflict</p><h2 id="method-conflict-title">Someone saved this method first</h2><p>Your local draft is safe. The latest version has {conflictLatest.method.actions.length} actions; yours has {method.actions.length}.</p><div className="button-row"><Button variant="secondary" onClick={() => { setData(conflictLatest); setMethod(structuredClone(conflictLatest.method)); setSourceBlocks(structuredClone(conflictLatest.source_blocks)); setDirty(false); setConflictLatest(null) }}>Load latest</Button><Button onClick={() => { setData(current => current ? { ...current, recipe_version: conflictLatest.recipe_version } : current); setConflictLatest(null); setMessage('Your draft is ready to reapply over the latest version.') }}>Reapply my draft</Button></div></div></Card></div>}
     {refreshCandidate && <div className="modal-backdrop" role="presentation"><Card className="method-refresh-dialog" role="dialog" aria-modal="true" aria-labelledby="method-refresh-title"><RefreshCw/><div><p className="eyebrow">Source comparison</p><h2 id="method-refresh-title">{refreshCandidate.refresh_diff?.changed ? 'The publisher method changed' : 'The publisher method is unchanged'}</h2><p>{refreshCandidate.refresh_diff?.changed ? `The saved method has ${refreshCandidate.refresh_diff.old_block_count ?? 0} source blocks; the current page has ${refreshCandidate.refresh_diff.new_block_count ?? 0}. Applying creates a new immutable recipe version and keeps your history intact.` : 'Your saved source checksum matches the current page. No update is needed.'}</p><div className="button-row"><Button variant="ghost" onClick={() => setRefreshCandidate(null)}>Close</Button>{refreshCandidate.refresh_diff?.changed && <Button disabled={applyRefresh.isPending} onClick={() => applyRefresh.mutate()}><RefreshCw className={applyRefresh.isPending ? 'spin' : ''} size={16}/>{applyRefresh.isPending ? 'Applying…' : 'Apply as new draft'}</Button>}</div></div></Card></div>}
     {tutorialStep != null && <Tutorial step={tutorialStep} setStep={setTutorialStep} dismiss={dismissTutorial}/>}
@@ -703,7 +576,7 @@ function displayMethodNumber(value: number) {
 }
 
 function WrittenMethod({ data }: { data: BackendMethodView }) {
-  return <div className="written-method-layout"><aside className="method-ingredients-panel"><div className="method-panel-heading"><span>For {data.requested_servings ?? data.base_servings ?? 'the recipe'}</span><Badge>{data.ingredients.length} ingredients</Badge></div><ol>{data.ingredients.map(item => <li key={item.lineage_id}><span>{item.quantity_text} {item.unit}</span><strong>{item.name}</strong></li>)}</ol></aside><main className="written-method"><div className="written-method-key"><span><i className="semantic-dot semantic-dot--ingredient"/>Linked ingredient</span><span>Quantities update with the batch</span></div>{data.rendered_blocks.length ? data.rendered_blocks.map((block, index) => <article key={block.id}><span className="written-step-number">{String(index + 1).padStart(2,'0')}</span><div>{block.heading && <h2>{block.heading}</h2>}<p>{block.segments.map((segment, segmentIndex) => segment.kind === 'ingredient' ? <mark className="written-ingredient" key={segmentIndex}>{segment.text}{segment.quantity_label && <small>{segment.quantity_label}</small>}</mark> : <span key={segmentIndex}>{segment.text}</span>)}</p></div></article>) : <div className="written-empty-state"><PencilLine size={20}/><strong>No written method was supplied</strong><p>This recipe has a Flow table only. Switch to Flow table to cook from the saved operations, or add written instructions in the editor.</p></div>}{data.household_notes && <Card className="method-household-notes"><strong>Household notes</strong><p>{data.household_notes}</p></Card>}</main></div>
+  return <div className="written-method-layout"><aside className="method-ingredients-panel"><div className="method-panel-heading"><span>For {data.requested_servings ?? data.base_servings ?? 'the recipe'}</span><Badge>{data.ingredients.length} ingredients</Badge></div><ol>{data.ingredients.map(item => <li key={item.lineage_id}><span>{item.quantity_text} {item.unit}</span><strong>{item.name}</strong></li>)}</ol></aside><main className="written-method"><div className="written-method-key"><span><i className="semantic-dot semantic-dot--ingredient"/>Linked ingredient</span><span>Quantities update with the batch</span></div>{data.rendered_blocks.map((block, index) => <article key={block.id}><span className="written-step-number">{String(index + 1).padStart(2,'0')}</span><div>{block.heading && <h2>{block.heading}</h2>}<p>{block.segments.map((segment, segmentIndex) => segment.kind === 'ingredient' ? <mark className="written-ingredient" key={segmentIndex}>{segment.text}{segment.quantity_label && <small>{segment.quantity_label}</small>}</mark> : <span key={segmentIndex}>{segment.text}</span>)}</p></div></article>)}{data.household_notes && <Card className="method-household-notes"><strong>Household notes</strong><p>{data.household_notes}</p></Card>}</main></div>
 }
 
 function DraggableIngredient({ ingredient, selected, onSelect }: { ingredient: BackendMethodIngredient; selected: boolean; onSelect: () => void }) {
@@ -727,8 +600,8 @@ function SortableAction({ action, method, ingredients, selected, onSelect, updat
 function Tutorial({ step, setStep, dismiss }: { step: number; setStep: (step: number | null) => void; dismiss: () => Promise<void> }) {
   const slides = [
     { icon: MousePointer2, title: 'Tag the source', copy: 'Select a phrase, then label it as an ingredient, action, time, temperature, equipment or doneness cue.' },
-    { icon: Layers3, title: 'Place ingredients in the table', copy: 'Drag an ingredient from the Unplaced tray onto an operation. Repeated uses stay as separate scaled rows, so the quantities remain honest.' },
-    { icon: Split, title: 'Shape branches and merges', copy: 'Use the Before, After, or Merge into drop zones to keep parallel preparations separate until the moment they combine.' },
+    { icon: Layers3, title: 'Build meaningful groups', copy: 'Drag an ingredient onto an action, or select several boxes and use Group. Actions can live in parallel named stages.' },
+    { icon: Split, title: 'Pull groups apart safely', copy: 'Drag a grouped action across its boundary. The shake grows near the split threshold; let go early to cancel or continue to separate it.' },
   ]
   const slide = slides[step]
   const Icon = slide.icon

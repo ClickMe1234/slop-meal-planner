@@ -53,7 +53,6 @@ from ..models import (
     RecipeIngredient,
     RecipeMealType,
     RecipeMethodSnapshot,
-    RecipeMethodTableSnapshot,
     RecipePublisherTag,
     RecipeVersion,
     Restriction,
@@ -126,7 +125,6 @@ MODEL_BY_TABLE = {
         RecipeVersion,
         RecipeIngredient,
         RecipeMethodSnapshot,
-        RecipeMethodTableSnapshot,
         FoodRecord,
         FoodNutrient,
         SavedFood,
@@ -437,7 +435,6 @@ def _load_source_bundle(db: Session, source_household_id: str | None) -> SourceB
         "recipe_version": [],
         "recipe_ingredient": [],
         "recipe_method_snapshot": [],
-        "recipe_method_table_snapshot": [],
         "nutrition_calculation": [],
         "food_record": [],
         "food_nutrient": [],
@@ -467,12 +464,6 @@ def _load_source_bundle(db: Session, source_household_id: str | None) -> SourceB
     version_ids = _id_set(tables["recipe_version"])
     tables["recipe_ingredient"] = _rows(db, RecipeIngredient, RecipeIngredient.recipe_version_id.in_(version_ids)) if version_ids else []
     tables["recipe_method_snapshot"] = _rows(db, RecipeMethodSnapshot, RecipeMethodSnapshot.recipe_version_id.in_(version_ids)) if version_ids else []
-    method_snapshot_ids = _id_set(tables["recipe_method_snapshot"])
-    tables["recipe_method_table_snapshot"] = _rows(
-        db,
-        RecipeMethodTableSnapshot,
-        RecipeMethodTableSnapshot.recipe_method_snapshot_id.in_(method_snapshot_ids),
-    ) if method_snapshot_ids else []
     tables["nutrition_calculation"] = _rows(db, NutritionCalculation, NutritionCalculation.recipe_version_id.in_(version_ids)) if version_ids else []
 
     plan_ids = _id_set(tables["meal_plan"])
@@ -531,7 +522,6 @@ def _counts(bundle: SourceBundle) -> dict[str, dict[str, int]]:
             "versions": len(tables["recipe_version"]),
             "ingredients": len(tables["recipe_ingredient"]),
             "methods": len(tables["recipe_method_snapshot"]),
-            "flow_tables": len(tables["recipe_method_table_snapshot"]),
         },
         "ingredients": {
             "food_records": len(tables["food_record"]),
@@ -590,7 +580,7 @@ def _component_tables(components: set[str], tables: dict[str, list[dict[str, Any
     if "users" in components:
         include.add("app_user")
     if "recipes" in components:
-        include.update({"recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "recipe_method_snapshot", "recipe_method_table_snapshot", "nutrition_calculation", "food_record", "food_nutrient"})
+        include.update({"recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "recipe_method_snapshot", "nutrition_calculation", "food_record", "food_nutrient"})
     if "ingredients" in components:
         include.update({"food_record", "food_nutrient", "saved_food", "food_alias", "ingredient_name_override", "ingredient_name_equivalent"})
     if "pantry" in components:
@@ -600,7 +590,7 @@ def _component_tables(components: set[str], tables: dict[str, list[dict[str, Any
     if "plans" in components:
         include.update({
             "meal_plan", "meal_batch", "meal_occurrence", "portion_allocation", "pantry_reservation",
-            "recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "recipe_method_snapshot", "recipe_method_table_snapshot", "nutrition_calculation",
+            "recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "recipe_method_snapshot", "nutrition_calculation",
             "household_member", "food_record", "food_nutrient",
         })
     return {table for table in include if tables.get(table)}
@@ -627,7 +617,6 @@ def _mapped_data(data: dict[str, Any], id_map: dict[str, dict[str, str]]) -> dic
         "target_profile_id": "target_profile",
         "recipe_id": "recipe",
         "recipe_version_id": "recipe_version",
-        "recipe_method_snapshot_id": "recipe_method_snapshot",
         "food_record_id": "food_record",
         "source_food_record_id": "food_record",
         "planner_recipe_id": "recipe",
@@ -692,8 +681,6 @@ def _find_existing(db: Session, model: Any, data: dict[str, Any], maps: dict[str
         unique_filters = [model.recipe_id == data["recipe_id"], model.version_number == data["version_number"]]
     elif table == "recipe_method_snapshot":
         unique_filters = [model.recipe_version_id == data["recipe_version_id"]]
-    elif table == "recipe_method_table_snapshot":
-        unique_filters = [model.recipe_method_snapshot_id == data["recipe_method_snapshot_id"]]
     elif table == "meal_allocation":
         unique_filters = [model.target_profile_id == data["target_profile_id"], model.meal_type == data["meal_type"]]
     elif table == "target_profile":
@@ -728,7 +715,7 @@ def _insert_rows(db: Session, model: Any, rows: list[dict[str, Any]], maps: dict
             continue
         if table == "meal_batch":
             data["parent_batch_id"] = None
-        if table in {"recipe_method_snapshot", "recipe_method_table_snapshot"}:
+        if table == "recipe_method_snapshot":
             data["created_by_user_id"] = None
             data["reviewed_by_user_id"] = None
         if table == "recipe":
@@ -792,7 +779,6 @@ def restore_archive(
                 "nutrition_calculation",
                 "app_user",
                 "recipe_method_snapshot",
-                "recipe_method_table_snapshot",
                 "saved_food",
                 "food_alias",
                 "meal_plan",

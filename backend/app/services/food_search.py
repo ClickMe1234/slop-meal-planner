@@ -95,7 +95,7 @@ def fetch_and_cache_usda_foods(
                     "sortBy": "dataType.keyword",
                     "sortOrder": "asc",
                 },
-                headers={"User-Agent": "SlopMealPlanner/1.3.0"},
+                headers={"User-Agent": "SlopMealPlanner/1.2.0"},
             )
             if response.status_code == 429:
                 with _rate_limit_lock:
