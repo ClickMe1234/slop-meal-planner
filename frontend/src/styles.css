@@ -283,7 +283,7 @@ button.tag { cursor: pointer; font: inherit; }
 .meal-actions>.button { border:0;border-bottom:1px solid var(--border);border-radius:0;color:var(--primary);font-size:.69rem;min-height:42px;padding:7px 10px; }
 .meal-actions .icon-action { background:none; border:0; border-radius:7px; color:var(--muted); height:38px; width:38px; }
 .meal-actions .icon-action:hover,.meal-actions .icon-action.is-locked { background:var(--primary-soft); color:var(--primary); }
-.cook-control { align-items:center;background:var(--surface-2);border:0;color:var(--text);display:flex;flex:1;gap:9px;height:100%;justify-content:center;min-height:100%;padding:12px;text-align:left;transition:background .25s ease,color .25s ease;white-space:nowrap; }
+.cook-control { align-items:center;background:var(--surface-2);border:0;color:var(--text);display:flex;flex:1;gap:9px;justify-content:center;min-height:0;padding:12px;text-align:left;transition:background .25s ease,color .25s ease;white-space:nowrap; }
 .cook-control:not(:disabled):hover { background:var(--primary-soft);color:var(--primary); }
 .cook-control:disabled { cursor:default;opacity:1; }
 .cook-control.is-cooked { background:var(--primary-soft);color:var(--primary); }
@@ -936,7 +936,7 @@ button.tag { cursor: pointer; font: inherit; }
   .meal-body h3 { font-size:1rem; }
   .meal-macros { flex-wrap:wrap;margin:0; }
   .meal-actions { align-items:stretch;display:grid;grid-column:3;grid-row:1/3;grid-template-rows:repeat(2,minmax(0,1fr));padding:0; }
-  .meal-actions>.button { font-size:0;padding:7px; }
+  .meal-actions>.button { font-size:0;gap:0;padding:7px; }
   .meal-actions>.button svg { height:18px;width:18px; }
   .meal-actions>.button,.meal-actions .cook-control { align-items:center;display:flex;height:auto;justify-content:center;min-height:0;padding:0;width:100%; }
   .meal-actions .cook-control { gap:0; }
