@@ -52,7 +52,7 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0020_persistent_sessions (head)" in current.stdout
+    assert "0021_reconcile_flow (head)" in current.stdout
     assert len("0017_quarantine_urls") <= 32
     assert "recipe_publisher_tag" in _tables(database)
 
@@ -62,6 +62,22 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     assert _tables(database) == {"alembic_version"}
     _alembic(database, "upgrade", "head")
     assert "recipe_publisher_tag" in _tables(database)
+
+
+def test_upgrade_from_published_flow_table_revision_reconciles_branches(tmp_path):
+    database = tmp_path / "published-flow-migration.db"
+    _alembic(database, "upgrade", "0020_recipe_method_flow_tables")
+
+    assert "recipe_method_table_snapshot" in _tables(database)
+
+    _alembic(database, "upgrade", "head")
+
+    assert "recipe_method_table_snapshot" not in _tables(database)
+    with sqlite3.connect(database) as connection:
+        session_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(user_session)")
+        }
+    assert "remember_me" in session_columns
 
 
 def test_upgrade_from_0007_preserves_existing_recipe_and_marks_backfill(tmp_path):
