@@ -64,6 +64,15 @@ describe('WeekPage', () => {
     expect(screen.getByRole('link', { name: /Berry overnight oats/ })).toHaveAttribute('href', 'https://www.allrecipes.com/')
   })
 
+  it('keeps method and cooked controls together as two accessible rail targets', () => {
+    renderWeek()
+    const rail = screen.getAllByRole('group', { name: 'Recipe actions' })[0]
+
+    expect(within(rail).getByRole('link', { name: 'View method' })).toHaveAttribute('href', expect.stringContaining('/method?batch='))
+    expect(within(rail).getByRole('button', { name: 'Mark recipe cooked' })).toBeInTheDocument()
+    expect(rail.children).toHaveLength(2)
+  })
+
   it('reveals the optional cooked weight control after a recipe is cooked', async () => {
     const user = userEvent.setup()
     renderWeek()

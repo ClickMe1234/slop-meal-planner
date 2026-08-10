@@ -30,6 +30,8 @@ export interface Recipe {
   ingredients?: string[]
   publisherTags?: string[]
   matchedCategories?: string[]
+  methodAvailable?: boolean
+  methodStatus?: 'needs_review' | 'reviewed'
 }
 
 export interface PlannedMeal {

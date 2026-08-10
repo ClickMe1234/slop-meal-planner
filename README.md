@@ -2,7 +2,7 @@
 
 > A free, self-hosted meal planner for real households.
 
-Current release: **1.1.2**. See the [latest release notes](#changelog) or the
+Current release: **1.2.0**. See the [latest release notes](#changelog) or the
 [full changelog](CHANGELOG.md).
 
 ## About
@@ -89,6 +89,15 @@ Fuzzy matching of shopping list to pantry ingredients supported!
 ![Shopping list matching](docs/examples/shopping2.png)
 
 ## Changelog
+
+### 1.2.0 - 2026-08-08
+
+- Open an attributed written cooking method or concise ingredient-flow summary
+  from Discover, saved recipes, or a planned batch.
+- Scale the method to its planned servings, correct ingredient links and source
+  labels, and arrange cooking stages with touch, mouse, or keyboard controls.
+- Remember each user’s preferred method view, ingredient language, measurement
+  system, and dismissible editor tutorial.
 
 ### 1.1.2 - 2026-08-08
 
@@ -189,7 +198,7 @@ Compose Manager is required for the application container.
    passwords, setup tokens, API keys, and session cookies to on-path devices.
 4. In Unraid Apps, choose **Add Container** and use the exact values in
    [`deploy/unraid-template.xml`](deploy/unraid-template.xml):
-   `ghcr.io/clickme1234/slop-meal-planner:1.1.2` as Repository, `Bridge` as
+   `ghcr.io/clickme1234/slop-meal-planner:1.2.0` as Repository, `Bridge` as
    Network Type, `Shell` as the console shell, Privileged off, and `--init` as
    Extra Parameters. The Repository is a Docker image reference, not the GitHub
    source URL. Leave Post Arguments blank.
@@ -285,7 +294,14 @@ above.
 ### Recipes and discovery
 
 - Versioned custom recipes and URL-imported recipes with source provenance.
-  Publisher instructions are not copied into the application.
+  Publisher methods are fetched only when explicitly opened, retained with
+  source attribution, and stored as immutable recipe-version snapshots.
+- Written and concise cooking views with ingredient-linked quantities that
+  scale to a chosen serving count or the authoritative planned batch.
+- Deterministic method parsing into stages, actions, timing, temperature,
+  equipment, doneness cues, ingredient inputs, parallel work, and merge points.
+- A touch, mouse, and keyboard-accessible editor for correcting annotations,
+  grouping or separating cooking boxes, and authoring methods for custom recipes.
 - Recipe review for serving yield, ingredient quantities, units, ambiguous
   parsing, and planner readiness. User corrections are preserved across later
   processing.

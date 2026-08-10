@@ -1,4 +1,4 @@
-import { Check, ChefHat, ExternalLink, Filter, Link2, Search, Sparkles, X } from 'lucide-react'
+import { BookOpenText, Check, ChefHat, ExternalLink, Filter, Link2, Search, Sparkles, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -65,6 +65,7 @@ function reviewPayload(recipe: BackendRecipeDetail, mealTypes: RecipeMealType[])
     yield_servings: Number(recipe.yield_servings),
     meal_types: mealTypes,
     ingredients: recipe.ingredients.map(ingredient => ({
+      lineage_id: ingredient.lineage_id,
       original_text: ingredient.original_text,
       quantity: ingredient.quantity ?? null,
       unit: ingredient.unit ?? null,
@@ -277,7 +278,10 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
       {Boolean(recipe.publisherTags?.length) && <div className="recipe-publisher-tags" aria-label="Publisher categories">{recipe.publisherTags?.map(tag => <span key={tag}>{tag}</span>)}</div>}
       {nutrition ? <div className="nutrition-panel nutrition-panel--calculated"><div className="panel-label"><span><Sparkles size={14}/>{nutritionHeading} · per serving</span><Badge tone={planningBadge?.tone ?? 'green'}>{planningBadge?.label ?? 'Used after saving'}</Badge></div><NutritionStrip nutrition={nutrition} compact/></div> : <div className="nutrition-missing"><div><strong>{loadingNutrition ? `Loading nutrition from ${nutritionSource}` : `Nutrition from ${nutritionSource}`}</strong><span>{saved ? 'A complete per-serving set was not reported.' : loadingNutrition ? 'Reading the values reported on the recipe page…' : 'A complete per-serving set was not reported.'}</span></div></div>}
       {missingMealTypes && <div className="recipe-planning-note recipe-planning-note--warning" role="status"><strong>Not used for meal planning</strong><span>Add breakfast, lunch, dinner, snack or side so the planner knows where this recipe belongs.</span></div>}
-      <div className="recipe-actions">{saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{recipe.reviewCount ? 'Review ingredients' : missingMealTypes ? 'Add meal types' : 'Edit recipe'}</Link> : <Button data-recipe-save-id={recipe.id} disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}</div>
+      <div className="recipe-actions">
+        <Link to={saved ? `/recipes/${recipe.id}/method` : `/recipes/method-preview?url=${encodeURIComponent(recipe.sourceUrl)}`} className="button button--secondary recipe-method-button"><BookOpenText size={17}/>Method</Link>
+        {saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{recipe.reviewCount ? 'Review ingredients' : missingMealTypes ? 'Add meal types' : 'Edit recipe'}</Link> : <Button data-recipe-save-id={recipe.id} disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}
+      </div>
     </div>
   </Card></div>
 }
@@ -354,6 +358,8 @@ export function mapSavedRecipe(recipe: BackendRecipe, categoryLabels: Map<string
     mealKinds: mealKindLabels(recipe.meal_types),
     publisherTags: [...new Set([...categoryTags, ...rawTags])].slice(0, 4),
     matchedCategories: recipe.publisher_categories,
+    methodAvailable: recipe.method_available,
+    methodStatus: recipe.method_status,
   }
 }
 

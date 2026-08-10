@@ -105,6 +105,13 @@ recipe- and household-oriented rather than primarily a food diary.
 > supersedes the older calculated-only recommendations retained below as the
 > original research record; publisher per-100g values remain reference-only.
 
+> **Decision update — 8 August 2026:** cooking methods are fetched only after a
+> household user explicitly opens them, never during discovery search. The
+> private household instance retains attributed source wording as an immutable
+> recipe-version snapshot and derives a deterministic, editable summary graph.
+> This supersedes the earlier “do not store publisher instructions” notes kept
+> below as historical research context.
+
 ### 3.1 Confirmed product decisions as of 12 July 2026
 
 - This is a private personal/household application. It will not be a subscription
@@ -119,10 +126,11 @@ recipe- and household-oriented rather than primarily a food diary.
   is debounced and cancellable.
 - External results may initially show publisher-reported calories/macros. If none
   are present, the result offers a user-triggered `Calculate nutrition` action.
-- Imported publisher recipes store source metadata, yield, and ingredients, but
-  not copied cooking instructions. Cooking opens the original source page.
-- Custom recipes remain supported; how their optional instructions are handled is
-  still an explicit decision because they may not have an external source page.
+- Imported publisher recipes initially store source metadata, yield, and
+  ingredients. Cooking instructions are fetched and stored only when a user
+  explicitly opens the method, with attribution and a source link.
+- Custom recipes may be saved with written instructions and are immediately
+  given an editable method-summary draft.
 - Active cooking-time optimisation is deferred.
 - Budget limits and the larger budget concept are deferred.
 - Equipment restrictions are out of scope.
@@ -146,8 +154,8 @@ recipe- and household-oriented rather than primarily a food diary.
 - Ingredient-led discovery supports `must contain`, `prefer`, and `exclude`.
 - Remote search thumbnails are displayed from their source where workable and are
   not permanently cached initially.
-- Custom recipes may store optional user-authored instructions; publisher
-  instructions are not stored.
+- Custom and publisher recipes may store attributed written methods as immutable
+  recipe-version snapshots; publisher methods are acquired only on demand.
 - The private catalogue should grow through search and import rather than an
   automatic bulk seed of 100 recipes per publisher.
 - Pantry inventory is in scope. Shopping generation subtracts available pantry
@@ -327,7 +335,8 @@ Before any bulk seed of 100 recipes per publisher, even for the private instance
 - Confirm whether images may be cached, proxied, hot-linked, or only represented
   by a link.
 - Record attribution requirements.
-- Do not store publisher instructions; send the user to the original recipe page.
+- Fetch publisher instructions only after an explicit household action, retain
+  attribution and the original source link, and do not bulk-seed methods.
 
 A balanced seed catalogue may be more useful than a literal popularity list. It
 could be stratified by meal type, calories, diet, cuisine, difficulty, cooking
@@ -547,7 +556,8 @@ shopping items should remain distinct.
 | Entity | Purpose and representative fields |
 |---|---|
 | `recipe` | Stable identity, household/owner, visibility, canonical source, planner eligibility |
-| `recipe_version` | Immutable yield, ingredient set, reported times, metadata, source checksum, superseded version; publisher instructions are not stored |
+| `recipe_version` | Immutable yield, ingredient set, reported times, metadata, source checksum, superseded version, and optional method snapshot |
+| `recipe_method_snapshot` | Attributed source blocks, checksum, parser version, annotations, omissions, stages, actions, ingredient-lineage bindings, graph edges, confidence, coverage, review status, and household notes |
 | `recipe_source` | URL, publisher, attribution, rights basis, fetch policy |
 | `ingredient_group` | Sauce, filling, garnish, or other sub-section |
 | `recipe_ingredient` | Original text, amount min/max, unit, canonical food, note, preparation, optional flag, parse confidence |

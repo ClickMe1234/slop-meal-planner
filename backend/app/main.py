@@ -22,6 +22,7 @@ from .routes.household_routes import router as household_router
 from .routes.pantry_shopping_routes import router as pantry_shopping_router
 from .routes.planning_routes import router as planning_router
 from .routes.recipe_routes import router as recipe_router
+from .routes.recipe_method_routes import router as recipe_method_router
 from .routes.system_routes import router as system_router
 
 
@@ -36,7 +37,7 @@ def create_app() -> FastAPI:
     reset_login_security_state()
     app = FastAPI(
         title="Meal Planner API",
-        version=os.getenv("APP_VERSION", "1.1.2"),
+        version=os.getenv("APP_VERSION", "1.2.0"),
         docs_url="/api/docs" if settings.public_api_docs else None,
         openapi_url="/api/openapi.json" if settings.public_api_docs else None,
         lifespan=lifespan,
@@ -75,6 +76,7 @@ def create_app() -> FastAPI:
         household_router,
         food_router,
         recipe_router,
+        recipe_method_router,
         discovery_router,
         planning_router,
         pantry_shopping_router,

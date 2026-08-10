@@ -20,6 +20,7 @@ from ..models import (
 )
 from .pantry import reserve_plan_batches
 from .shopping import build_shopping_list
+from .recipe_methods import clone_method_snapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +72,14 @@ def clone_recipe_version_for_shopping(
             RecipeIngredient(
                 recipe_version_id=next_version.id,
                 **values,
+            )
+        )
+    if previous.method_snapshot is not None:
+        db.add(
+            clone_method_snapshot(
+                previous.method_snapshot,
+                recipe_version_id=next_version.id,
+                created_by_user_id=None,
             )
         )
     previous_calculation = db.scalar(

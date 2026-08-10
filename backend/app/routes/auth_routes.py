@@ -176,7 +176,14 @@ def update_me(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    context.user.ingredient_locale = payload.ingredient_locale.value
+    if payload.ingredient_locale is not None:
+        context.user.ingredient_locale = payload.ingredient_locale.value
+    if payload.method_view_preference is not None:
+        context.user.method_view_preference = payload.method_view_preference.value
+    if payload.measurement_system is not None:
+        context.user.measurement_system = payload.measurement_system.value
+    if payload.method_tutorial_version_seen is not None:
+        context.user.method_tutorial_version_seen = payload.method_tutorial_version_seen
     context.user.version += 1
     db.commit()
     db.refresh(context.user)

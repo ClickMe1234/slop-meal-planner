@@ -190,11 +190,14 @@ export const api = {
       member_id?: string
       must_change_password: boolean
       ingredient_locale: IngredientLocale
+  method_view_preference?: MethodViewPreference
+  measurement_system?: MeasurementSystem
+  method_tutorial_version_seen?: number
     }>('/auth/me'),
-  updateMe: (ingredientLocale: IngredientLocale) =>
+  updateMe: (preferences: IngredientLocale | UserPreferenceUpdate) =>
     request('/auth/me', {
       method: 'PATCH',
-      body: JSON.stringify({ ingredient_locale: ingredientLocale }),
+      body: JSON.stringify(typeof preferences === 'string' ? { ingredient_locale: preferences } : preferences),
     }),
   changePassword: (currentPassword: string, newPassword: string) =>
     request<void>('/auth/change-password', {
@@ -262,6 +265,19 @@ export const api = {
   recipeCategories: () => request<RecipeCategoryResponse>('/recipe-discovery/categories'),
   searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[], publisherCategories: string[] = [], publisherCategoryMatch: RecipeCategoryMatchMode = 'any') => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}&publisher_category_match=${publisherCategoryMatch}${publisherCategories.map((value) => `&publisher_category=${encodeURIComponent(value)}`).join('')}`),
   nutritionPreview: (url: string) => request<DiscoveryNutritionPreview>(`/recipe-discovery/nutrition-preview?url=${encodeURIComponent(url)}`),
+  methodPreview: (url: string) => request<BackendMethodView>('/recipe-discovery/method-previews', { method: 'POST', body: JSON.stringify({ url }) }),
+  getMethodPreview: (token: string) => request<BackendMethodView>(`/recipe-discovery/method-previews/${encodeURIComponent(token)}`),
+  saveMethodPreview: (token: string, mealTypes: BackendMealType[]) => request<BackendRecipeDetail>(`/recipe-discovery/method-previews/${encodeURIComponent(token)}/save`, { method: 'POST', body: JSON.stringify({ meal_types: mealTypes }) }),
+  getRecipeMethod: (recipeId: string, options: { batchId?: string; servings?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (options.batchId) params.set('batch_id', options.batchId)
+    if (options.servings) params.set('servings', String(options.servings))
+    return request<BackendMethodView>(`/recipes/${recipeId}/method${params.size ? `?${params}` : ''}`)
+  },
+  extractRecipeMethod: (recipeId: string, expectedVersion?: number) => request<BackendMethodView>(`/recipes/${recipeId}/method/extract`, { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) }),
+  saveRecipeMethod: (recipeId: string, payload: BackendMethodUpdate) => request<BackendMethodView>(`/recipes/${recipeId}/method`, { method: 'PUT', body: JSON.stringify(payload) }),
+  previewMethodRefresh: (recipeId: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/refresh-preview`, { method: 'POST' }),
+  applyMethodRefresh: (recipeId: string, expectedVersion: number, previewToken: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/refresh`, { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion, preview_token: previewToken }) }),
   startImport: (url: string) =>
     request<JobStatus>('/recipe-imports', {
       method: 'POST',
@@ -485,6 +501,15 @@ export const isDemoMode = import.meta.env.VITE_DEMO_MODE !== 'false'
 
 export type BackendMealType = 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'side'
 export type IngredientLocale = 'uk' | 'us'
+export type MethodViewPreference = 'summary' | 'written'
+export type MeasurementSystem = 'source' | 'metric' | 'us'
+
+export interface UserPreferenceUpdate {
+  ingredient_locale?: IngredientLocale
+  method_view_preference?: MethodViewPreference
+  measurement_system?: MeasurementSystem
+  method_tutorial_version_seen?: number
+}
 
 export interface BackendUsdaIntegration {
   configured: boolean
@@ -525,6 +550,8 @@ export interface BackendRecipe {
   publisher_tags?: Array<{ kind: string; label: string }>
   publisher_categories?: string[]
   publisher_metadata_status?: 'not_applicable' | 'pending' | 'refreshing' | 'ready' | 'failed'
+  method_available?: boolean
+  method_status?: 'needs_review' | 'reviewed'
 }
 
 export interface BackendRecipeDetail extends BackendRecipe {
@@ -533,6 +560,7 @@ export interface BackendRecipeDetail extends BackendRecipe {
   yield_servings?: number
   ingredients: Array<{
     id: string
+    lineage_id?: string
     original_text: string
     quantity?: number
     unit?: string
@@ -555,6 +583,155 @@ export interface BackendRecipeDetail extends BackendRecipe {
     shopping_list_id?: string
     cooked_batches_unchanged: number
   }
+}
+
+export type MethodSemanticKind = 'ingredient' | 'action' | 'time' | 'temperature' | 'equipment' | 'cue'
+
+export interface BackendMethodSourceBlock {
+  id: string
+  position: number
+  heading?: string
+  text: string
+}
+
+export interface BackendMethodAnnotation {
+  id: string
+  block_id: string
+  start: number
+  end: number
+  kind: MethodSemanticKind
+  origin: 'automatic' | 'user'
+  confidence: number
+  accepted: boolean
+  ingredient_lineage_id?: string
+  normalized_value?: Record<string, unknown>
+}
+
+export interface BackendMethodOmission {
+  id: string
+  block_id: string
+  start: number
+  end: number
+  reason: string
+  accepted: boolean
+}
+
+export interface BackendMethodStage {
+  id: string
+  title: string
+  position: number
+}
+
+export interface BackendMethodAction {
+  id: string
+  stage_id: string
+  position: number
+  text: string
+  source_annotation_ids: string[]
+  duration_minutes?: number
+  temperature_value?: number
+  temperature_unit?: 'c' | 'f'
+  equipment: string[]
+  cue?: string
+  confidence: number
+}
+
+export interface BackendMethodBinding {
+  id: string
+  action_id: string
+  ingredient_lineage_id: string
+  annotation_id?: string
+  portion_mode: 'all' | 'fraction' | 'absolute' | 'remainder' | 'unspecified'
+  portion_value?: number
+  portion_unit?: string
+  confidence: number
+  accepted: boolean
+}
+
+export interface BackendMethodEdge {
+  id: string
+  from_action_id: string
+  to_action_id: string
+  kind: 'sequence' | 'merge'
+  confidence: number
+}
+
+export interface BackendMethodDocument {
+  schema_version: 1
+  annotations: BackendMethodAnnotation[]
+  omissions: BackendMethodOmission[]
+  stages: BackendMethodStage[]
+  actions: BackendMethodAction[]
+  ingredient_bindings: BackendMethodBinding[]
+  edges: BackendMethodEdge[]
+}
+
+export interface BackendMethodIngredient {
+  id: string
+  lineage_id: string
+  name: string
+  quantity?: number
+  quantity_text?: string
+  unit?: string
+  display: string
+  optional: boolean
+  preparation?: string
+}
+
+export interface BackendRenderedMethodBlock extends BackendMethodSourceBlock {
+  segments: Array<{
+    kind: 'text' | 'ingredient'
+    text: string
+    annotation_id?: string
+    ingredient_lineage_id?: string
+    quantity_label?: string
+  }>
+}
+
+export interface BackendMethodView {
+  recipe_id?: string
+  recipe_version_id?: string
+  recipe_version_number?: number
+  recipe_version?: number
+  title: string
+  publisher?: string
+  source_url?: string
+  preview_token?: string
+  method_status: 'needs_review' | 'reviewed'
+  source_kind: string
+  source_blocks: BackendMethodSourceBlock[]
+  method: BackendMethodDocument
+  coverage: { total_clauses: number; represented: number; omitted: number; unreviewed: number }
+  confidence?: number
+  household_notes?: string
+  ingredients: BackendMethodIngredient[]
+  rendered_blocks: BackendRenderedMethodBlock[]
+  base_servings?: number
+  requested_servings?: number
+  scaling_available: boolean
+  batch_context?: {
+    batch_id: string
+    servings: number
+    planned_cook_date: string
+    cooked_at?: string
+    occurrences: Array<{ date: string; meal_type: string }>
+  }
+  refresh_diff?: {
+    changed: boolean
+    old_checksum?: string
+    new_checksum: string
+    old_block_count: number
+    new_block_count: number
+  }
+}
+
+export interface BackendMethodUpdate {
+  expected_version: number
+  method: BackendMethodDocument
+  household_notes?: string
+  mark_reviewed: boolean
+  source_kind?: 'custom' | 'publisher' | 'manual_paste'
+  source_blocks?: BackendMethodSourceBlock[]
 }
 
 export interface BackendFood {

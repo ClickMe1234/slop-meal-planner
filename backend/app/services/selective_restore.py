@@ -52,6 +52,7 @@ from ..models import (
     Recipe,
     RecipeIngredient,
     RecipeMealType,
+    RecipeMethodSnapshot,
     RecipePublisherTag,
     RecipeVersion,
     Restriction,
@@ -123,6 +124,7 @@ MODEL_BY_TABLE = {
         RecipePublisherTag,
         RecipeVersion,
         RecipeIngredient,
+        RecipeMethodSnapshot,
         FoodRecord,
         FoodNutrient,
         SavedFood,
@@ -432,6 +434,7 @@ def _load_source_bundle(db: Session, source_household_id: str | None) -> SourceB
         "recipe_publisher_tag": [],
         "recipe_version": [],
         "recipe_ingredient": [],
+        "recipe_method_snapshot": [],
         "nutrition_calculation": [],
         "food_record": [],
         "food_nutrient": [],
@@ -460,6 +463,7 @@ def _load_source_bundle(db: Session, source_household_id: str | None) -> SourceB
     tables["recipe_version"] = _rows(db, RecipeVersion, RecipeVersion.recipe_id.in_(recipe_ids)) if recipe_ids else []
     version_ids = _id_set(tables["recipe_version"])
     tables["recipe_ingredient"] = _rows(db, RecipeIngredient, RecipeIngredient.recipe_version_id.in_(version_ids)) if version_ids else []
+    tables["recipe_method_snapshot"] = _rows(db, RecipeMethodSnapshot, RecipeMethodSnapshot.recipe_version_id.in_(version_ids)) if version_ids else []
     tables["nutrition_calculation"] = _rows(db, NutritionCalculation, NutritionCalculation.recipe_version_id.in_(version_ids)) if version_ids else []
 
     plan_ids = _id_set(tables["meal_plan"])
@@ -517,6 +521,7 @@ def _counts(bundle: SourceBundle) -> dict[str, dict[str, int]]:
             "recipes": len(tables["recipe"]),
             "versions": len(tables["recipe_version"]),
             "ingredients": len(tables["recipe_ingredient"]),
+            "methods": len(tables["recipe_method_snapshot"]),
         },
         "ingredients": {
             "food_records": len(tables["food_record"]),
@@ -575,7 +580,7 @@ def _component_tables(components: set[str], tables: dict[str, list[dict[str, Any
     if "users" in components:
         include.add("app_user")
     if "recipes" in components:
-        include.update({"recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "nutrition_calculation", "food_record", "food_nutrient"})
+        include.update({"recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "recipe_method_snapshot", "nutrition_calculation", "food_record", "food_nutrient"})
     if "ingredients" in components:
         include.update({"food_record", "food_nutrient", "saved_food", "food_alias", "ingredient_name_override", "ingredient_name_equivalent"})
     if "pantry" in components:
@@ -585,7 +590,7 @@ def _component_tables(components: set[str], tables: dict[str, list[dict[str, Any
     if "plans" in components:
         include.update({
             "meal_plan", "meal_batch", "meal_occurrence", "portion_allocation", "pantry_reservation",
-            "recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "nutrition_calculation",
+            "recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "recipe_method_snapshot", "nutrition_calculation",
             "household_member", "food_record", "food_nutrient",
         })
     return {table for table in include if tables.get(table)}
@@ -622,6 +627,8 @@ def _mapped_data(data: dict[str, Any], id_map: dict[str, dict[str, str]]) -> dic
         "pantry_lot_id": "pantry_lot",
         "meal_batch_id": "meal_batch",
         "reviewed_by": "app_user",
+        "created_by_user_id": "app_user",
+        "reviewed_by_user_id": "app_user",
     }
     for foreign_key, map_name in foreign_keys.items():
         mapping = id_map.get(map_name, {})
@@ -636,7 +643,7 @@ def _convert_model_values(model: Any, data: dict[str, Any]) -> dict[str, Any]:
         value = result.get(column.name)
         if isinstance(value, str) and column.name in NUMERIC_COLUMNS:
             result[column.name] = Decimal(value)
-        elif isinstance(value, str) and column.name in {"created_at", "updated_at", "expires_at", "accepted_at", "archived_at", "publisher_metadata_refreshed_at", "cooked_at", "calculated_at"}:
+        elif isinstance(value, str) and column.name in {"created_at", "updated_at", "expires_at", "accepted_at", "archived_at", "publisher_metadata_refreshed_at", "cooked_at", "calculated_at", "reviewed_at"}:
             result[column.name] = datetime.fromisoformat(value)
         elif isinstance(value, str) and column.name in {"start_date", "end_date", "planned_cook_date", "meal_date", "expires_on"}:
             result[column.name] = date.fromisoformat(value)
@@ -672,6 +679,8 @@ def _find_existing(db: Session, model: Any, data: dict[str, Any], maps: dict[str
         unique_filters = [model.recipe_id == data["recipe_id"], model.kind == data["kind"], model.normalised_value == data["normalised_value"]]
     elif table == "recipe_version":
         unique_filters = [model.recipe_id == data["recipe_id"], model.version_number == data["version_number"]]
+    elif table == "recipe_method_snapshot":
+        unique_filters = [model.recipe_version_id == data["recipe_version_id"]]
     elif table == "meal_allocation":
         unique_filters = [model.target_profile_id == data["target_profile_id"], model.meal_type == data["meal_type"]]
     elif table == "target_profile":
@@ -706,6 +715,9 @@ def _insert_rows(db: Session, model: Any, rows: list[dict[str, Any]], maps: dict
             continue
         if table == "meal_batch":
             data["parent_batch_id"] = None
+        if table == "recipe_method_snapshot":
+            data["created_by_user_id"] = None
+            data["reviewed_by_user_id"] = None
         if table == "recipe":
             for field in ("source_url", "image_url"):
                 try:
@@ -766,6 +778,7 @@ def restore_archive(
                 "recipe_ingredient",
                 "nutrition_calculation",
                 "app_user",
+                "recipe_method_snapshot",
                 "saved_food",
                 "food_alias",
                 "meal_plan",

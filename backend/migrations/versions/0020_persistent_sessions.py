@@ -1,15 +1,15 @@
 """Track whether login sessions should persist and renew.
 
-Revision ID: 0019_persistent_sessions
-Revises: 0018_shopping_recipe_links
+Revision ID: 0020_persistent_sessions
+Revises: 0019_recipe_methods
 """
 
 import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0019_persistent_sessions"
-down_revision = "0018_shopping_recipe_links"
+revision = "0020_persistent_sessions"
+down_revision = "0019_recipe_methods"
 branch_labels = None
 depends_on = None
 
