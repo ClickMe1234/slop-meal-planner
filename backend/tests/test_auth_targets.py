@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models import UserSession
+from app.models import User, UserSession
 
 
 def test_owner_setup_login_and_calorie_target(client, owner):
@@ -46,6 +46,28 @@ def test_login_username_is_trimmed_and_case_insensitive(client, owner):
     )
     assert response.status_code == 200, response.text
     assert response.json()["user"]["username"] == "owner"
+
+
+def test_login_normalizes_retired_table_method_preference(
+    client, owner, session_factory
+):
+    client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+    )
+    with session_factory() as db:
+        user = db.scalar(select(User).where(User.username == "owner"))
+        assert user is not None
+        user.method_view_preference = "table"
+        db.commit()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": "owner", "password": "correct-horse-battery-staple"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["user"]["method_view_preference"] == "summary"
 
 
 def test_login_without_remember_me_uses_a_browser_session_cookie(

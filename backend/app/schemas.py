@@ -59,6 +59,15 @@ class UserOut(APIModel):
     method_tutorial_version_seen: int
     member_id: str | None
 
+    @field_validator("method_view_preference", mode="before")
+    @classmethod
+    def normalize_retired_table_preference(cls, value):
+        # A dev image briefly persisted "table" before that view was removed.
+        # Keep authentication usable while the data migration is being applied.
+        if value == "table":
+            return MethodViewPreference.SUMMARY
+        return value
+
 
 class UserPreferencesUpdate(APIModel):
     ingredient_locale: IngredientLocale | None = None
