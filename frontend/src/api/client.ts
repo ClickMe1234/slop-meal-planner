@@ -156,7 +156,7 @@ export const api = {
     sessionStorage.setItem(csrfStorageKey, csrfToken)
     return result
   },
-  login: async (username: string, password: string) => {
+  login: async (username: string, password: string, rememberMe = true) => {
     const result = await request<{
       user: {
         id: string
@@ -167,7 +167,7 @@ export const api = {
       csrf_token: string
     }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, remember_me: rememberMe }),
     })
     csrfToken = result.csrf_token
     sessionStorage.setItem(csrfStorageKey, csrfToken)

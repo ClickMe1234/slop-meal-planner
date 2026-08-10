@@ -33,6 +33,7 @@ class SetupRequest(APIModel):
 class LoginRequest(APIModel):
     username: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=1, max_length=200)
+    remember_me: bool = True
 
 
 class UserOut(APIModel):

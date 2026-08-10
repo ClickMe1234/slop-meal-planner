@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict, deque
 import secrets
 import threading
@@ -67,7 +67,7 @@ def _rate_limit_login(source: str, username: str) -> None:
             _login_attempts[key].append(now)
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+def _set_session_cookie(response: Response, token: str, *, persistent: bool = True) -> None:
     settings = get_settings()
     response.set_cookie(
         "mp_session",
@@ -75,9 +75,18 @@ def _set_session_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=settings.cookie_secure,
         samesite="lax",
-        max_age=settings.session_days * 86400,
+        max_age=settings.session_days * 86400 if persistent else None,
         path="/",
     )
+
+
+def _renew_persistent_session(response: Response, context: AuthContext, db: Session) -> None:
+    if not context.session.remember_me:
+        return
+    settings = get_settings()
+    context.session.expires_at = datetime.now(timezone.utc) + timedelta(days=settings.session_days)
+    db.commit()
+    _set_session_cookie(response, context.token)
 
 
 @router.get("/setup-status")
@@ -134,9 +143,9 @@ def login(
         _password_verifiers.release()
     if user is None or not user.active or not password_valid:
         raise DomainError("INVALID_CREDENTIALS", "Username or password is incorrect", 401)
-    raw_token, csrf = create_session(db, user)
+    raw_token, csrf = create_session(db, user, remember_me=payload.remember_me)
     db.commit()
-    _set_session_cookie(response, raw_token)
+    _set_session_cookie(response, raw_token, persistent=payload.remember_me)
     return AuthOut(user=UserOut.model_validate(user), csrf_token=csrf)
 
 
@@ -152,7 +161,12 @@ def logout(
 
 
 @router.get("/me", response_model=UserOut)
-def me(context: AuthContext = Depends(get_auth_context)):
+def me(
+    response: Response,
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    _renew_persistent_session(response, context, db)
     return context.user
 
 

@@ -13,6 +13,7 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [username, setUsername] = useState(isDemoMode ? 'zach' : '')
   const [password, setPassword] = useState(isDemoMode ? 'password' : '')
+  const [rememberMe, setRememberMe] = useState(true)
   const [error, setError] = useState('')
   useEffect(() => {
     if (!isDemoMode) {
@@ -26,7 +27,7 @@ export function LoginPage() {
         await new Promise(resolve => window.setTimeout(resolve, 350))
         localStorage.setItem('slop-demo-session', 'active')
       } else {
-        const result = await api.login(username.trim(), password)
+        const result = await api.login(username.trim(), password, rememberMe)
         queryClient.clear()
         await clearOfflineShoppingData()
         if (result.user.must_change_password) { navigate('/change-password'); return }
@@ -44,7 +45,7 @@ export function LoginPage() {
       <div><p className="eyebrow">Your week, made easier</p><h1>Plan once.<br/>Eat well all week.</h1><p>Recipes you trust, nutrition calculated consistently and one shopping list for the household.</p></div>
       <blockquote>“Dinner is sorted before the week even begins.”</blockquote>
     </section>
-    <section className="auth-panel"><Card className="auth-card"><div className="auth-heading"><div className="mobile-auth-mark"><Heart fill="currentColor" /></div><p className="eyebrow">Welcome home</p><h2>Sign in to your household</h2><p>Your meal plan is waiting.</p></div><form onSubmit={submit} className="form-stack"><label>Username<input required value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" /></label><label>Password<input required type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" /></label>{error && <p role="alert" className="field-error">{error}</p>}<div className="form-inline"><label className="check-label"><input type="checkbox" defaultChecked /> Keep me signed in</label><button className="text-button" type="button">Need help?</button></div><Button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}<ArrowRight size={18} /></Button></form><div className="secure-note"><ShieldCheck size={17} /><span>Private to your home network</span></div></Card></section>
+    <section className="auth-panel"><Card className="auth-card"><div className="auth-heading"><div className="mobile-auth-mark"><Heart fill="currentColor" /></div><p className="eyebrow">Welcome home</p><h2>Sign in to your household</h2><p>Your meal plan is waiting.</p></div><form onSubmit={submit} className="form-stack"><label>Username<input required value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" /></label><label>Password<input required type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" /></label>{error && <p role="alert" className="field-error">{error}</p>}<div className="form-inline"><label className="check-label"><input type="checkbox" checked={rememberMe} onChange={event => setRememberMe(event.target.checked)} /> Keep me signed in</label><button className="text-button" type="button">Need help?</button></div><Button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}<ArrowRight size={18} /></Button></form><div className="secure-note"><ShieldCheck size={17} /><span>Private to your home network</span></div></Card></section>
   </div>
 }
 
