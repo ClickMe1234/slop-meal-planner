@@ -52,7 +52,7 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0021_reconcile_flow (head)" in current.stdout
+    assert "0022_normalize_method_view (head)" in current.stdout
     assert len("0017_quarantine_urls") <= 32
     assert "recipe_publisher_tag" in _tables(database)
 
@@ -70,6 +70,31 @@ def test_upgrade_from_published_flow_table_revision_reconciles_branches(tmp_path
 
     assert "recipe_method_table_snapshot" in _tables(database)
 
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO household
+                (id, name, timezone, created_at, updated_at, version)
+            VALUES
+                ('legacy-household', 'Legacy household', 'Europe/London',
+                 '2026-08-09T00:00:00+00:00', '2026-08-09T00:00:00+00:00', 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO app_user
+                (id, household_id, username, password_hash, role, active,
+                 must_change_password, ingredient_locale, method_view_preference,
+                 measurement_system, method_tutorial_version_seen, member_id,
+                 created_at, updated_at, version)
+            VALUES
+                ('legacy-user', 'legacy-household', 'legacy', 'unused', 'owner', 1,
+                 0, 'uk', 'table', 'source', 0, NULL,
+                 '2026-08-09T00:00:00+00:00', '2026-08-09T00:00:00+00:00', 1)
+            """
+        )
+        connection.commit()
+
     _alembic(database, "upgrade", "head")
 
     assert "recipe_method_table_snapshot" not in _tables(database)
@@ -77,7 +102,11 @@ def test_upgrade_from_published_flow_table_revision_reconciles_branches(tmp_path
         session_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(user_session)")
         }
+        method_view_preference = connection.execute(
+            "SELECT method_view_preference FROM app_user WHERE id = 'legacy-user'"
+        ).fetchone()[0]
     assert "remember_me" in session_columns
+    assert method_view_preference == "summary"
 
 
 def test_upgrade_from_0007_preserves_existing_recipe_and_marks_backfill(tmp_path):
