@@ -3,6 +3,7 @@ import {
   Check,
   Clipboard,
   Download,
+  Link2,
   ListChecks,
   PackageOpen,
   Pencil,
@@ -754,14 +755,21 @@ export function ShoppingPage() {
                 </span>
                 {item.manual && <Badge>Manual</Badge>}
                 {mutation?.status === 'pending' && <Badge tone="warning">Name pending</Badge>}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="shopping-name-edit"
-                  disabled={mutation?.status === 'conflict'}
-                  aria-label={`Edit ${item.name}`}
-                  onClick={() => startNameEdit(item)}
-                ><Pencil size={16}/></Button>
+                <div className="shopping-row-actions">
+                  {Boolean(item.sourceCount) && online && listId && <Link
+                    className="button button--ghost shopping-combine-link"
+                    to={`/shopping/${listId}/ingredient-change?mode=combine&items=${item.id}`}
+                    aria-label={`Combine ${item.name} with another item`}
+                  ><Link2 size={15}/><span>Combine</span></Link>}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="shopping-name-edit"
+                    disabled={mutation?.status === 'conflict'}
+                    aria-label={`Edit ${item.name}`}
+                    onClick={() => startNameEdit(item)}
+                  ><Pencil size={16}/></Button>
+                </div>
               </div>
               {confirmedPantryMatch && <div className="shopping-pantry-linked" role="status"><Check/><div><strong>Matched to pantry: {confirmedPantryMatch.displayName}</strong><p>{confirmedPantryMatch.usableDisplay} currently available · {confirmedPantryMatch.fuzzy ? `“${item.name}” was confirmed as a fuzzy match` : 'Ingredient match confirmed'}</p></div><Badge tone="green">{confirmedPantryMatch.fuzzy ? 'Fuzzy match' : 'Matched'}</Badge><Button type="button" variant="ghost" disabled={!canReviewPantry || pantryMatchSavingId === item.id} onClick={() => undoPantryMatch(item)}>{pantryMatchSavingId === item.id ? 'Undoing…' : canReviewPantry ? 'Undo match' : 'Reconnect to undo'}</Button></div>}
               {pantryMatch && !pantryConflict && <div className="shopping-pantry-match" role="status"><PackageOpen/><div><strong>Possible pantry match</strong><p>Is your pantry item <b>{pantryMatch.displayName}</b> ({pantryMatch.usableDisplay}) the same ingredient as <b>{item.name}</b> on this list?</p><small>Your choice is remembered for future shopping lists.</small></div><Badge tone="green">Suggested</Badge><div className="shopping-pantry-match-actions"><Button type="button" variant="secondary" disabled={!canReviewPantry || pantryMatchSavingId === item.id} onClick={() => confirmPantryMatch(item)}>{pantryMatchSavingId === item.id ? 'Saving…' : canReviewPantry ? 'Yes, match these' : 'Reconnect to decide'}</Button><Button type="button" variant="ghost" disabled={!canReviewPantry || pantryMatchSavingId === item.id} onClick={() => rejectPantryMatch(item)}>Not the same</Button></div></div>}
