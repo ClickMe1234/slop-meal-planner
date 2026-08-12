@@ -8,7 +8,18 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 
 from .discovery.errors import InvalidUrlError
 from .discovery.urls import canonicalize_url
-from .models import IngredientLocale, JobStatus, MealType, PlanStatus, RecipeEligibility, RecipeTag, TargetMode, UserRole
+from .models import (
+    IngredientLocale,
+    JobStatus,
+    MeasurementSystem,
+    MealType,
+    MethodViewPreference,
+    PlanStatus,
+    RecipeEligibility,
+    RecipeTag,
+    TargetMode,
+    UserRole,
+)
 
 MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
 BoundedIdentifier = Annotated[str, StringConstraints(min_length=1, max_length=80)]
@@ -33,6 +44,7 @@ class SetupRequest(APIModel):
 class LoginRequest(APIModel):
     username: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=1, max_length=200)
+    remember_me: bool = True
 
 
 class UserOut(APIModel):
@@ -42,11 +54,32 @@ class UserOut(APIModel):
     active: bool
     must_change_password: bool
     ingredient_locale: IngredientLocale
+    method_view_preference: MethodViewPreference
+    measurement_system: MeasurementSystem
+    method_tutorial_version_seen: int
     member_id: str | None
+
+    @field_validator("method_view_preference", mode="before")
+    @classmethod
+    def normalize_retired_table_preference(cls, value):
+        # A dev image briefly persisted "table" before that view was removed.
+        # Keep authentication usable while the data migration is being applied.
+        if value == "table":
+            return MethodViewPreference.SUMMARY
+        return value
 
 
 class UserPreferencesUpdate(APIModel):
-    ingredient_locale: IngredientLocale
+    ingredient_locale: IngredientLocale | None = None
+    method_view_preference: MethodViewPreference | None = None
+    measurement_system: MeasurementSystem | None = None
+    method_tutorial_version_seen: int | None = Field(default=None, ge=0, le=1000)
+
+    @model_validator(mode="after")
+    def require_preference(self):
+        if not self.model_fields_set:
+            raise ValueError("at least one preference is required")
+        return self
 
 
 class AuthOut(APIModel):
@@ -191,6 +224,7 @@ class RestrictionIn(APIModel):
 
 
 class RecipeIngredientIn(APIModel):
+    lineage_id: str | None = Field(default=None, min_length=36, max_length=36)
     original_text: str = Field(min_length=1, max_length=1000)
     quantity: Decimal | None = Field(default=None, ge=0)
     unit: str | None = Field(default=None, max_length=80)
@@ -236,8 +270,6 @@ class RecipeCreate(APIModel):
 
     @model_validator(mode="after")
     def custom_instruction_policy(self):
-        if self.source_type != "custom" and self.custom_instructions:
-            raise ValueError("publisher cooking instructions are not stored")
         if self.source_type == "url" and not self.source_url:
             raise ValueError("source_url is required for URL recipes")
         if len(set(self.meal_types)) != len(self.meal_types):
@@ -283,6 +315,8 @@ class RecipeSummary(APIModel):
     publisher_tags: list[PublisherTagOut] = Field(default_factory=list)
     publisher_categories: list[str] = Field(default_factory=list)
     publisher_metadata_status: str = "not_applicable"
+    method_available: bool = False
+    method_status: Literal["needs_review", "reviewed"] | None = None
 
 
 class RecipePlanSyncOut(APIModel):
@@ -299,6 +333,186 @@ class RecipeDetail(RecipeSummary):
     custom_instructions: str | None
     ingredients: list[dict[str, Any]]
     plan_sync: RecipePlanSyncOut | None = None
+
+
+class MethodSourceBlock(APIModel):
+    id: str = Field(min_length=1, max_length=80)
+    position: int = Field(ge=0, le=10_000)
+    heading: str | None = Field(default=None, max_length=300)
+    text: str = Field(min_length=1, max_length=20_000)
+
+
+class MethodAnnotation(APIModel):
+    id: str = Field(min_length=1, max_length=80)
+    block_id: str = Field(min_length=1, max_length=80)
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+    kind: Literal["ingredient", "action", "time", "temperature", "equipment", "cue"]
+    origin: Literal["automatic", "user"] = "automatic"
+    confidence: Decimal = Field(default=Decimal("1"), ge=0, le=1)
+    accepted: bool = False
+    ingredient_lineage_id: str | None = None
+    normalized_value: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        if self.end <= self.start:
+            raise ValueError("annotation end must be after start")
+        return self
+
+
+class MethodOmission(APIModel):
+    id: str = Field(min_length=1, max_length=80)
+    block_id: str = Field(min_length=1, max_length=80)
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=300)
+    accepted: bool = False
+
+
+class MethodStage(APIModel):
+    id: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=160)
+    position: int = Field(ge=0, le=10_000)
+
+
+class MethodAction(APIModel):
+    id: str = Field(min_length=1, max_length=80)
+    stage_id: str = Field(min_length=1, max_length=80)
+    position: int = Field(ge=0, le=10_000)
+    text: str = Field(min_length=1, max_length=500)
+    source_annotation_ids: list[str] = Field(default_factory=list, max_length=100)
+    duration_minutes: Decimal | None = Field(default=None, ge=0, le=100_000)
+    temperature_value: Decimal | None = Field(default=None, ge=-273, le=2000)
+    temperature_unit: Literal["c", "f"] | None = None
+    equipment: list[str] = Field(default_factory=list, max_length=30)
+    cue: str | None = Field(default=None, max_length=300)
+    confidence: Decimal = Field(default=Decimal("1"), ge=0, le=1)
+
+
+class MethodIngredientBinding(APIModel):
+    id: str = Field(min_length=1, max_length=80)
+    action_id: str = Field(min_length=1, max_length=80)
+    ingredient_lineage_id: str
+    annotation_id: str | None = None
+    portion_mode: Literal["all", "fraction", "absolute", "remainder", "unspecified"] = "unspecified"
+    portion_value: Decimal | None = Field(default=None, ge=0)
+    portion_unit: str | None = Field(default=None, max_length=40)
+    confidence: Decimal = Field(default=Decimal("1"), ge=0, le=1)
+    accepted: bool = False
+
+    @model_validator(mode="after")
+    def validate_portion(self):
+        if self.portion_mode in {"fraction", "absolute"} and self.portion_value is None:
+            raise ValueError("portion_value is required for fraction and absolute bindings")
+        if self.portion_mode == "fraction" and self.portion_value is not None and self.portion_value > 1:
+            raise ValueError("fraction portions cannot exceed one")
+        return self
+
+
+class MethodEdge(APIModel):
+    id: str = Field(min_length=1, max_length=80)
+    from_action_id: str = Field(min_length=1, max_length=80)
+    to_action_id: str = Field(min_length=1, max_length=80)
+    kind: Literal["sequence", "merge"] = "sequence"
+    confidence: Decimal = Field(default=Decimal("1"), ge=0, le=1)
+
+
+class MethodDocument(APIModel):
+    schema_version: Literal[1] = 1
+    annotations: list[MethodAnnotation] = Field(default_factory=list, max_length=5000)
+    omissions: list[MethodOmission] = Field(default_factory=list, max_length=2000)
+    stages: list[MethodStage] = Field(default_factory=list, max_length=200)
+    actions: list[MethodAction] = Field(default_factory=list, max_length=2000)
+    ingredient_bindings: list[MethodIngredientBinding] = Field(default_factory=list, max_length=5000)
+    edges: list[MethodEdge] = Field(default_factory=list, max_length=5000)
+
+    @model_validator(mode="after")
+    def validate_graph(self):
+        collections = {
+            "annotation": [item.id for item in self.annotations],
+            "stage": [item.id for item in self.stages],
+            "action": [item.id for item in self.actions],
+            "binding": [item.id for item in self.ingredient_bindings],
+            "edge": [item.id for item in self.edges],
+            "omission": [item.id for item in self.omissions],
+        }
+        for label, identifiers in collections.items():
+            if len(identifiers) != len(set(identifiers)):
+                raise ValueError(f"{label} identifiers must be unique")
+        stage_ids = set(collections["stage"])
+        action_ids = set(collections["action"])
+        annotation_ids = set(collections["annotation"])
+        if any(action.stage_id not in stage_ids for action in self.actions):
+            raise ValueError("every action must reference an existing stage")
+        if any(set(action.source_annotation_ids) - annotation_ids for action in self.actions):
+            raise ValueError("action source annotations must exist")
+        if any(binding.action_id not in action_ids for binding in self.ingredient_bindings):
+            raise ValueError("ingredient bindings must reference an existing action")
+        if any(binding.annotation_id and binding.annotation_id not in annotation_ids for binding in self.ingredient_bindings):
+            raise ValueError("ingredient binding annotations must exist")
+        if any(edge.from_action_id not in action_ids or edge.to_action_id not in action_ids for edge in self.edges):
+            raise ValueError("method edges must reference existing actions")
+        if any(edge.from_action_id == edge.to_action_id for edge in self.edges):
+            raise ValueError("method edges cannot connect an action to itself")
+        return self
+
+
+class MethodPreviewCreate(APIModel):
+    url: str = Field(min_length=1, max_length=4096)
+
+    @field_validator("url")
+    @classmethod
+    def canonicalize_preview_url(cls, value: str) -> str:
+        try:
+            return canonicalize_url(value)
+        except InvalidUrlError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class MethodPreviewSave(APIModel):
+    meal_types: list[RecipeTag] = Field(default_factory=list, max_length=20)
+
+
+class MethodExtractRequest(APIModel):
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class MethodUpdate(VersionedUpdate):
+    method: MethodDocument
+    household_notes: str | None = Field(default=None, max_length=20_000)
+    mark_reviewed: bool = False
+    source_kind: Literal["custom", "publisher", "manual_paste"] | None = None
+    source_blocks: list[MethodSourceBlock] | None = Field(default=None, min_length=1, max_length=1000)
+
+
+class MethodRefreshApply(VersionedUpdate):
+    preview_token: str = Field(min_length=20, max_length=200)
+
+
+class MethodViewOut(APIModel):
+    recipe_id: str | None = None
+    recipe_version_id: str | None = None
+    recipe_version_number: int | None = None
+    recipe_version: int | None = None
+    title: str
+    publisher: str | None = None
+    source_url: str | None = None
+    preview_token: str | None = None
+    method_status: Literal["needs_review", "reviewed"]
+    source_kind: str
+    source_blocks: list[MethodSourceBlock]
+    method: MethodDocument
+    coverage: dict[str, int]
+    confidence: Decimal | None = None
+    household_notes: str | None = None
+    ingredients: list[dict[str, Any]]
+    rendered_blocks: list[dict[str, Any]]
+    base_servings: Decimal | None = None
+    requested_servings: Decimal | None = None
+    scaling_available: bool
+    batch_context: dict[str, Any] | None = None
+    refresh_diff: dict[str, Any] | None = None
 
 
 class FoodNutrientIn(APIModel):

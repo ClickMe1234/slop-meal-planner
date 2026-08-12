@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -51,7 +52,7 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0018_shopping_recipe_links (head)" in current.stdout
+    assert "0022_normalize_method_view (head)" in current.stdout
     assert len("0017_quarantine_urls") <= 32
     assert "recipe_publisher_tag" in _tables(database)
 
@@ -61,6 +62,51 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     assert _tables(database) == {"alembic_version"}
     _alembic(database, "upgrade", "head")
     assert "recipe_publisher_tag" in _tables(database)
+
+
+def test_upgrade_from_published_flow_table_revision_reconciles_branches(tmp_path):
+    database = tmp_path / "published-flow-migration.db"
+    _alembic(database, "upgrade", "0020_recipe_method_flow_tables")
+
+    assert "recipe_method_table_snapshot" in _tables(database)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO household
+                (id, name, timezone, created_at, updated_at, version)
+            VALUES
+                ('legacy-household', 'Legacy household', 'Europe/London',
+                 '2026-08-09T00:00:00+00:00', '2026-08-09T00:00:00+00:00', 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO app_user
+                (id, household_id, username, password_hash, role, active,
+                 must_change_password, ingredient_locale, method_view_preference,
+                 measurement_system, method_tutorial_version_seen, member_id,
+                 created_at, updated_at, version)
+            VALUES
+                ('legacy-user', 'legacy-household', 'legacy', 'unused', 'owner', 1,
+                 0, 'uk', 'table', 'source', 0, NULL,
+                 '2026-08-09T00:00:00+00:00', '2026-08-09T00:00:00+00:00', 1)
+            """
+        )
+        connection.commit()
+
+    _alembic(database, "upgrade", "head")
+
+    assert "recipe_method_table_snapshot" not in _tables(database)
+    with sqlite3.connect(database) as connection:
+        session_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(user_session)")
+        }
+        method_view_preference = connection.execute(
+            "SELECT method_view_preference FROM app_user WHERE id = 'legacy-user'"
+        ).fetchone()[0]
+    assert "remember_me" in session_columns
+    assert method_view_preference == "summary"
 
 
 def test_upgrade_from_0007_preserves_existing_recipe_and_marks_backfill(tmp_path):
@@ -104,6 +150,56 @@ def test_upgrade_from_0007_preserves_existing_recipe_and_marks_backfill(tmp_path
         assert recipe["version"] == 3
         assert recipe["publisher_metadata_status"] == "pending"
         assert recipe["publisher_metadata_attempts"] == 0
+
+
+def test_upgrade_from_0018_migrates_custom_instructions_to_method_snapshot(tmp_path):
+    database = tmp_path / "method-migration.db"
+    _alembic(database, "upgrade", "0018_shopping_recipe_links")
+
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO household
+                (id, name, timezone, created_at, updated_at, version)
+            VALUES
+                ('household-method', 'Method household', 'Europe/London',
+                 '2026-08-08T00:00:00+00:00', '2026-08-08T00:00:00+00:00', 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO recipe
+                (id, household_id, title, eligibility, source_type, created_at, updated_at, version)
+            VALUES
+                ('recipe-method', 'household-method', 'Family soup', 'draft', 'custom',
+                 '2026-08-08T00:00:00+00:00', '2026-08-08T00:00:00+00:00', 1)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO recipe_version
+                (id, recipe_id, version_number, title, yield_servings,
+                 custom_instructions, created_at)
+            VALUES
+                ('version-method', 'recipe-method', 1, 'Family soup', 4,
+                 'Simmer gently. Serve hot.', '2026-08-08T00:00:00+00:00')
+            """
+        )
+        connection.commit()
+
+    _alembic(database, "upgrade", "head")
+
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        snapshot = connection.execute(
+            "SELECT * FROM recipe_method_snapshot WHERE recipe_version_id = 'version-method'"
+        ).fetchone()
+        assert snapshot is not None
+        assert snapshot["source_kind"] == "custom"
+        assert snapshot["source_text"] == "Simmer gently. Serve hot."
+        assert json.loads(snapshot["source_blocks"])[0]["text"] == snapshot["source_text"]
+        assert json.loads(snapshot["document"])["schema_version"] == 1
+        assert json.loads(snapshot["coverage"])["unreviewed"] == 1
 
 
 def test_historical_migrations_do_not_import_live_application_models():

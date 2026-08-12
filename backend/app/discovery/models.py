@@ -63,6 +63,13 @@ class SearchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class InstructionBlock:
+    position: int
+    text: str
+    heading: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ExtractedRecipe:
     title: str
     canonical_url: str
@@ -75,6 +82,7 @@ class ExtractedRecipe:
     review_required: bool
     review_reasons: tuple[str, ...]
     publisher_tags: tuple[PublisherTag, ...] = ()
+    instruction_blocks: tuple[InstructionBlock, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

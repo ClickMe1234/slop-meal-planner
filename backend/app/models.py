@@ -42,6 +42,22 @@ class IngredientLocale(str, enum.Enum):
     US = "us"
 
 
+class MethodViewPreference(str, enum.Enum):
+    SUMMARY = "summary"
+    WRITTEN = "written"
+
+
+class MeasurementSystem(str, enum.Enum):
+    SOURCE = "source"
+    METRIC = "metric"
+    US = "us"
+
+
+class RecipeMethodStatus(str, enum.Enum):
+    NEEDS_REVIEW = "needs_review"
+    REVIEWED = "reviewed"
+
+
 class TargetMode(str, enum.Enum):
     CALORIE = "calorie"
     MACROS = "macros"
@@ -121,6 +137,13 @@ class User(IdMixin, AuditMixin, Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     ingredient_locale: Mapped[str] = mapped_column(String(2), default=IngredientLocale.UK.value)
+    method_view_preference: Mapped[str] = mapped_column(
+        String(12), default=MethodViewPreference.SUMMARY.value, nullable=False
+    )
+    measurement_system: Mapped[str] = mapped_column(
+        String(12), default=MeasurementSystem.SOURCE.value, nullable=False
+    )
+    method_tutorial_version_seen: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     member_id: Mapped[str | None] = mapped_column(ForeignKey("household_member.id", ondelete="SET NULL"), nullable=True)
 
 
@@ -150,6 +173,7 @@ class UserSession(IdMixin, Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("app_user.id", ondelete="CASCADE"), index=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     csrf_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    remember_me: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -282,12 +306,17 @@ class RecipeVersion(IdMixin, Base):
     ingredients: Mapped[list[RecipeIngredient]] = relationship(
         back_populates="recipe_version", cascade="all, delete-orphan", order_by="RecipeIngredient.position"
     )
+    method_snapshot: Mapped[RecipeMethodSnapshot | None] = relationship(
+        back_populates="recipe_version", cascade="all, delete-orphan", uselist=False
+    )
 
 
 class RecipeIngredient(IdMixin, Base):
     __tablename__ = "recipe_ingredient"
+    __table_args__ = (UniqueConstraint("recipe_version_id", "lineage_id"),)
 
     recipe_version_id: Mapped[str] = mapped_column(ForeignKey("recipe_version.id", ondelete="CASCADE"), index=True)
+    lineage_id: Mapped[str] = mapped_column(String(36), default=new_id, nullable=False, index=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     original_text: Mapped[str] = mapped_column(Text, nullable=False)
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
@@ -311,6 +340,37 @@ class RecipeIngredient(IdMixin, Base):
     food_record_id: Mapped[str | None] = mapped_column(ForeignKey("food_record.id", ondelete="SET NULL"), index=True)
 
     recipe_version: Mapped[RecipeVersion] = relationship(back_populates="ingredients")
+
+
+class RecipeMethodSnapshot(IdMixin, Base):
+    __tablename__ = "recipe_method_snapshot"
+
+    recipe_version_id: Mapped[str] = mapped_column(
+        ForeignKey("recipe_version.id", ondelete="CASCADE"), unique=True, nullable=False, index=True
+    )
+    source_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_blocks: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    source_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    extractor_version: Mapped[str | None] = mapped_column(String(80))
+    parser_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(30), default=RecipeMethodStatus.NEEDS_REVIEW.value, nullable=False, index=True
+    )
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    coverage: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    document: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    household_notes: Mapped[str | None] = mapped_column(Text)
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    recipe_version: Mapped[RecipeVersion] = relationship(back_populates="method_snapshot")
 
 
 class FoodRecord(IdMixin, AuditMixin, Base):

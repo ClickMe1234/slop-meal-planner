@@ -1,3 +1,10 @@
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import select
+
+from app.models import User, UserSession
+
+
 def test_owner_setup_login_and_calorie_target(client, owner):
     csrf = owner["csrf_token"]
     me = client.get("/api/v1/auth/me")
@@ -39,6 +46,87 @@ def test_login_username_is_trimmed_and_case_insensitive(client, owner):
     )
     assert response.status_code == 200, response.text
     assert response.json()["user"]["username"] == "owner"
+
+
+def test_login_normalizes_retired_table_method_preference(
+    client, owner, session_factory
+):
+    client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+    )
+    with session_factory() as db:
+        user = db.scalar(select(User).where(User.username == "owner"))
+        assert user is not None
+        user.method_view_preference = "table"
+        db.commit()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": "owner", "password": "correct-horse-battery-staple"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["user"]["method_view_preference"] == "summary"
+
+
+def test_login_without_remember_me_uses_a_browser_session_cookie(
+    client, owner, session_factory
+):
+    client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+    )
+    response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "username": "owner",
+            "password": "correct-horse-battery-staple",
+            "remember_me": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert "max-age" not in response.headers["set-cookie"].lower()
+    with session_factory() as db:
+        session = db.scalar(select(UserSession))
+        assert session is not None
+        assert session.remember_me is False
+
+
+def test_remembered_login_renews_its_expiry_when_the_app_opens(
+    client, owner, session_factory
+):
+    client.post(
+        "/api/v1/auth/logout",
+        headers={"X-CSRF-Token": owner["csrf_token"]},
+    )
+    login = client.post(
+        "/api/v1/auth/login",
+        json={
+            "username": "owner",
+            "password": "correct-horse-battery-staple",
+            "remember_me": True,
+        },
+    )
+    assert login.status_code == 200, login.text
+    with session_factory() as db:
+        session = db.scalar(select(UserSession))
+        assert session is not None
+        session.expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+        db.commit()
+
+    opened = client.get("/api/v1/auth/me")
+
+    assert opened.status_code == 200, opened.text
+    assert "max-age" in opened.headers["set-cookie"].lower()
+    with session_factory() as db:
+        session = db.scalar(select(UserSession))
+        assert session is not None
+        expiry = session.expires_at
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        assert expiry > datetime.now(timezone.utc) + timedelta(days=29)
 
 
 def test_household_member_and_restrictions_can_be_edited(client, owner):

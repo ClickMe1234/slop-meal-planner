@@ -34,7 +34,7 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def create_session(db: Session, user: User) -> tuple[str, str]:
+def create_session(db: Session, user: User, *, remember_me: bool = True) -> tuple[str, str]:
     settings = get_settings()
     raw_token = secrets.token_urlsafe(48)
     csrf = secrets.token_urlsafe(32)
@@ -43,6 +43,7 @@ def create_session(db: Session, user: User) -> tuple[str, str]:
             user_id=user.id,
             token_hash=token_hash(raw_token),
             csrf_hash=token_hash(csrf),
+            remember_me=remember_me,
             expires_at=datetime.now(timezone.utc) + timedelta(days=settings.session_days),
         )
     )
@@ -54,6 +55,7 @@ def create_session(db: Session, user: User) -> tuple[str, str]:
 class AuthContext:
     user: User
     session: UserSession
+    token: str
 
 
 def get_auth_context(
@@ -89,7 +91,7 @@ def get_auth_context(
             "Change the temporary password before using the household",
             403,
         )
-    return AuthContext(user=user, session=user_session)
+    return AuthContext(user=user, session=user_session, token=mp_session)
 
 
 def require_csrf(

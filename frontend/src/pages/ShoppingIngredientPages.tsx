@@ -160,7 +160,9 @@ export function ShoppingIngredientChangePage() {
 
   if (list.isLoading) return <div className="page"><PageHeader title="Change shopping ingredient"/><Loading label="Opening the current list…"/></div>
   if (!list.data || list.data.id !== listId || !base) return <div className="page"><PageHeader title="Shopping item unavailable"/><Notice tone="warning" title="Reload required">This is no longer the active shopping list.</Notice><Link className="button button--primary" to="/shopping">Back to shopping</Link></div>
-  const candidates = list.data.items.filter(item => !item.manual && (item.source_count ?? 0) > 0)
+  const candidates = list.data.items
+    .filter(item => !item.manual && (item.source_count ?? 0) > 0)
+    .sort((left, right) => Number(selectedIds.includes(right.id)) - Number(selectedIds.includes(left.id)))
   const unitChoices = Array.from(new Set([...(base.available_units ?? []), base.unit, ...recipeUnitOptions]))
   const canPreview = navigator.onLine && !pendingNameEdits && selectedIds.length >= (mode === 'combine' ? 2 : 1) && Boolean(targetName.trim() && targetUnit)
 
@@ -172,17 +174,23 @@ export function ShoppingIngredientChangePage() {
     {error && <Notice tone="warning" title="Could not continue">{error}</Notice>}
     <div className="shopping-change-layout">
       <Card className="shopping-change-form">
-        <p className="eyebrow">1 · Choose the result</p>
-        {mode === 'combine' && <fieldset className="shopping-combine-picker"><legend>Recipe-backed shopping items</legend>{candidates.map(item => <label key={item.id} className={selectedIds.includes(item.id) ? 'selected' : ''}><input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleItem(item.id)}/><span><strong>{item.display_name}</strong><small>{item.purchase_quantity_display} · {item.recipe_count} recipes</small></span>{selectedIds.includes(item.id) && <Check/>}</label>)}</fieldset>}
-        <form onSubmit={requestPreview}>
-          <label>Ingredient name<input value={targetName} disabled={mode === 'unit'} maxLength={240} onChange={event => { setTargetName(event.target.value); setPreview(null) }}/></label>
-          <label>Target unit<select value={targetUnit} onChange={event => { setTargetUnit(event.target.value); setPreview(null) }}>{unitChoices.map(unit => <option key={unit} value={unit}>{unit}</option>)}</select></label>
+        <div className="shopping-change-step-heading"><span>1</span><div><p className="eyebrow">Choose the result</p><h2>{mode === 'combine' ? 'Select items to combine' : 'Set the new unit'}</h2></div></div>
+        {mode === 'combine' && <section className="shopping-combine-section" aria-labelledby="shopping-combine-heading">
+          <div className="shopping-combine-heading"><div><strong id="shopping-combine-heading">Recipe-backed shopping items</strong><small>Select at least two items. Your starting item is pinned at the top.</small></div><Badge tone={selectedIds.length >= 2 ? 'green' : 'neutral'}>{selectedIds.length} selected</Badge></div>
+          <fieldset className="shopping-combine-picker"><legend className="sr-only">Recipe-backed shopping items</legend><div className="shopping-combine-options">{candidates.map(item => <label key={item.id} className={selectedIds.includes(item.id) ? 'selected' : ''}><input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleItem(item.id)}/><span><strong>{item.display_name}</strong><small>{item.purchase_quantity_display} · {item.recipe_count} {item.recipe_count === 1 ? 'recipe' : 'recipes'}</small></span>{selectedIds.includes(item.id) && <Check/>}</label>)}</div></fieldset>
+        </section>}
+        <form className="shopping-result-form" onSubmit={requestPreview}>
+          <div className="shopping-result-heading"><strong>Resulting ingredient</strong><small>This name and unit will be used when the shopping list is rebuilt.</small></div>
+          <div className="shopping-result-fields">
+            <label>Ingredient name<input value={targetName} disabled={mode === 'unit'} maxLength={240} onChange={event => { setTargetName(event.target.value); setPreview(null) }}/></label>
+            <label>Target unit<select value={targetUnit} onChange={event => { setTargetUnit(event.target.value); setPreview(null) }}>{unitChoices.map(unit => <option key={unit} value={unit}>{unit}</option>)}</select></label>
+          </div>
           <Button type="submit" disabled={!canPreview || working}>{working && !preview ? 'Checking recipes…' : 'Preview recipe changes'}<ArrowRight/></Button>
         </form>
       </Card>
       <Card className="shopping-change-preview">
-        <p className="eyebrow">2 · Review every recipe</p>
-        {!preview && <div className="shopping-change-placeholder"><RefreshCw/><strong>Choose a name and unit</strong><span>Safe conversions will appear here. Unknown conversions will ask for one explicit recipe quantity.</span></div>}
+        <div className="shopping-change-step-heading"><span>2</span><div><p className="eyebrow">Review every recipe</p><h2>Check the changes</h2></div></div>
+        {!preview && <div className="shopping-change-placeholder"><span><RefreshCw/></span><strong>{mode === 'combine' && selectedIds.length < 2 ? 'Choose one more item' : 'Ready for a preview'}</strong><p>{mode === 'combine' && selectedIds.length < 2 ? 'Select another shopping item on the left, then confirm the resulting name and unit.' : 'Preview to see every saved recipe change before anything is updated.'}</p></div>}
         {preview && <>
           <div className="shopping-change-summary"><Scale/><div><strong>{selected.length} shopping {selected.length === 1 ? 'line' : 'lines'} → {preview.target_name}</strong><span>{preview.conversions.length} saved recipe ingredient {preview.conversions.length === 1 ? 'row' : 'rows'} will change to {preview.target_unit}</span></div></div>
           <div className="shopping-conversion-list">{preview.conversions.map(conversion => <div className={`shopping-conversion-row${conversion.manual_quantity_required ? ' needs-input' : ''}`} key={conversion.recipe_ingredient_id}>
