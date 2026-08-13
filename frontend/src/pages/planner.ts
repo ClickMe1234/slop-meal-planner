@@ -10,6 +10,15 @@ export type CalorieBoosts = Record<string, number>
 export type CalorieBoostMealShares = Record<string, number>
 export type GuestCounts = Record<string, number>
 export type GuestMeals = Record<string, boolean>
+export type GuestMealGroups = Record<string, string>
+
+export interface PlannerMealGroup {
+  group_key: string
+  member_ids: string[]
+}
+
+export type MealGroupDefaults = Record<MealType, PlannerMealGroup[]>
+export type MealGroupOverrides = Record<string, PlannerMealGroup[]>
 
 export function compareMealTypes(left: string, right: string): number {
   const leftIndex = MEAL_TYPES.indexOf(left as MealType)
@@ -27,6 +36,7 @@ export interface PlannerDate {
 export interface PlannerSlot {
   meal_date: string
   meal_type: MealType
+  meal_group_key?: string
   participant_member_ids: string[]
   batch_key: string
   food_safety_acknowledged: boolean
@@ -52,6 +62,8 @@ export interface PlannerSetup {
   calorieBoostShares: CalorieBoostMealShares
   guestCounts: GuestCounts
   guestMeals: GuestMeals
+  guestMealGroups: GuestMealGroups
+  mealGroupOverrides: MealGroupOverrides
   ingredientGuidance: IngredientGuidance
 }
 
@@ -74,13 +86,20 @@ export function plannerSetupFromPlan(detail: BackendPlanDetail): PlannerSetup {
     ) / (24 * 60 * 60 * 1000)) + 1),
   )
   const attendance: AttendanceOverrides = {}
+  const mealGroupOverrides: MealGroupOverrides = {}
   for (const date of dates) {
     for (const mealType of MEAL_TYPES) {
-      const occurrence = main.find(item => item.meal_date === date.iso && item.meal_type === mealType)
+      const matching = main.filter(item => item.meal_date === date.iso && item.meal_type === mealType)
       for (const memberId of selectedMemberIds) {
-        if (!occurrence?.portions.some(portion => portion.member_id === memberId)) {
+        if (!matching.some(occurrence => occurrence.portions.some(portion => portion.member_id === memberId))) {
           attendance[attendanceKey(date.iso, mealType, memberId)] = false
         }
+      }
+      if (matching.length) {
+        mealGroupOverrides[mealGroupOverrideKey(date.iso, mealType)] = matching.map(occurrence => ({
+          group_key: occurrence.meal_group_key ?? 'shared',
+          member_ids: occurrence.portions.map(portion => portion.member_id),
+        }))
       }
     }
   }
@@ -115,11 +134,18 @@ export function plannerSetupFromPlan(detail: BackendPlanDetail): PlannerSetup {
   }
   const guestCounts: GuestCounts = {}
   const guestMeals: GuestMeals = {}
+  const guestMealGroups: GuestMealGroups = {}
   for (const day of detail.plan.guest_days ?? []) {
     guestCounts[day.meal_date] = day.guest_count
     for (const mealType of day.meal_types ?? []) {
       if (MEAL_TYPES.includes(mealType as MealType)) {
         guestMeals[guestMealKey(day.meal_date, mealType as MealType)] = true
+      }
+    }
+    for (const assignment of day.meal_groups ?? []) {
+      if (MEAL_TYPES.includes(assignment.meal_type as MealType)) {
+        guestMeals[guestMealKey(day.meal_date, assignment.meal_type as MealType)] = true
+        guestMealGroups[guestMealKey(day.meal_date, assignment.meal_type as MealType)] = assignment.meal_group_key
       }
     }
   }
@@ -142,6 +168,8 @@ export function plannerSetupFromPlan(detail: BackendPlanDetail): PlannerSetup {
     calorieBoostShares,
     guestCounts,
     guestMeals,
+    guestMealGroups,
+    mealGroupOverrides,
     ingredientGuidance: {
       must: guidance('must_use_ingredient_terms'),
       prefer: guidance('prefer_ingredient_terms'),
@@ -178,8 +206,8 @@ export function attendanceKey(date: string, mealType: MealType, memberId: string
   return `${date}:${mealType}:${memberId}`
 }
 
-export function cookStartKey(date: string, mealType: MealType): string {
-  return `${date}:${mealType}`
+export function cookStartKey(date: string, mealType: MealType, mealGroupKey = 'shared'): string {
+  return mealGroupKey === 'shared' ? `${date}:${mealType}` : `${date}:${mealType}:${mealGroupKey}`
 }
 
 export function calorieBoostKey(date: string, memberId: string): string {
@@ -192,6 +220,30 @@ export function calorieBoostMealKey(date: string, memberId: string, mealType: Me
 
 export function guestMealKey(date: string, mealType: MealType): string {
   return `${date}:${mealType}`
+}
+
+export function mealGroupOverrideKey(date: string, mealType: MealType): string {
+  return `${date}:${mealType}`
+}
+
+export function mealGroupsFor(
+  defaults: MealGroupDefaults | undefined,
+  overrides: MealGroupOverrides,
+  date: string,
+  mealType: MealType,
+  participants: string[],
+): PlannerMealGroup[] {
+  const configured = overrides[mealGroupOverrideKey(date, mealType)] ?? defaults?.[mealType] ?? [{ group_key: 'shared', member_ids: participants }]
+  const attending = new Set(participants)
+  const groups = configured.map(group => ({
+    group_key: group.group_key,
+    member_ids: group.member_ids.filter(memberId => attending.has(memberId)),
+  })).filter(group => group.member_ids.length)
+  const assigned = new Set(groups.flatMap(group => group.member_ids))
+  const missing = participants.filter(memberId => !assigned.has(memberId))
+  if (!groups.length) return participants.length ? [{ group_key: 'shared', member_ids: participants }] : []
+  if (missing.length) groups[0] = { ...groups[0], member_ids: [...groups[0].member_ids, ...missing] }
+  return groups
 }
 
 export function defaultBoostShares(mealTypes: MealType[]): Record<MealType, number> {
@@ -275,7 +327,8 @@ export function guestDayEntries(
   guests: GuestCounts,
   guestMeals: GuestMeals = {},
   slots: PlannerSlot[] = [],
-): Array<{ meal_date: string; guest_count: number; meal_types: MealType[] }> {
+  guestMealGroups: GuestMealGroups = {},
+): Array<{ meal_date: string; guest_count: number; meal_types: MealType[]; meal_groups?: Array<{ meal_type: MealType; meal_group_key: string }> }> {
   return dates.flatMap(date => {
     const guestCount = Math.floor(Number(guests[date.iso] ?? 0))
     const plannedMeals = MEAL_TYPES.filter(mealType => slots.some(slot => slot.meal_date === date.iso && slot.meal_type === mealType))
@@ -284,7 +337,21 @@ export function guestDayEntries(
       ? explicitlySelected
       : plannedMeals.includes('dinner') ? ['dinner' as MealType] : plannedMeals.slice(0, 1)
     return Number.isFinite(guestCount) && guestCount > 0
-      ? [{ meal_date: date.iso, guest_count: guestCount, meal_types: mealTypes }]
+      ? (() => {
+          const mealGroupAssignments = mealTypes.map(mealType => {
+            const matching = slots.filter(slot => slot.meal_date === date.iso && slot.meal_type === mealType)
+            const selected = matching.find(slot => (slot.meal_group_key ?? 'shared') === guestMealGroups[guestMealKey(date.iso, mealType)])
+              ?? [...matching].sort((left, right) => right.participant_member_ids.length - left.participant_member_ids.length)[0]
+            return { meal_type: mealType, meal_group_key: selected?.meal_group_key ?? 'shared' }
+          })
+          const hasSplitMeal = mealTypes.some(mealType => slots.filter(slot => slot.meal_date === date.iso && slot.meal_type === mealType).length > 1)
+          return [{
+          meal_date: date.iso,
+          guest_count: guestCount,
+          meal_types: mealTypes,
+          ...(hasSplitMeal ? { meal_groups: mealGroupAssignments } : {}),
+        }]
+        })()
       : []
   })
 }
@@ -322,30 +389,40 @@ export function buildPlanSlots({
   attendance,
   cookStarts,
   foodSafetyAcknowledged,
+  mealGroupDefaults,
+  mealGroupOverrides = {},
 }: {
   dates: PlannerDate[]
   selectedMemberIds: string[]
   attendance: AttendanceOverrides
   cookStarts: CookStarts
   foodSafetyAcknowledged: boolean
+  mealGroupDefaults?: MealGroupDefaults
+  mealGroupOverrides?: MealGroupOverrides
 }): PlannerSlot[] {
   const slots: PlannerSlot[] = []
 
   for (const mealType of MEAL_TYPES) {
-    let batchKey = ''
+    const batchKeys: Record<string, string> = {}
     for (const date of dates) {
       const participants = participantsFor(attendance, date.iso, mealType, selectedMemberIds)
       if (!participants.length) continue
-      if (!batchKey || cookStarts[cookStartKey(date.iso, mealType)]) {
-        batchKey = `${mealType}-${date.iso}`
+      const groups = mealGroupsFor(mealGroupDefaults, mealGroupOverrides, date.iso, mealType, participants)
+      for (const group of groups) {
+        if (!batchKeys[group.group_key] || cookStarts[cookStartKey(date.iso, mealType, group.group_key)]) {
+          batchKeys[group.group_key] = group.group_key === 'shared'
+            ? `${mealType}-${date.iso}`
+            : `${mealType}-${group.group_key}-${date.iso}`
+        }
+        slots.push({
+          meal_date: date.iso,
+          meal_type: mealType,
+          meal_group_key: group.group_key,
+          participant_member_ids: group.member_ids,
+          batch_key: batchKeys[group.group_key],
+          food_safety_acknowledged: foodSafetyAcknowledged,
+        })
       }
-      slots.push({
-        meal_date: date.iso,
-        meal_type: mealType,
-        participant_member_ids: participants,
-        batch_key: batchKey,
-        food_safety_acknowledged: foodSafetyAcknowledged,
-      })
     }
   }
 
