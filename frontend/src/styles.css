@@ -1181,9 +1181,6 @@ button.tag { cursor: pointer; font: inherit; }
 .plan-edit-meal-groups section { background:var(--surface-2);border:1px solid var(--border);border-radius:13px;display:grid;gap:8px;min-width:0;padding:12px; }
 .plan-edit-meal-groups section>header { align-items:center; }
 .plan-edit-meal-groups section>header span { color:var(--primary);font-size:.7rem;font-weight:800;text-transform:uppercase; }
-.meal-member-chips { display:flex;flex-wrap:wrap;gap:5px;margin:0 16px 10px; }
-.meal-member-chips>span { background:var(--primary-soft);border:1px solid color-mix(in srgb,var(--primary) 22%,var(--border));border-radius:999px;color:var(--primary);display:flex;font-size:.64rem;gap:5px;padding:5px 8px; }
-.meal-member-chips strong { font-weight:800; }
 
 @media (max-width:760px) {
   .meal-group-default-grid,.plan-edit-group-grid { grid-template-columns:1fr; }
@@ -1194,7 +1191,6 @@ button.tag { cursor: pointer; font: inherit; }
   .meal-group-slot,.meal-group-default-card { padding:12px; }
   .meal-group-columns { grid-template-columns:1fr; }
   .meal-group-column label,.meal-group-default-row label,.plan-edit-group-row label { align-items:stretch;grid-template-columns:1fr; }
-  .meal-member-chips { margin-inline:12px; }
 }
 .attribution { border-top:1px solid var(--border);color:var(--muted);font-size:.65rem;padding-top:10px; }
 .dialog-backdrop { align-items:center;background:rgba(12,18,14,.55);display:flex;inset:0;justify-content:center;padding:20px;position:fixed;z-index:100; }

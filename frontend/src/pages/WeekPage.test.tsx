@@ -80,7 +80,9 @@ describe('WeekPage', () => {
     expect(screen.queryByRole('form', { name: 'Cooked batch weight' })).not.toBeInTheDocument()
     await user.click(screen.getAllByRole('button', { name: 'Mark recipe cooked' })[0])
 
-    expect(screen.getByRole('form', { name: 'Cooked batch weight' })).toBeInTheDocument()
+    const weightControl = screen.getByRole('form', { name: 'Cooked batch weight' })
+    expect(weightControl).toBeInTheDocument()
+    expect(within(weightControl).getByText('You')).toBeInTheDocument()
     expect(screen.getByRole('spinbutton', { name: 'Total cooked batch weight' })).toBeInTheDocument()
   })
 
