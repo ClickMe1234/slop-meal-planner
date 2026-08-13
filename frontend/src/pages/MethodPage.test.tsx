@@ -150,9 +150,13 @@ describe('MethodPage', () => {
     renderMethod()
 
     await screen.findByRole('heading', { name: 'Tomato supper' })
+    expect(screen.getByRole('button', { name: 'Mark as reviewed' })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: 'Edit method' }))
 
     expect(screen.getByText('1 unaccounted clause')).toBeInTheDocument()
+    expect(screen.getByText(/This warning does not block saving or marking the method as reviewed/)).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Mark as reviewed' })).toHaveLength(2)
+    screen.getAllByRole('button', { name: 'Mark as reviewed' }).forEach(button => expect(button).toBeEnabled())
     const locator = screen.getByRole('button', { name: `Locate unaccounted clause 1: ${unresolvedText}` })
     expect(locator).toHaveTextContent(unresolvedText)
     const sourceSpan = document.querySelector('mark[data-unreviewed-clause="true"]') as HTMLElement
@@ -162,5 +166,49 @@ describe('MethodPage', () => {
     await user.click(locator)
 
     expect(sourceSpan).toHaveFocus()
+  })
+
+  it('persists editor changes when reviewing with an unaccounted clause', async () => {
+    const user = userEvent.setup()
+    let currentView = unreviewedMethodView
+    mockMethodPage(currentView)
+    vi.spyOn(api, 'updateMe').mockResolvedValue({
+      id: 'user-1', username: 'owner', role: 'owner', must_change_password: false,
+      ingredient_locale: 'uk', method_view_preference: 'summary', measurement_system: 'source',
+      method_tutorial_version_seen: 1,
+    })
+    vi.mocked(api.getRecipeMethod).mockImplementation(async () => currentView)
+    const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => {
+      currentView = {
+        ...currentView,
+        recipe_version: 2,
+        recipe_version_number: 2,
+        method_status: payload.mark_reviewed ? 'reviewed' : 'needs_review',
+        method: payload.method,
+        household_notes: payload.household_notes,
+      }
+      return currentView
+    })
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Tomato supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    const actionText = screen.getAllByRole('textbox', { name: 'Action text' })[0]
+    await user.clear(actionText)
+    await user.type(actionText, 'Gently fry the tomatoes')
+    await user.type(screen.getByRole('textbox', { name: 'Household notes' }), 'Use the heavy pan.')
+    await user.click(screen.getAllByRole('button', { name: 'Mark as reviewed' }).at(-1)!)
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith('recipe-1', expect.objectContaining({
+      mark_reviewed: true,
+      household_notes: 'Use the heavy pan.',
+      method: expect.objectContaining({
+        actions: expect.arrayContaining([expect.objectContaining({ text: 'Gently fry the tomatoes' })]),
+      }),
+    })))
+    expect(await screen.findByText('Method reviewed and saved.')).toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: 'Summary' }))
+    expect(screen.getByText('Gently fry the tomatoes')).toBeInTheDocument()
   })
 })

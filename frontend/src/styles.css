@@ -540,6 +540,7 @@ button.tag { cursor: pointer; font: inherit; }
 }
 
 @media (max-width: 430px) {
+  html,body { min-width:0; }
   .page-actions { display:grid;grid-template-columns:1fr 1fr;}.page-actions .button:nth-child(n+3) { display:none;}.meal-card { grid-template-columns:78px minmax(0,1fr) 64px;grid-template-rows:auto 1fr;}.meal-kind { align-items:center;display:flex;flex-direction:row;gap:10px;grid-column:1/-1;padding:7px 11px;}.meal-kind small { margin:0;}.nutrition-summary { grid-template-columns:1fr;}.calorie-ring { margin:auto;}.recipe-content { padding:14px;}.nutrition-strip span { font-size:.58rem;}.generated-meal { grid-template-columns:62px 1fr auto;}.generated-meal button { display:none;}.summary-cards { grid-template-columns:1fr;}.summary-cards>.card:nth-child(n+3) { display:none;}.shopping-row .badge { display:none;}.settings-member { grid-template-columns:auto 1fr auto;}.settings-member .badge { display:none;}.allocation-list--compact { grid-template-columns:1fr;}.onboarding-progress { display:none;}.onboarding-main { margin-top:30px;}.onboarding-copy h1 { font-size:2rem;}
   .method-page .page-actions .button:nth-child(n+3) { display:inline-flex; }
 }

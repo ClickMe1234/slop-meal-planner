@@ -647,14 +647,5 @@ def rendered_source_blocks(
     return rendered
 
 
-def validate_method_for_review(document: MethodDocument, coverage: dict[str, Any]) -> None:
-    if int(coverage.get("unreviewed", 0)) > 0:
-        raise ValueError("Every source clause must be represented or explicitly omitted")
-    if any(annotation.confidence < Decimal("0.65") and not annotation.accepted for annotation in document.annotations):
-        raise ValueError("Low-confidence annotations must be corrected or accepted")
-    if any(binding.confidence < Decimal("0.65") and not binding.accepted for binding in document.ingredient_bindings):
-        raise ValueError("Low-confidence ingredient bindings must be corrected or accepted")
-
-
 def current_method_snapshot(version: RecipeVersion) -> RecipeMethodSnapshot | None:
     return version.method_snapshot
