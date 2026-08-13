@@ -377,7 +377,6 @@ function LiveWeekPage() {
             return <Card className={`meal-card${cooked ? ' is-cooked' : ''}`} key={meal.id}>
               <RecipePreview imageUrl={meal.image_url}/>
               <MealBatchInfo label={meal.component_slot > 0 ? `Side ${meal.component_slot}` : 'Batch'} servings={`${meal.batch_servings} servings`}/>
-              <div className="meal-member-chips" aria-label="People eating this recipe">{meal.portions.map(portion => <span key={portion.member_id}><strong>{(members.data ?? []).find(item => item.id === portion.member_id)?.name ?? 'Household member'}</strong>{Number(portion.servings)} serving</span>)}</div>
               <div className="meal-body"><div><RecipeTitle title={meal.recipe_title} sourceUrl={meal.source_url}/><p>{currentMemberParticipates ? `${Number(meal.portions.find(portion => portion.member_id === memberId)?.servings ?? 0)} serving` : 'Group total'} · {Math.round(nutrition.calories)} kcal</p></div><div className="meal-macros"><span>P <strong>{Math.round(nutrition.protein)}g</strong></span><span>C <strong>{Math.round(nutrition.carbs)}g</strong></span><span>F <strong>{Math.round(nutrition.fat)}g</strong></span></div></div>
               <MealActionRail recipeId={meal.recipe_id} batchId={meal.batch_id} cooked={cooked} pending={pendingBatches.includes(meal.batch_id)} onCookedToggle={() => void toggleCooked(meal.batch_id, cooked)}/>
               {cooked && <BatchWeightControl
