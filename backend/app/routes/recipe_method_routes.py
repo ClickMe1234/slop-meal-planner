@@ -51,7 +51,6 @@ from ..services.recipe_methods import (
     snapshot_values,
     source_blocks_from_extracted,
     source_text_from_blocks,
-    validate_method_for_review,
 )
 from ..services.recipe_plan_sync import sync_recipe_versions_to_current_plans
 from .discovery_routes import _live_service
@@ -657,16 +656,19 @@ def update_recipe_method(
     source_text = source_text_from_blocks(blocks)
     _, parsed_coverage, confidence = parse_method_document(blocks, ingredients)
     coverage = dict(old_snapshot.coverage or {}) if old_snapshot is not None else parsed_coverage
-    represented_or_omitted = len(payload.method.actions) + len(payload.method.omissions)
-    if represented_or_omitted >= int(coverage.get("total_clauses", 0)):
-        coverage["unreviewed"] = 0
-        coverage["represented"] = len(payload.method.actions)
-        coverage["omitted"] = len(payload.method.omissions)
-    if payload.mark_reviewed:
-        try:
-            validate_method_for_review(payload.method, coverage)
-        except ValueError as exc:
-            raise DomainError("METHOD_REVIEW_INCOMPLETE", str(exc), 422) from exc
+    unreviewed = sum(
+        1
+        for annotation in payload.method.annotations
+        if annotation.kind == "action"
+        and annotation.confidence < Decimal("0.65")
+        and not annotation.accepted
+    )
+    coverage["unreviewed"] = unreviewed
+    coverage["omitted"] = len(payload.method.omissions)
+    coverage["represented"] = max(
+        0,
+        int(coverage.get("total_clauses", 0)) - coverage["omitted"] - unreviewed,
+    )
     now = datetime.now(timezone.utc)
     snapshot = RecipeMethodSnapshot(
         recipe_version_id=next_version.id,

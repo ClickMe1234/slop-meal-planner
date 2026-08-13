@@ -8,7 +8,7 @@ def _headers(owner):
     return {"X-CSRF-Token": owner["csrf_token"]}
 
 
-def _custom_recipe(client, owner):
+def _custom_recipe(client, owner, custom_instructions=None):
     response = client.post(
         "/api/v1/recipes",
         headers=_headers(owner),
@@ -16,7 +16,7 @@ def _custom_recipe(client, owner):
             "title": "Two-stage courgettes",
             "source_type": "custom",
             "yield_servings": 4,
-            "custom_instructions": (
+            "custom_instructions": custom_instructions or (
                 "Fry half the zucchini in a pan for 5 minutes. "
                 "Add the remaining zucchini and bake at 200C until tender."
             ),
@@ -157,6 +157,48 @@ def test_custom_method_is_saved_scaled_localised_and_versioned(client, owner, se
             select(func.count(RecipeVersion.id)).where(RecipeVersion.recipe_id == recipe["id"])
         )
     assert version_count == 2
+
+
+def test_unaccounted_clause_warns_but_does_not_block_review_or_persistence(client, owner):
+    recipe = _custom_recipe(
+        client,
+        owner,
+        "Fry the zucchini in a pan for 5 minutes. The sauce becomes glossy.",
+    )
+    response = client.get(f"/api/v1/recipes/{recipe['id']}/method")
+    assert response.status_code == 200, response.text
+    method = response.json()
+    assert method["coverage"]["unreviewed"] == 1
+
+    document = MethodDocument.model_validate(method["method"])
+    document.actions[0].text = "Gently fry the courgette"
+    reviewed_response = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method",
+        headers=_headers(owner),
+        json={
+            "expected_version": method["recipe_version"],
+            "method": document.model_dump(mode="json"),
+            "household_notes": "Use the heavy pan.",
+            "mark_reviewed": True,
+            "source_kind": "custom",
+            "source_blocks": method["source_blocks"],
+        },
+    )
+
+    assert reviewed_response.status_code == 200, reviewed_response.text
+    reviewed = reviewed_response.json()
+    assert reviewed["method_status"] == "reviewed"
+    assert reviewed["coverage"]["unreviewed"] == 1
+    assert reviewed["method"]["actions"][0]["text"] == "Gently fry the courgette"
+    assert reviewed["household_notes"] == "Use the heavy pan."
+
+    reloaded_response = client.get(f"/api/v1/recipes/{recipe['id']}/method")
+    assert reloaded_response.status_code == 200, reloaded_response.text
+    reloaded = reloaded_response.json()
+    assert reloaded["method_status"] == "reviewed"
+    assert reloaded["coverage"]["unreviewed"] == 1
+    assert reloaded["method"]["actions"][0]["text"] == "Gently fry the courgette"
+    assert reloaded["household_notes"] == "Use the heavy pan."
 
 
 def test_method_preferences_are_user_scoped_and_partially_update(client, owner):
