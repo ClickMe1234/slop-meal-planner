@@ -111,6 +111,60 @@ describe('planner helpers', () => {
     ])
   })
 
+  it('builds separate recipe slots from defaults and applies a dated regrouping override', () => {
+    const dates = plannerDates('2026-07-13', 2)
+    const slots = buildPlanSlots({
+      dates,
+      selectedMemberIds: ['alex', 'sam'],
+      attendance: {},
+      cookStarts: {},
+      foodSafetyAcknowledged: false,
+      mealGroupDefaults: {
+        breakfast: [{ group_key: 'shared', member_ids: ['alex', 'sam'] }],
+        lunch: [{ group_key: 'alex', member_ids: ['alex'] }, { group_key: 'sam', member_ids: ['sam'] }],
+        dinner: [{ group_key: 'shared', member_ids: ['alex', 'sam'] }],
+        snack: [{ group_key: 'shared', member_ids: ['alex', 'sam'] }],
+      },
+      mealGroupOverrides: {
+        '2026-07-14:lunch': [{ group_key: 'together', member_ids: ['alex', 'sam'] }],
+      },
+    })
+    const lunches = slots.filter(slot => slot.meal_type === 'lunch')
+
+    expect(lunches.map(slot => [slot.meal_date, slot.meal_group_key, slot.participant_member_ids, slot.batch_key])).toEqual([
+      ['2026-07-13', 'alex', ['alex'], 'lunch-alex-2026-07-13'],
+      ['2026-07-13', 'sam', ['sam'], 'lunch-sam-2026-07-13'],
+      ['2026-07-14', 'together', ['alex', 'sam'], 'lunch-together-2026-07-14'],
+    ])
+  })
+
+  it('records which split meal group guests join', () => {
+    const dates = plannerDates('2026-07-13', 1)
+    const slots = buildPlanSlots({
+      dates,
+      selectedMemberIds: ['alex', 'sam'],
+      attendance: {},
+      cookStarts: {},
+      foodSafetyAcknowledged: false,
+      mealGroupOverrides: {
+        '2026-07-13:dinner': [{ group_key: 'alex', member_ids: ['alex'] }, { group_key: 'sam', member_ids: ['sam'] }],
+      },
+    })
+
+    expect(guestDayEntries(
+      dates,
+      { '2026-07-13': 2 },
+      { [guestMealKey('2026-07-13', 'dinner')]: true },
+      slots,
+      { [guestMealKey('2026-07-13', 'dinner')]: 'sam' },
+    )).toEqual([{
+      meal_date: '2026-07-13',
+      guest_count: 2,
+      meal_types: ['dinner'],
+      meal_groups: [{ meal_type: 'dinner', meal_group_key: 'sam' }],
+    }])
+  })
+
   it('flags batches spanning more than 48 hours', () => {
     const slots = buildPlanSlots({
       dates: plannerDates('2026-07-13', 4),

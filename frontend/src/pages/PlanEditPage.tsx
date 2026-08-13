@@ -36,6 +36,7 @@ import {
 
 type GuestDraft = PlanEditGuestDraft
 type BoostDraft = PlanEditBoostDraft
+type MainSlotDraft = NonNullable<BackendPlanPreservingEditRequest['main_slots']>[number]
 
 const editKey = (mealDate: string, value: string) => `${mealDate}::${value}`
 const splitEditKey = (value: string) => {
@@ -49,6 +50,17 @@ const dateLabel = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateS
   month: 'long',
 })
 
+const mainSlotsFromDetail = (detail: BackendPlanDetail): MainSlotDraft[] => detail.occurrences
+  .filter(item => item.component_slot === 0)
+  .map(item => ({
+    meal_date: item.meal_date,
+    meal_type: item.meal_type,
+    meal_group_key: item.meal_group_key ?? 'shared',
+    participant_member_ids: item.portions.map(portion => portion.member_id),
+    batch_key: item.batch_id,
+    food_safety_acknowledged: true,
+  }))
+
 export function buildPreservingEditPayload(
   detail: BackendPlanDetail,
   removedDates: Set<string>,
@@ -58,6 +70,7 @@ export function buildPreservingEditPayload(
   removedCookDays: Set<string>,
   recipeSwaps: Record<string, PlanEditRecipeSelection>,
   ignoreNutritionTolerances = false,
+  mainSlots?: MainSlotDraft[],
 ): BackendPlanPreservingEditRequest {
   const mealTypesByDate = detail.occurrences.reduce<Record<string, string[]>>((result, occurrence) => {
     if (occurrence.component_slot !== 0) return result
@@ -68,7 +81,7 @@ export function buildPreservingEditPayload(
   const removedBatchIds = new Set(
     detail.occurrences
       .filter(occurrence => occurrence.component_slot === 0
-        && removedCookDays.has(editKey(occurrence.meal_date, occurrence.meal_type)))
+        && removedCookDays.has(editKey(occurrence.meal_date, occurrence.meal_group_key ? `${occurrence.meal_type}@@${occurrence.meal_group_key}` : occurrence.meal_type)))
       .map(occurrence => occurrence.batch_id),
   )
   const retainedBatchIds = new Set(
@@ -95,10 +108,25 @@ export function buildPreservingEditPayload(
       .map(([mealDate, value]) => {
         const everyMeal = mealTypesByDate[mealDate] ?? []
         const selected = [...value.mealTypes].sort(compareMealTypes)
+        const grouped = selected.map(mealType => {
+          const matching = (mainSlots ?? detail.occurrences.filter(item => item.component_slot === 0).map(item => ({
+            meal_date: item.meal_date,
+            meal_type: item.meal_type,
+            meal_group_key: item.meal_group_key ?? 'shared',
+            participant_member_ids: item.portions.map(portion => portion.member_id),
+            batch_key: item.batch_id,
+            food_safety_acknowledged: true,
+          }))).filter(slot => slot.meal_date === mealDate && slot.meal_type === mealType)
+          const selectedGroup = value.mealGroups?.[mealType]
+          const group = matching.find(slot => slot.meal_group_key === selectedGroup)
+            ?? [...matching].sort((left, right) => right.participant_member_ids.length - left.participant_member_ids.length)[0]
+          return { matching, assignment: { meal_type: mealType, meal_group_key: group?.meal_group_key ?? 'shared' } }
+        })
         return {
           meal_date: mealDate,
           guest_count: value.count,
           meal_types: selected.length === everyMeal.length ? [] : selected,
+          ...(grouped.some(item => item.matching.length > 1) ? { meal_groups: grouped.map(item => item.assignment) } : {}),
         }
       }),
     added_cook_days: Object.values(addedCookDays)
@@ -106,20 +134,55 @@ export function buildPreservingEditPayload(
       .map(item => ({
         meal_date: item.mealDate,
         meal_type: item.mealType,
+        ...(item.mealGroupKey ? { meal_group_key: item.mealGroupKey } : {}),
         recipe_id: item.recipeId,
       }))
       .sort((left, right) => left.meal_date.localeCompare(right.meal_date) || compareMealTypes(left.meal_type, right.meal_type)),
     removed_cook_days: Array.from(removedCookDays)
       .map(key => splitEditKey(key))
       .filter(({ mealDate }) => !removedDates.has(mealDate))
-      .map(({ mealDate, suffix: mealType }) => ({ meal_date: mealDate, meal_type: mealType }))
+      .map(({ mealDate, suffix }) => {
+        const [mealType, mealGroupKey] = suffix.split('@@')
+        return { meal_date: mealDate, meal_type: mealType, ...(mealGroupKey ? { meal_group_key: mealGroupKey } : {}) }
+      })
       .sort((left, right) => left.meal_date.localeCompare(right.meal_date) || compareMealTypes(left.meal_type, right.meal_type)),
     recipe_swaps: Object.entries(recipeSwaps)
       .filter(([batchId]) => retainedBatchIds.has(batchId))
       .map(([batchId, selection]) => ({ batch_id: batchId, recipe_id: selection.recipeId }))
       .sort((left, right) => left.batch_id.localeCompare(right.batch_id)),
+    ...(mainSlots ? { main_slots: mainSlots.filter(slot => !removedDates.has(slot.meal_date)) } : {}),
     ignore_nutrition_tolerances: ignoreNutritionTolerances,
   }
+}
+
+function PlanEditMealGroups({ detail, slots, memberNames, onChange }: { detail: BackendPlanDetail; slots: MainSlotDraft[]; memberNames: Record<string, string>; onChange: (slots: MainSlotDraft[]) => void }) {
+  const moveMember = (mealDate: string, mealType: string, memberId: string, destination: string) => {
+    const matching = slots.filter(slot => slot.meal_date === mealDate && slot.meal_type === mealType)
+    const untouched = slots.filter(slot => slot.meal_date !== mealDate || slot.meal_type !== mealType)
+    const next = matching.map(slot => ({ ...slot, participant_member_ids: slot.participant_member_ids.filter(id => id !== memberId) })).filter(slot => slot.participant_member_ids.length)
+    if (destination === 'new') {
+      const key = crypto.randomUUID()
+      next.push({
+        meal_date: mealDate,
+        meal_type: mealType,
+        meal_group_key: `custom-${key}`,
+        participant_member_ids: [memberId],
+        batch_key: `new-${key}`,
+        food_safety_acknowledged: true,
+      })
+    } else {
+      const target = next.find(slot => slot.meal_group_key === destination)
+      if (target) target.participant_member_ids.push(memberId)
+    }
+    onChange([...untouched, ...next])
+  }
+  const mealKeys = Array.from(new Set(slots.map(slot => `${slot.meal_date}::${slot.meal_type}`))).sort()
+  return <Card className="plan-edit-meal-groups"><div className="settings-card-heading"><div><p className="eyebrow">Recipe groups</p><h2>Who shares each meal?</h2><p>Move someone to another recipe group or create a separate meal. Existing recipes are kept whenever they remain suitable.</p></div></div><div className="plan-edit-group-grid">{mealKeys.map(key => {
+    const { mealDate, suffix: mealType } = splitEditKey(key)
+    const matching = slots.filter(slot => slot.meal_date === mealDate && slot.meal_type === mealType)
+    const cooked = detail.occurrences.some(item => item.meal_date === mealDate && item.meal_type === mealType && Boolean(item.cooked_at))
+    return <section key={key}><header><strong>{dateLabel(mealDate)}</strong><span>{mealLabel(mealType)}</span>{cooked && <Badge tone="green"><LockKeyhole/>Locked</Badge>}</header>{matching.map((slot, index) => <div className="plan-edit-group-row" key={slot.meal_group_key}><span>Recipe {index + 1}</span>{slot.participant_member_ids.map(memberId => <label key={memberId}><span>{memberNames[memberId] ?? 'Household member'}</span><select disabled={cooked} value={slot.meal_group_key} aria-label={`${memberNames[memberId] ?? 'Household member'} recipe group for ${mealType} on ${mealDate}`} onChange={event => moveMember(mealDate, mealType, memberId, event.target.value)}>{matching.map((group, groupIndex) => <option value={group.meal_group_key} key={group.meal_group_key}>Recipe {groupIndex + 1}: {group.participant_member_ids.map(id => memberNames[id]).join(' & ')}</option>)}<option value="new">New separate recipe</option></select></label>)}</div>)}</section>
+  })}</div></Card>
 }
 
 export function PlanEditPage() {
@@ -139,6 +202,7 @@ export function PlanEditPage() {
   const [addedCookDays, setAddedCookDays] = useState<Record<string, PlanEditCookDaySelection>>({})
   const [removedCookDays, setRemovedCookDays] = useState<Set<string>>(new Set())
   const [recipeSwaps, setRecipeSwaps] = useState<Record<string, PlanEditRecipeSelection>>({})
+  const [mainSlots, setMainSlots] = useState<MainSlotDraft[]>([])
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<ApiError | null>(null)
 
@@ -166,6 +230,7 @@ export function PlanEditPage() {
       setAddedCookDays(savedDraft.addedCookDays)
       setRemovedCookDays(new Set(savedDraft.removedCookDays))
       setRecipeSwaps(savedDraft.recipeSwaps)
+      setMainSlots(savedDraft.mainSlots ?? mainSlotsFromDetail(detail))
       initialisedVersion.current = detail.plan.version
       return
     }
@@ -193,6 +258,7 @@ export function PlanEditPage() {
     setAddedCookDays({})
     setRemovedCookDays(new Set())
     setRecipeSwaps({})
+    setMainSlots(mainSlotsFromDetail(detail))
     initialisedVersion.current = detail.plan.version
   }, [detail, mealsByDate])
 
@@ -206,8 +272,9 @@ export function PlanEditPage() {
       addedCookDays,
       removedCookDays: Array.from(removedCookDays),
       recipeSwaps,
+      mainSlots,
     })
-  }, [addedCookDays, boosts, detail, guests, recipeSwaps, removedCookDays, removedDates])
+  }, [addedCookDays, boosts, detail, guests, mainSlots, recipeSwaps, removedCookDays, removedDates])
 
   if (planQuery.isLoading || membersQuery.isLoading) {
     return <div className="page"><PageHeader title="Opening the plan editor"/><Loading label="Pinning your existing recipes…"/></div>
@@ -270,6 +337,7 @@ export function PlanEditPage() {
       addedCookDays,
       removedCookDays: Array.from(removedCookDays),
       recipeSwaps,
+      mainSlots,
     })
   }
   const openRecipePicker = (
@@ -284,8 +352,8 @@ export function PlanEditPage() {
     })
     navigate(`/plan/${encodeURIComponent(detail.plan.id)}/occurrences/${encodeURIComponent(meal.id)}/recipes?${params.toString()}`)
   }
-  const toggleRemovedCookDay = (mealDate: string, mealType: string, batchId: string) => {
-    const key = editKey(mealDate, mealType)
+  const toggleRemovedCookDay = (mealDate: string, mealType: string, mealGroupKey: string, batchId: string) => {
+    const key = editKey(mealDate, mealGroupKey ? `${mealType}@@${mealGroupKey}` : mealType)
     setRemovedCookDays(current => {
       const next = new Set(current)
       if (next.has(key)) next.delete(key)
@@ -299,8 +367,8 @@ export function PlanEditPage() {
       return next
     })
   }
-  const cancelAddedCookDay = (mealDate: string, mealType: string) => {
-    const key = editKey(mealDate, mealType)
+  const cancelAddedCookDay = (mealDate: string, mealType: string, mealGroupKey: string) => {
+    const key = editKey(mealDate, mealGroupKey ? `${mealType}@@${mealGroupKey}` : mealType)
     setAddedCookDays(current => {
       const next = { ...current }
       delete next[key]
@@ -322,6 +390,7 @@ export function PlanEditPage() {
           removedCookDays,
           recipeSwaps,
           ignoreNutritionTolerances,
+          mainSlots,
         ),
       )
       queryClient.setQueryData(['plan', detail.plan.id], updated)
@@ -357,6 +426,8 @@ export function PlanEditPage() {
       <p>Guest, calorie and day changes still preserve recipes. Batch controls are now explicit and visibly staged before you save.</p>
     </div>
 
+    <PlanEditMealGroups detail={detail} slots={mainSlots.filter(slot => !removedDates.has(slot.meal_date))} memberNames={memberNames} onChange={updated => setMainSlots(current => [...current.filter(slot => removedDates.has(slot.meal_date)), ...updated])}/>
+
     {saveError && <Notice tone="warning" title={saveError.code === 'NUTRITION_TARGET_INFEASIBLE' ? 'Portions need permission to bend' : 'The plan could not be updated'}>
       {saveError.message}
       {saveError.code === 'NUTRITION_TARGET_INFEASIBLE' && <div className="button-row"><Button variant="secondary" disabled={saving} onClick={() => void save(true)}>Keep recipes with closest portions</Button></div>}
@@ -389,21 +460,22 @@ export function PlanEditPage() {
             </div> : <>
               <section className="plan-edit-recipes" aria-label={`Pinned recipes for ${mealDate}`}>
                 {mainMeals.map(meal => {
-                  const newCookKey = editKey(mealDate, meal.meal_type)
                   const existingCookStart = meal.planned_cook_date === mealDate
                   const sideMeals = meals.filter(item => item.parent_batch_id === meal.batch_id)
                   const batchCooked = Boolean(meal.cooked_at) || sideMeals.some(item => Boolean(item.cooked_at))
                   const addedSelection = Object.values(addedCookDays)
                     .filter(item => item.mealType === meal.meal_type
+                      && (item.mealGroupKey ?? 'shared') === meal.meal_group_key
                       && item.mealDate >= (meal.planned_cook_date ?? mealDate)
                       && item.mealDate <= mealDate)
                     .sort((left, right) => right.mealDate.localeCompare(left.mealDate))[0]
                   const addingCookStart = addedSelection?.mealDate === mealDate
-                  const removalKey = editKey(meal.planned_cook_date ?? mealDate, meal.meal_type)
+                  const removalKey = editKey(meal.planned_cook_date ?? mealDate, meal.meal_group_key ? `${meal.meal_type}@@${meal.meal_group_key}` : meal.meal_type)
                   const removingBatch = removedCookDays.has(removalKey)
                   const previousMeal = detail.occurrences
                     .filter(item => item.component_slot === 0
                       && item.meal_type === meal.meal_type
+                      && item.meal_group_key === meal.meal_group_key
                       && item.meal_date < (meal.planned_cook_date ?? mealDate)
                       && !removedDates.has(item.meal_date))
                     .sort((left, right) => right.meal_date.localeCompare(left.meal_date))[0]
@@ -439,11 +511,11 @@ export function PlanEditPage() {
                     {existingCookStart
                       ? <div className="plan-edit-cook-actions">
                           <span className="plan-edit-cook-stamp"><Utensils/>{removingBatch ? 'Merging back' : 'Cook day'}</span>
-                          {canRemoveCookDay && <button type="button" className={`plan-edit-cook-remove${removingBatch ? ' active' : ''}`} onClick={() => toggleRemovedCookDay(mealDate, meal.meal_type, meal.batch_id)}>{removingBatch ? <RotateCcw/> : <CircleMinus/>}{removingBatch ? 'Keep cook day' : 'Remove cook day'}</button>}
+                          {canRemoveCookDay && <button type="button" className={`plan-edit-cook-remove${removingBatch ? ' active' : ''}`} onClick={() => toggleRemovedCookDay(mealDate, meal.meal_type, meal.meal_group_key ?? '', meal.batch_id)}>{removingBatch ? <RotateCcw/> : <CircleMinus/>}{removingBatch ? 'Keep cook day' : 'Remove cook day'}</button>}
                         </div>
                       : !cooked && <div className="plan-edit-cook-actions">
                           <button type="button" className={`plan-edit-cook-toggle${addingCookStart ? ' active' : ''}`} onClick={() => openRecipePicker(meal, 'addCook')}><Sparkles/>{addingCookStart ? 'Recipe selected' : 'Add cooking day'}</button>
-                          {addingCookStart && <button type="button" className="plan-edit-boundary-cancel" onClick={() => cancelAddedCookDay(mealDate, meal.meal_type)}>Cancel</button>}
+                          {addingCookStart && <button type="button" className="plan-edit-boundary-cancel" onClick={() => cancelAddedCookDay(mealDate, meal.meal_type, meal.meal_group_key ?? '')}>Cancel</button>}
                         </div>}
                   </article>
                 })}

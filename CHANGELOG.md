@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0 - 2026-08-13
+
+- Add owner-managed breakfast, lunch, dinner, and snack meal-group defaults so
+  household members can routinely eat together or receive separate recipes.
+- Add per-date meal-group overrides to planning, including explicit guest
+  group selection and group-aware cook-day scheduling.
+- Generate, display, and customise parallel recipes for a single meal with
+  clear member labels, portions, and nutrition totals for every group.
+- Allow uncooked plans to be regrouped while preserving valid recipe choices;
+  new or no-longer-valid groups are filled automatically.
+- Keep cooked occurrences immutable and include meal-group configuration in
+  selective backup and restore workflows.
+
 ## 1.2.0 - 2026-08-08
 
 - Add on-demand cooking-method extraction for saved and discovered Good Food

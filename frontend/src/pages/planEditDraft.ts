@@ -1,4 +1,4 @@
-export type PlanEditGuestDraft = { count: number; mealTypes: string[] }
+export type PlanEditGuestDraft = { count: number; mealTypes: string[]; mealGroups?: Record<string, string> }
 export type PlanEditBoostDraft = {
   calories: string
   mealAllocations: Array<{ meal_type: string; percentage: number }>
@@ -10,6 +10,7 @@ export type PlanEditRecipeSelection = {
 export type PlanEditCookDaySelection = PlanEditRecipeSelection & {
   mealDate: string
   mealType: string
+  mealGroupKey?: string
 }
 
 export interface PlanEditDraft {
@@ -20,6 +21,14 @@ export interface PlanEditDraft {
   addedCookDays: Record<string, PlanEditCookDaySelection>
   removedCookDays: string[]
   recipeSwaps: Record<string, PlanEditRecipeSelection>
+  mainSlots?: Array<{
+    meal_date: string
+    meal_type: string
+    meal_group_key: string
+    participant_member_ids: string[]
+    batch_key: string
+    food_safety_acknowledged: boolean
+  }>
 }
 
 const storageKey = (planId: string) => `slop-plan-edit:${planId}`

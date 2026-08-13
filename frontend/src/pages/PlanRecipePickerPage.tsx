@@ -117,10 +117,11 @@ export function PlanRecipePickerPage() {
           throw new ApiError(409, 'The edit draft is no longer current. Return to the editor and try again.')
         }
         if (editMode === 'addCook') {
-          const key = `${occurrence.meal_date}::${mealType}`
+          const key = `${occurrence.meal_date}::${mealType}${occurrence.meal_group_key ? `@@${occurrence.meal_group_key}` : ''}`
           draft.addedCookDays[key] = {
             mealDate: occurrence.meal_date,
             mealType,
+            ...(occurrence.meal_group_key ? { mealGroupKey: occurrence.meal_group_key } : {}),
             recipeId: recipe.id,
             recipeTitle: recipe.title,
           }
