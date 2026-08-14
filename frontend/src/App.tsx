@@ -53,7 +53,7 @@ export default function App() {
       <Route path="/settings/data" element={<DataSettings/>}/>
       <Route path="/settings/system" element={<SystemSettings/>}/>
     </Route>
-    <Route path="*" element={<Navigate to={isDemoMode ? '/week' : '/login'} replace/>}/>
+    <Route path="*" element={<Navigate to="/week" replace/>}/>
     </Routes>
     {backgroundLocation && <Routes>
       <Route path="/imports/:jobId/review" element={<ImportReviewDrawer/>}/>
