@@ -1026,7 +1026,7 @@ export function SystemSettings() {
         </Button>
       </div>
       <div className="system-grid">
-        <StatusCard icon={<Server />} title="Application" value="Healthy" detail="v1.3.0 · schema current" />
+        <StatusCard icon={<Server />} title="Application" value="Healthy" detail="v1.3.1 · schema current" />
         <StatusCard icon={<Database />} title="PostgreSQL" value="Connected" detail="Local household database" />
         <StatusCard icon={<RefreshCw />} title="Workers" value="Online" detail="Imports and maintenance" />
         <StatusCard icon={<Shield />} title="Network" value="Local only" detail="Allowed hosts configured" />
