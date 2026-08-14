@@ -10,7 +10,7 @@ import { clearOfflineShoppingData } from '../lib/offlineShopping'
 export function LoginPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false })
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false, refetchOnMount: 'always' })
   const [loading, setLoading] = useState(false)
   const [username, setUsername] = useState(isDemoMode ? 'zach' : '')
   const [password, setPassword] = useState(isDemoMode ? 'password' : '')
@@ -22,11 +22,11 @@ export function LoginPage() {
     }
   }, [navigate])
   useEffect(() => {
-    if (!isDemoMode && session.data) {
+    if (!isDemoMode && session.isSuccess && !session.isFetching && session.data) {
       navigate(session.data.must_change_password ? '/change-password' : '/week', { replace: true })
     }
-  }, [navigate, session.data])
-  if (!isDemoMode && session.isLoading) return <div className="page"><Loading label="Checking your household session…" /></div>
+  }, [navigate, session.data, session.isFetching, session.isSuccess])
+  if (!isDemoMode && (session.isLoading || session.isFetching)) return <div className="page"><Loading label="Checking your household session…" /></div>
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setLoading(true); setError('')
     try {
