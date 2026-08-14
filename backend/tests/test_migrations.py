@@ -34,6 +34,19 @@ def _alembic(path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     return result
 
 
+def _run_alembic(path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["MEAL_PLANNER_DATABASE_URL"] = _database_url(path)
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", *arguments],
+        cwd=BACKEND_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+
 def _tables(path: Path) -> set[str]:
     with sqlite3.connect(path) as connection:
         return {
@@ -62,6 +75,69 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     assert _tables(database) == {"alembic_version"}
     _alembic(database, "upgrade", "head")
     assert "recipe_publisher_tag" in _tables(database)
+
+
+def test_downgrade_refuses_split_meal_groups_without_mutating_data(tmp_path):
+    database = tmp_path / "split-meal-downgrade.db"
+
+    _alembic(database, "upgrade", "head")
+
+    occurrence_rows = [
+        ("occurrence-shared", "shared", "batch-shared"),
+        ("occurrence-separate", "separate", "batch-separate"),
+    ]
+
+    with sqlite3.connect(database) as connection:
+        connection.executemany(
+            """
+            INSERT INTO meal_occurrence
+                (id, created_at, updated_at, version, meal_plan_id, batch_id,
+                 meal_date, meal_type, meal_group_key, component_slot, locked,
+                 unplanned_allowance, guest_servings)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    occurrence_id,
+                    "2026-08-14T00:00:00+00:00",
+                    "2026-08-14T00:00:00+00:00",
+                    1,
+                    "plan-1",
+                    batch_id,
+                    "2026-08-14",
+                    "breakfast",
+                    meal_group_key,
+                    0,
+                    0,
+                    0,
+                    0,
+                )
+                for occurrence_id, meal_group_key, batch_id in occurrence_rows
+            ],
+        )
+        connection.commit()
+
+    result = _run_alembic(database, "downgrade", "-1")
+
+    assert result.returncode != 0
+    assert "Cannot downgrade 0023_member_meal_groups" in result.stderr
+    with sqlite3.connect(database) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(meal_occurrence)")
+        }
+        occurrences = connection.execute(
+            "SELECT id, meal_group_key FROM meal_occurrence ORDER BY id"
+        ).fetchall()
+        revision = connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()[0]
+
+    assert "meal_group_key" in columns
+    assert occurrences == [
+        ("occurrence-separate", "separate"),
+        ("occurrence-shared", "shared"),
+    ]
+    assert revision == "0023_member_meal_groups"
 
 
 def test_upgrade_from_published_flow_table_revision_reconciles_branches(tmp_path):
