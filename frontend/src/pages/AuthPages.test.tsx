@@ -25,9 +25,9 @@ function LocationProbe() {
   return <output data-testid="current-route">{location.pathname}</output>
 }
 
-function renderLogin() {
+function renderLogin(queryClient = new QueryClient()) {
   return render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/login']}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -66,6 +66,16 @@ describe('LoginPage', () => {
 
     await waitFor(() => expect(screen.getByTestId('current-route')).toHaveTextContent('/week'))
     expect(screen.queryByRole('heading', { name: /sign in to your household/i })).not.toBeInTheDocument()
+  })
+  it('does not trust cached session data when revalidation fails', async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(['session'], signedInUser)
+    vi.mocked(api.me).mockRejectedValue(new Error('session revoked'))
+
+    renderLogin(queryClient)
+
+    await screen.findByRole('heading', { name: /sign in to your household/i })
+    expect(screen.getByTestId('current-route')).toHaveTextContent('/login')
   })
 
   it('passes an unchecked keep-signed-in choice to login', async () => {
