@@ -12,7 +12,7 @@ def test_unraid_template_matches_production_runtime_contract():
     configs = {config.attrib["Target"]: config for config in root.findall("Config")}
 
     assert root.findtext("Name") == "Slop Meal Planner"
-    assert root.findtext("Repository") == "ghcr.io/clickme1234/slop-meal-planner:1.2.0"
+    assert root.findtext("Repository") == "ghcr.io/clickme1234/slop-meal-planner:1.3.2"
     assert root.findtext("Network") == "Bridge"
     assert root.findtext("PostArgs") == ""
     assert root.findtext("WebUI") == "https://[IP]:[PORT:8000]/"
@@ -51,4 +51,3 @@ def test_unraid_template_matches_production_runtime_contract():
     assert configs["MEAL_PLANNER_DATABASE_URL"].attrib["Display"] == "advanced"
     assert configs["CELERY_BROKER_URL"].attrib["Display"] == "advanced"
     assert configs["CELERY_RESULT_BACKEND"].attrib["Display"] == "advanced"
-

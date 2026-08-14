@@ -32,7 +32,8 @@ def canonicalize_url(url: str, *, base_url: str | None = None) -> str:
     function does not perform DNS or network access.
     """
 
-    candidate = urljoin(base_url, url.strip()) if base_url else url.strip()
+    raw_candidate = url.strip().rstrip(",.")
+    candidate = urljoin(base_url, raw_candidate) if base_url else raw_candidate
     if not candidate or len(candidate) > 4096:
         raise InvalidUrlError("The URL is empty or too long")
     parts = urlsplit(candidate)

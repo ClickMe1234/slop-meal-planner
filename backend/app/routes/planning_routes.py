@@ -510,12 +510,27 @@ def _calorie_boost_maps(
     return daily, by_meal
 
 
-def _guest_count_map(plan: MealPlan) -> dict[tuple[str, str], int]:
-    result: dict[tuple[str, str], int] = {}
+def _guest_count_map(plan: MealPlan) -> dict[tuple[str, str, str], int]:
+    result: dict[tuple[str, str, str], int] = {}
     for item in plan.guest_days or []:
-        for meal_type in item.get("meal_types") or ["*"]:
-            result[(item["meal_date"], meal_type)] = int(item["guest_count"])
+        if item.get("meal_groups"):
+            for group in item["meal_groups"]:
+                result[
+                    (item["meal_date"], group["meal_type"], group["meal_group_key"])
+                ] = int(item["guest_count"])
+        else:
+            for meal_type in item.get("meal_types") or ["*"]:
+                result[(item["meal_date"], meal_type, "*")] = int(
+                    item["guest_count"]
+                )
     return result
+
+
+def _guest_payload(guest_day) -> dict:
+    data = guest_day.model_dump(mode="json")
+    if not data.get("meal_groups"):
+        data.pop("meal_groups", None)
+    return data
 
 
 def _rebalance_plan(
@@ -665,8 +680,17 @@ def _rebalance_plan(
         occurrence.guest_servings = (
             Decimal(
                 guest_counts.get(
-                    (occurrence.meal_date.isoformat(), occurrence.meal_type),
-                    guest_counts.get((occurrence.meal_date.isoformat(), "*"), 0),
+                    (
+                        occurrence.meal_date.isoformat(),
+                        occurrence.meal_type,
+                        occurrence.meal_group_key,
+                    ),
+                    guest_counts.get(
+                        (occurrence.meal_date.isoformat(), occurrence.meal_type, "*"),
+                        guest_counts.get(
+                            (occurrence.meal_date.isoformat(), "*", "*"), 0
+                        ),
+                    ),
                 )
             )
             * largest_household_portion
@@ -720,6 +744,15 @@ def _normalised_guests(items: list[dict], dates: set[str]) -> dict[str, tuple]:
         str(item["meal_date"]): (
             int(item["guest_count"]),
             tuple(sorted(str(meal_type) for meal_type in item.get("meal_types") or [])),
+            tuple(
+                sorted(
+                    (
+                        str(group["meal_type"]),
+                        str(group["meal_group_key"]),
+                    )
+                    for group in item.get("meal_groups") or []
+                )
+            ),
         )
         for item in items
         if str(item["meal_date"]) in dates
@@ -779,6 +812,7 @@ def _split_batch_for_new_cook_day(
     plan: MealPlan,
     meal_date: date,
     meal_type: str,
+    meal_group_key: str,
     recipe_id: str,
 ) -> None:
     boundary = db.scalar(
@@ -786,6 +820,7 @@ def _split_batch_for_new_cook_day(
             MealOccurrence.meal_plan_id == plan.id,
             MealOccurrence.meal_date == meal_date,
             MealOccurrence.meal_type == meal_type,
+            MealOccurrence.meal_group_key == meal_group_key,
             MealOccurrence.component_slot == 0,
         )
     )
@@ -881,12 +916,14 @@ def _remove_cook_day(
     plan: MealPlan,
     meal_date: date,
     meal_type: str,
+    meal_group_key: str,
 ) -> None:
     boundary = db.scalar(
         select(MealOccurrence).where(
             MealOccurrence.meal_plan_id == plan.id,
             MealOccurrence.meal_date == meal_date,
             MealOccurrence.meal_type == meal_type,
+            MealOccurrence.meal_group_key == meal_group_key,
             MealOccurrence.component_slot == 0,
         )
     )
@@ -904,6 +941,7 @@ def _remove_cook_day(
         .where(
             MealOccurrence.meal_plan_id == plan.id,
             MealOccurrence.meal_type == meal_type,
+            MealOccurrence.meal_group_key == meal_group_key,
             MealOccurrence.component_slot == 0,
             MealOccurrence.meal_date < meal_date,
         )
@@ -974,6 +1012,7 @@ def _remove_cook_day(
                 batch_id=side_batch.id,
                 meal_date=occurrence.meal_date,
                 meal_type=occurrence.meal_type,
+                meal_group_key=occurrence.meal_group_key,
                 component_slot=side_batch.component_slot,
             )
             db.add(side_occurrence)
@@ -999,9 +1038,26 @@ def generate_plan(
 ):
     if not payload.slots:
         raise DomainError("NO_PLAN_SLOTS", "At least one meal slot is required")
-    slot_keys = [(slot.meal_date, slot.meal_type.casefold()) for slot in payload.slots]
+    slot_keys = [
+        (slot.meal_date, slot.meal_type.casefold(), slot.meal_group_key)
+        for slot in payload.slots
+    ]
     if len(set(slot_keys)) != len(slot_keys):
-        raise DomainError("DUPLICATE_PLAN_SLOT", "A date and meal type can only be planned once")
+        raise DomainError(
+            "DUPLICATE_PLAN_SLOT",
+            "A date, meal type and meal group can only be planned once",
+        )
+    participant_slots = [
+        (slot.meal_date, slot.meal_type.casefold(), member_id)
+        for slot in payload.slots
+        for member_id in slot.participant_member_ids
+    ]
+    if len(participant_slots) != len(set(participant_slots)):
+        raise DomainError(
+            "DUPLICATE_MEAL_PARTICIPANT",
+            "A household member can only belong to one recipe group per meal",
+            422,
+        )
     participant_days = {
         (slot.meal_date, member_id)
         for slot in payload.slots
@@ -1045,6 +1101,18 @@ def generate_plan(
                 "Guests can only attend meals that are planned for that date",
                 422,
             )
+        for assignment in guest_day.meal_groups:
+            if not any(
+                slot.meal_date == guest_day.meal_date
+                and slot.meal_type == assignment.meal_type
+                and slot.meal_group_key == assignment.meal_group_key
+                for slot in payload.slots
+            ):
+                raise DomainError(
+                    "INVALID_GUEST_MEAL_GROUP",
+                    "Guests must join a recipe group planned for that meal",
+                    422,
+                )
     recipe_conditions = [
         Recipe.household_id == context.user.household_id,
         Recipe.archived_at.is_(None),
@@ -1103,6 +1171,10 @@ def generate_plan(
     for key, slots in grouped_slots.items():
         if len({slot.meal_type.casefold() for slot in slots}) != 1:
             raise DomainError("INVALID_BATCH_GROUP", f"Batch {key} mixes different meal types")
+        if len({slot.meal_group_key for slot in slots}) != 1:
+            raise DomainError(
+                "INVALID_BATCH_GROUP", f"Batch {key} mixes different meal groups"
+            )
         if any(
             len(slot.participant_member_ids) != len(set(slot.participant_member_ids))
             for slot in slots
@@ -1135,7 +1207,7 @@ def generate_plan(
         status=PlanStatus.GENERATING.value,
         diagnostics=diagnostics,
         calorie_boosts=[boost.model_dump(mode="json") for boost in payload.calorie_boosts],
-        guest_days=[guest_day.model_dump(mode="json") for guest_day in payload.guest_days],
+        guest_days=[_guest_payload(guest_day) for guest_day in payload.guest_days],
     )
     db.add(plan)
     db.flush()
@@ -1341,6 +1413,7 @@ def generate_plan(
                 batch_id=batch.id,
                 meal_date=grouped_slot.meal_date,
                 meal_type=grouped_slot.meal_type.lower(),
+                meal_group_key=grouped_slot.meal_group_key,
             )
             db.add(occurrence)
             db.flush()
@@ -1443,6 +1516,7 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
                 "id": occurrence.id,
                 "meal_date": occurrence.meal_date,
                 "meal_type": occurrence.meal_type,
+                "meal_group_key": occurrence.meal_group_key,
                 "locked": occurrence.locked,
                 "batch_id": batch.id,
                 "parent_batch_id": batch.parent_batch_id,
@@ -1504,6 +1578,378 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
         "occurrences": items,
         "daily_nutrition": daily_nutrition,
     }
+
+
+def _automatic_group_choice(
+    db: Session,
+    plan: MealPlan,
+    meal_type: str,
+    member_ids: list[str],
+) -> RecipeCandidate:
+    recipes = list(
+        db.scalars(
+            select(Recipe)
+            .join(RecipeMealType, RecipeMealType.recipe_id == Recipe.id)
+            .where(
+                Recipe.household_id == plan.household_id,
+                Recipe.archived_at.is_(None),
+                RecipeMealType.meal_type == meal_type,
+            )
+            .order_by(Recipe.title, Recipe.id)
+        ).all()
+    )
+    candidates = [
+        candidate
+        for recipe in recipes
+        if (candidate := _candidate(db, recipe, meal_type)) is not None
+    ]
+    hard_terms, preferred_terms, disliked_terms = _restriction_terms(db, member_ids)
+    safe = [
+        candidate
+        for candidate in candidates
+        if not any(
+            re.search(rf"\b{re.escape(term)}\b", candidate.ingredient_text)
+            for term in hard_terms
+        )
+    ]
+    if not safe:
+        raise DomainError(
+            "NO_ELIGIBLE_RECIPES",
+            f"No planner-ready {meal_type} recipe is safe for this meal group",
+            422,
+        )
+    participants = [
+        _target_for(db, member_id, meal_type, plan.household_id)
+        for member_id in member_ids
+    ]
+    try:
+        return choose_shared_recipe(
+            safe,
+            participants,
+            preferred_terms=preferred_terms,
+            disliked_terms=disliked_terms,
+            enforce_nutrition_bounds=False,
+        ).candidate
+    except PlannerInfeasibleError as exc:
+        raise DomainError(
+            "NUTRITION_TARGET_INFEASIBLE",
+            f"No {meal_type} recipe can be allocated across this meal group",
+            422,
+        ) from exc
+
+
+def _regroup_plan_slots(db: Session, plan: MealPlan, slots: list) -> None:
+    current = list(
+        db.scalars(
+            select(MealOccurrence).where(
+                MealOccurrence.meal_plan_id == plan.id,
+                MealOccurrence.component_slot == 0,
+            )
+        ).all()
+    )
+    current_attendance: dict[tuple[date, str], set[str]] = defaultdict(set)
+    current_partitions: dict[tuple[date, str], set[tuple[str, tuple[str, ...]]]] = (
+        defaultdict(set)
+    )
+    for occurrence in current:
+        members = tuple(
+            sorted(
+                db.scalars(
+                    select(PortionAllocation.member_id).where(
+                        PortionAllocation.meal_occurrence_id == occurrence.id
+                    )
+                ).all()
+            )
+        )
+        key = (occurrence.meal_date, occurrence.meal_type)
+        current_attendance[key].update(members)
+        current_partitions[key].add((occurrence.meal_group_key, members))
+
+    desired_attendance: dict[tuple[date, str], set[str]] = defaultdict(set)
+    desired_partitions: dict[tuple[date, str], set[tuple[str, tuple[str, ...]]]] = (
+        defaultdict(set)
+    )
+    slot_keys: set[tuple[date, str, str]] = set()
+    participant_keys: set[tuple[date, str, str]] = set()
+    for slot in slots:
+        key = (slot.meal_date, slot.meal_type.value, slot.meal_group_key)
+        if key in slot_keys:
+            raise DomainError(
+                "DUPLICATE_PLAN_SLOT",
+                "A date, meal type and meal group can only be edited once",
+                422,
+            )
+        slot_keys.add(key)
+        members = tuple(sorted(slot.participant_member_ids))
+        desired_partitions[(slot.meal_date, slot.meal_type.value)].add(
+            (slot.meal_group_key, members)
+        )
+        for member_id in members:
+            participant_key = (slot.meal_date, slot.meal_type.value, member_id)
+            if participant_key in participant_keys:
+                raise DomainError(
+                    "DUPLICATE_MEAL_PARTICIPANT",
+                    "A household member can only belong to one recipe group per meal",
+                    422,
+                )
+            participant_keys.add(participant_key)
+            desired_attendance[(slot.meal_date, slot.meal_type.value)].add(member_id)
+    if desired_attendance != current_attendance:
+        raise DomainError(
+            "ATTENDANCE_CHANGE_NOT_SUPPORTED",
+            "Meal groups may redistribute existing attendees but cannot add or remove attendance",
+            422,
+        )
+
+    changed_meals = {
+        key
+        for key in current_partitions
+        if current_partitions[key] != desired_partitions.get(key, set())
+    }
+    for occurrence in current:
+        if (occurrence.meal_date, occurrence.meal_type) not in changed_meals:
+            continue
+        batch = db.get(MealBatch, occurrence.batch_id)
+        if batch is not None and _batch_tree_is_cooked(db, batch):
+            raise DomainError(
+                "COOKED_DAY_LOCKED",
+                "A cooked batch and its leftover meals cannot be regrouped",
+                409,
+            )
+
+    existing_batches = {
+        batch.id: batch
+        for batch in db.scalars(
+            select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
+        ).all()
+        if batch.parent_batch_id is None
+    }
+    grouped_slots: dict[str, list] = defaultdict(list)
+    for slot in slots:
+        grouped_slots[slot.batch_key].append(slot)
+    resolved_batches: dict[str, MealBatch] = {}
+    replaced_batches: list[str] = []
+    for batch_key, batch_slots in grouped_slots.items():
+        meal_types = {slot.meal_type.value for slot in batch_slots}
+        group_keys = {slot.meal_group_key for slot in batch_slots}
+        if len(meal_types) != 1 or len(group_keys) != 1:
+            raise DomainError(
+                "INVALID_BATCH_GROUP",
+                "A cooking batch cannot mix meal types or meal groups",
+                422,
+            )
+        ordered_dates = sorted(slot.meal_date for slot in batch_slots)
+        if (ordered_dates[-1] - ordered_dates[0]).days > 2 and not any(
+            slot.food_safety_acknowledged for slot in batch_slots
+        ):
+            raise DomainError(
+                "LEFTOVER_ACKNOWLEDGEMENT_REQUIRED",
+                "A regrouped batch extends beyond 48 hours; acknowledge the food-safety warning",
+                422,
+            )
+        batch = existing_batches.get(batch_key)
+        member_ids = sorted(
+            {
+                member_id
+                for slot in batch_slots
+                for member_id in slot.participant_member_ids
+            }
+        )
+        if batch is None:
+            candidate = _automatic_group_choice(
+                db, plan, next(iter(meal_types)), member_ids
+            )
+            batch = MealBatch(
+                meal_plan_id=plan.id,
+                recipe_version_id=candidate.recipe_version_id,
+                servings=Decimal("1"),
+                planned_cook_date=ordered_dates[0],
+            )
+            db.add(batch)
+            db.flush()
+            replaced_batches.append(batch.id)
+        resolved_batches[batch_key] = batch
+
+    current_by_key = {
+        (item.meal_date, item.meal_type, item.meal_group_key): item for item in current
+    }
+    retained_ids: set[str] = set()
+    for slot in slots:
+        identity = (slot.meal_date, slot.meal_type.value, slot.meal_group_key)
+        occurrence = current_by_key.get(identity)
+        batch = resolved_batches[slot.batch_key]
+        if occurrence is None:
+            occurrence = MealOccurrence(
+                meal_plan_id=plan.id,
+                batch_id=batch.id,
+                meal_date=slot.meal_date,
+                meal_type=slot.meal_type.value,
+                meal_group_key=slot.meal_group_key,
+            )
+            db.add(occurrence)
+            db.flush()
+        else:
+            occurrence.batch_id = batch.id
+        retained_ids.add(occurrence.id)
+        db.execute(
+            delete(PortionAllocation).where(
+                PortionAllocation.meal_occurrence_id == occurrence.id
+            )
+        )
+        for member_id in slot.participant_member_ids:
+            db.add(
+                PortionAllocation(
+                    meal_occurrence_id=occurrence.id,
+                    member_id=member_id,
+                    servings=Decimal("1"),
+                )
+            )
+
+    removed = [item for item in current if item.id not in retained_ids]
+    for occurrence in removed:
+        child_batch_ids = list(
+            db.scalars(
+                select(MealBatch.id).where(
+                    MealBatch.parent_batch_id == occurrence.batch_id
+                )
+            ).all()
+        )
+        if child_batch_ids:
+            side_occurrences = list(
+                db.scalars(
+                    select(MealOccurrence).where(
+                        MealOccurrence.batch_id.in_(child_batch_ids),
+                        MealOccurrence.meal_date == occurrence.meal_date,
+                        MealOccurrence.meal_group_key == occurrence.meal_group_key,
+                    )
+                ).all()
+            )
+            for side in side_occurrences:
+                db.execute(
+                    delete(PortionAllocation).where(
+                        PortionAllocation.meal_occurrence_id == side.id
+                    )
+                )
+                db.delete(side)
+        db.execute(
+            delete(PortionAllocation).where(
+                PortionAllocation.meal_occurrence_id == occurrence.id
+            )
+        )
+        db.delete(occurrence)
+    db.flush()
+
+    # Keep compatible side batches aligned with their main group's membership.
+    for main in db.scalars(
+        select(MealOccurrence).where(
+            MealOccurrence.meal_plan_id == plan.id,
+            MealOccurrence.component_slot == 0,
+        )
+    ).all():
+        members = list(
+            db.scalars(
+                select(PortionAllocation.member_id).where(
+                    PortionAllocation.meal_occurrence_id == main.id
+                )
+            ).all()
+        )
+        for side_batch in db.scalars(
+            select(MealBatch).where(MealBatch.parent_batch_id == main.batch_id)
+        ).all():
+            side = db.scalar(
+                select(MealOccurrence).where(
+                    MealOccurrence.batch_id == side_batch.id,
+                    MealOccurrence.meal_date == main.meal_date,
+                    MealOccurrence.meal_group_key == main.meal_group_key,
+                )
+            )
+            if side is None:
+                side = MealOccurrence(
+                    meal_plan_id=plan.id,
+                    batch_id=side_batch.id,
+                    meal_date=main.meal_date,
+                    meal_type=main.meal_type,
+                    meal_group_key=main.meal_group_key,
+                    component_slot=side_batch.component_slot,
+                )
+                db.add(side)
+                db.flush()
+            db.execute(
+                delete(PortionAllocation).where(
+                    PortionAllocation.meal_occurrence_id == side.id
+                )
+            )
+            for member_id in members:
+                db.add(
+                    PortionAllocation(
+                        meal_occurrence_id=side.id,
+                        member_id=member_id,
+                        servings=Decimal("0.25"),
+                    )
+                )
+    db.flush()
+
+    batches = list(
+        db.scalars(select(MealBatch).where(MealBatch.meal_plan_id == plan.id)).all()
+    )
+    for batch in sorted(batches, key=lambda item: item.parent_batch_id is None):
+        batch_occurrences = list(
+            db.scalars(
+                select(MealOccurrence).where(MealOccurrence.batch_id == batch.id)
+            ).all()
+        )
+        if not batch_occurrences:
+            db.delete(batch)
+            continue
+        batch.planned_cook_date = min(item.meal_date for item in batch_occurrences)
+
+    # Re-select a main recipe only when changed members make the current one unsafe.
+    for batch in resolved_batches.values():
+        occurrences = list(
+            db.scalars(
+                select(MealOccurrence).where(
+                    MealOccurrence.batch_id == batch.id,
+                    MealOccurrence.component_slot == 0,
+                )
+            ).all()
+        )
+        if not occurrences:
+            continue
+        member_ids = sorted(
+            {
+                member_id
+                for occurrence in occurrences
+                for member_id in db.scalars(
+                    select(PortionAllocation.member_id).where(
+                        PortionAllocation.meal_occurrence_id == occurrence.id
+                    )
+                ).all()
+            }
+        )
+        version = db.get(RecipeVersion, batch.recipe_version_id)
+        recipe = db.get(Recipe, version.recipe_id) if version else None
+        candidate = _candidate_from_version(db, recipe, version) if recipe else None
+        hard_terms, _, _ = _restriction_terms(db, member_ids)
+        unsafe = candidate is None or any(
+            re.search(rf"\b{re.escape(term)}\b", candidate.ingredient_text)
+            for term in hard_terms
+        )
+        if unsafe:
+            replacement = _automatic_group_choice(
+                db, plan, occurrences[0].meal_type, member_ids
+            )
+            batch.recipe_version_id = replacement.recipe_version_id
+            replaced_batches.append(batch.id)
+    if replaced_batches:
+        plan.diagnostics = [
+            *(plan.diagnostics or []),
+            {
+                "code": "MEAL_GROUP_RECIPES_SELECTED",
+                "batch_ids": sorted(set(replaced_batches)),
+            },
+        ]
+        flag_modified(plan, "diagnostics")
+    db.flush()
 
 
 @router.get("/{plan_id}")
@@ -1579,7 +2025,7 @@ def edit_plan_preserving_recipes(
     boost_payload = [
         item.model_dump(mode="json") for item in payload.calorie_boosts
     ]
-    guest_payload = [item.model_dump(mode="json") for item in payload.guest_days]
+    guest_payload = [_guest_payload(item) for item in payload.guest_days]
     if _normalised_boosts(plan.calorie_boosts or [], cooked_dates) != _normalised_boosts(
         boost_payload, cooked_dates
     ) or _normalised_guests(plan.guest_days or [], cooked_dates) != _normalised_guests(
@@ -1651,6 +2097,28 @@ def edit_plan_preserving_recipes(
                 "Guests can only attend meals planned for that date",
                 422,
             )
+        for assignment in guest_day.meal_groups:
+            matches_group = (
+                any(
+                    slot.meal_date == guest_day.meal_date
+                    and slot.meal_type == assignment.meal_type
+                    and slot.meal_group_key == assignment.meal_group_key
+                    for slot in payload.main_slots
+                )
+                if payload.main_slots is not None
+                else any(
+                    occurrence.meal_date == guest_day.meal_date
+                    and occurrence.meal_type == assignment.meal_type
+                    and occurrence.meal_group_key == assignment.meal_group_key
+                    for occurrence in occurrences
+                )
+            )
+            if not matches_group:
+                raise DomainError(
+                    "INVALID_GUEST_MEAL_GROUP",
+                    "Guests must join a recipe group planned for that meal",
+                    422,
+                )
 
     if removed_dates:
         removed_occurrence_ids = [
@@ -1699,12 +2167,16 @@ def edit_plan_preserving_recipes(
             if first_remaining_date is not None:
                 batch.planned_cook_date = first_remaining_date
 
+    if payload.main_slots is not None:
+        _regroup_plan_slots(db, plan, payload.main_slots)
+
     plan.calorie_boosts = boost_payload
     plan.guest_days = guest_payload
     flag_modified(plan, "calorie_boosts")
     flag_modified(plan, "guest_days")
     for cook_day in sorted(
-        payload.removed_cook_days, key=lambda item: (item.meal_date, item.meal_type)
+        payload.removed_cook_days,
+        key=lambda item: (item.meal_date, item.meal_type, item.meal_group_key),
     ):
         if cook_day.meal_date not in remaining_dates:
             raise DomainError(
@@ -1712,9 +2184,16 @@ def edit_plan_preserving_recipes(
                 "A cooking day cannot be removed from a deleted date",
                 422,
             )
-        _remove_cook_day(db, plan, cook_day.meal_date, cook_day.meal_type)
+        _remove_cook_day(
+            db,
+            plan,
+            cook_day.meal_date,
+            cook_day.meal_type,
+            cook_day.meal_group_key,
+        )
     for cook_day in sorted(
-        payload.added_cook_days, key=lambda item: (item.meal_date, item.meal_type)
+        payload.added_cook_days,
+        key=lambda item: (item.meal_date, item.meal_type, item.meal_group_key),
     ):
         if cook_day.meal_date not in remaining_dates:
             raise DomainError(
@@ -1727,6 +2206,7 @@ def edit_plan_preserving_recipes(
             plan,
             cook_day.meal_date,
             cook_day.meal_type,
+            cook_day.meal_group_key,
             cook_day.recipe_id,
         )
     for swap in payload.recipe_swaps:
@@ -1791,6 +2271,7 @@ def edit_plan_preserving_recipes(
             "recipe_swaps": [
                 item.model_dump(mode="json") for item in payload.recipe_swaps
             ],
+            "meal_groups_updated": payload.main_slots is not None,
         }
     )
     plan.diagnostics = diagnostics
@@ -2001,6 +2482,7 @@ def add_or_replace_side(
                 batch_id=side_batch.id,
                 meal_date=main_occurrence.meal_date,
                 meal_type=main_occurrence.meal_type,
+                meal_group_key=main_occurrence.meal_group_key,
                 component_slot=component_slot,
             )
             db.add(side_occurrence)

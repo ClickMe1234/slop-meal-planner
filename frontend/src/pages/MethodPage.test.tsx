@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -43,6 +43,37 @@ const methodView: BackendMethodView = {
   scaling_available: true,
 }
 
+const onionSource = 'Fry the onions until soft, then add the stock.'
+const onionActionText = onionSource.slice(0, -1)
+const onionMethodView: BackendMethodView = {
+  ...methodView,
+  title: 'Onion supper',
+  source_blocks: [{ id: 'block-onion', position: 0, text: onionSource }],
+  method: {
+    schema_version: 1,
+    annotations: [{
+      id: 'annotation-action', block_id: 'block-onion', start: 0, end: onionSource.length,
+      kind: 'action', origin: 'automatic', confidence: .9, accepted: false,
+    }],
+    omissions: [],
+    stages: [{ id: 'stage-1', title: 'Cook', position: 0 }],
+    actions: [{
+      id: 'action-1', stage_id: 'stage-1', position: 0, text: onionActionText,
+      source_annotation_ids: ['annotation-action'], equipment: [], confidence: .9,
+    }],
+    ingredient_bindings: [],
+    edges: [],
+  },
+  ingredients: [{
+    id: 'ingredient-onion', lineage_id: 'red-onion-lineage', name: 'red onions',
+    quantity: 2, quantity_text: '2', unit: 'item', display: '2 item red onions', optional: false,
+  }],
+  rendered_blocks: [{
+    id: 'block-onion', position: 0, text: onionSource,
+    segments: [{ kind: 'text', text: onionSource }],
+  }],
+}
+
 function renderMethod() {
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -59,7 +90,7 @@ function mockMethodPage(view: BackendMethodView = methodView) {
   vi.spyOn(api, 'me').mockResolvedValue({
     id: 'user-1', username: 'owner', role: 'owner', must_change_password: false,
     ingredient_locale: 'uk', method_view_preference: 'written', measurement_system: 'source',
-    method_tutorial_version_seen: 1,
+    method_tutorial_version_seen: 2,
   })
   vi.spyOn(api, 'getRecipe').mockResolvedValue({
     id: 'recipe-1', title: 'Tomato supper', eligibility: 'planner_ready', source_type: 'url',
@@ -98,7 +129,7 @@ describe('MethodPage', () => {
     const updateMe = vi.spyOn(api, 'updateMe').mockResolvedValue({
       id: 'user-1', username: 'owner', role: 'owner', must_change_password: false,
       ingredient_locale: 'uk', method_view_preference: 'summary', measurement_system: 'source',
-      method_tutorial_version_seen: 1,
+      method_tutorial_version_seen: 2,
     })
 
     renderMethod()
@@ -113,7 +144,7 @@ describe('MethodPage', () => {
     expect(screen.getByText('Fry the tomatoes')).toBeInTheDocument()
   })
 
-  it('marks a complete needs-review method as reviewed without opening the editor', async () => {
+  it('saves a complete needs-review method as reviewed without opening the editor', async () => {
     const user = userEvent.setup()
     mockMethodPage()
     let currentView = methodView
@@ -127,7 +158,7 @@ describe('MethodPage', () => {
     renderMethod()
 
     expect(await screen.findByRole('heading', { name: 'Tomato supper' })).toBeInTheDocument()
-    const reviewButton = screen.getByRole('button', { name: 'Mark as reviewed' })
+    const reviewButton = screen.getByRole('button', { name: 'Save' })
     expect(reviewButton).toBeEnabled()
     expect(screen.queryByText('Original written method')).not.toBeInTheDocument()
 
@@ -138,9 +169,9 @@ describe('MethodPage', () => {
       mark_reviewed: true,
       source_kind: 'publisher',
     })))
-    expect(await screen.findByText('Method reviewed and saved.')).toBeInTheDocument()
+    expect(await screen.findByText('Method saved and reviewed.')).toBeInTheDocument()
     expect(screen.getByText('Reviewed')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Mark as reviewed' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
   })
 
   it('makes each unaccounted clause exact, prominent, and locatable in the editor', async () => {
@@ -150,9 +181,12 @@ describe('MethodPage', () => {
     renderMethod()
 
     await screen.findByRole('heading', { name: 'Tomato supper' })
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: 'Edit method' }))
 
     expect(screen.getByText('1 unaccounted clause')).toBeInTheDocument()
+    expect(screen.getByText(/This warning does not block saving the reviewed method/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
     const locator = screen.getByRole('button', { name: `Locate unaccounted clause 1: ${unresolvedText}` })
     expect(locator).toHaveTextContent(unresolvedText)
     const sourceSpan = document.querySelector('mark[data-unreviewed-clause="true"]') as HTMLElement
@@ -162,5 +196,131 @@ describe('MethodPage', () => {
     await user.click(locator)
 
     expect(sourceSpan).toHaveFocus()
+  })
+
+  it('persists editor changes when reviewing with an unaccounted clause', async () => {
+    const user = userEvent.setup()
+    let currentView = unreviewedMethodView
+    mockMethodPage(currentView)
+    vi.spyOn(api, 'updateMe').mockResolvedValue({
+      id: 'user-1', username: 'owner', role: 'owner', must_change_password: false,
+      ingredient_locale: 'uk', method_view_preference: 'summary', measurement_system: 'source',
+      method_tutorial_version_seen: 2,
+    })
+    vi.mocked(api.getRecipeMethod).mockImplementation(async () => currentView)
+    const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => {
+      currentView = {
+        ...currentView,
+        recipe_version: 2,
+        recipe_version_number: 2,
+        method_status: payload.mark_reviewed ? 'reviewed' : 'needs_review',
+        method: payload.method,
+        household_notes: payload.household_notes,
+      }
+      return currentView
+    })
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Tomato supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    const actionText = screen.getAllByRole('textbox', { name: 'Action text' })[0]
+    await user.clear(actionText)
+    await user.type(actionText, 'Gently fry the tomatoes')
+    await user.type(screen.getByRole('textbox', { name: 'Household notes' }), 'Use the heavy pan.')
+    await user.click(screen.getAllByRole('button', { name: 'Save' }).at(-1)!)
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith('recipe-1', expect.objectContaining({
+      mark_reviewed: true,
+      household_notes: 'Use the heavy pan.',
+      method: expect.objectContaining({
+        actions: expect.arrayContaining([expect.objectContaining({ text: 'Gently fry the tomatoes' })]),
+      }),
+    })))
+    expect(await screen.findByText('Method saved and reviewed.')).toBeInTheDocument()
+    await user.click(screen.getByRole('radio', { name: 'Summary' }))
+    expect(screen.getByText('Gently fry the tomatoes')).toBeInTheDocument()
+  })
+
+  it('links a mismatched ingredient to the exact source word and saves its amount binding', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(onionMethodView)
+    const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => ({
+      ...onionMethodView,
+      recipe_version: 2,
+      recipe_version_number: 2,
+      method: payload.method,
+    }))
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Onion supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    await user.click(screen.getByRole('button', { name: /red onions/i }))
+    await user.click(screen.getByRole('button', { name: 'Link red onions to “onions”' }))
+
+    expect(screen.getByText(/Linked red onions to “onions”/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+
+    const payload = save.mock.calls[0]![1]
+    const annotation = payload.method.annotations.find(item => item.kind === 'ingredient')
+    const binding = payload.method.ingredient_bindings.find(item => item.ingredient_lineage_id === 'red-onion-lineage')
+    expect(annotation).toMatchObject({
+      block_id: 'block-onion',
+      start: onionSource.indexOf('onions'),
+      end: onionSource.indexOf('onions') + 'onions'.length,
+      ingredient_lineage_id: 'red-onion-lineage',
+      origin: 'user',
+      accepted: true,
+    })
+    expect(binding).toMatchObject({
+      action_id: 'action-1',
+      ingredient_lineage_id: 'red-onion-lineage',
+      portion_mode: 'unspecified',
+      accepted: true,
+    })
+    expect(binding?.annotation_id).toBe(annotation?.id)
+  })
+
+  it('splits an action at the text cursor and preserves the cooking sequence', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(onionMethodView)
+    const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => ({
+      ...onionMethodView,
+      recipe_version: 2,
+      recipe_version_number: 2,
+      method: payload.method,
+    }))
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Onion supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    const actionText = screen.getByRole('textbox', { name: 'Action text' }) as HTMLTextAreaElement
+    const splitAt = onionActionText.indexOf('then')
+    actionText.focus()
+    actionText.setSelectionRange(splitAt, splitAt)
+    fireEvent.select(actionText)
+
+    const splitButton = screen.getByRole('button', { name: 'Split step at cursor' })
+    expect(splitButton).toBeEnabled()
+    await user.click(splitButton)
+
+    const splitActions = screen.getAllByRole('textbox', { name: 'Action text' })
+    expect(splitActions).toHaveLength(2)
+    expect(splitActions[0]).toHaveValue('Fry the onions until soft,')
+    expect(splitActions[1]).toHaveValue('then add the stock')
+
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+    const payload = save.mock.calls[0]![1]
+    const newAction = payload.method.actions.find(item => item.id !== 'action-1')
+    expect(newAction).toMatchObject({ stage_id: 'stage-1', position: 1, text: 'then add the stock' })
+    expect(payload.method.edges).toContainEqual(expect.objectContaining({
+      from_action_id: 'action-1',
+      to_action_id: newAction?.id,
+      kind: 'sequence',
+    }))
   })
 })

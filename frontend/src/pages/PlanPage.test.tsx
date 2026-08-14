@@ -81,6 +81,7 @@ describe('PlanPage wizard', () => {
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
+    await user.click(screen.getByRole('button', { name: /continue/i }))
 
     expect(screen.getByRole('heading', { name: 'Anything different this week?' })).toBeInTheDocument()
     await user.type(screen.getByRole('spinbutton', { name: /you extra calories/i }), '1400')
@@ -107,6 +108,7 @@ describe('PlanPage wizard', () => {
     renderPlanner()
     const days = screen.getByRole('spinbutton', { name: 'Number of days' })
     fireEvent.change(days, { target: { value: '1' } })
+    await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
@@ -330,7 +332,7 @@ describe('PlanPage wizard', () => {
       await user.click(screen.getByRole('button', { name: 'Plan one fewer day' }))
     }
 
-    for (let step = 0; step < 6; step += 1) {
+    for (let step = 0; step < 7; step += 1) {
       await user.click(screen.getByRole('button', { name: /continue/i }))
     }
     await user.click(screen.getByRole('button', { name: /generate meal plan/i }))

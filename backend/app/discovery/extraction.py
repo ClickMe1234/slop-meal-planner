@@ -50,6 +50,24 @@ def _parse_json_documents(parser: RecipeHtmlParser) -> list[dict[str, Any]]:
     return nodes
 
 
+def _best_recipe_node(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Prefer the complete Recipe when a publisher emits several Recipe nodes."""
+
+    recipes = [node for node in nodes if "recipe" in _types(node.get("@type"))]
+    if not recipes:
+        return None
+
+    def score(node: dict[str, Any]) -> int:
+        return (
+            8 * bool(node.get("recipeInstructions"))
+            + 4 * bool(node.get("recipeIngredient") or node.get("ingredients"))
+            + 2 * bool(node.get("recipeYield"))
+            + bool(node.get("name"))
+        )
+
+    return max(recipes, key=score)
+
+
 def _decimal(value: object) -> Decimal | None:
     if value is None:
         return None
@@ -138,7 +156,7 @@ def _normalise_instructions(value: object) -> tuple[InstructionBlock, ...]:
             if text := _normalise_instruction_text(item):
                 collected.append((heading, text))
             return
-        if isinstance(item, list):
+        if isinstance(item, (list, tuple)):
             for nested in item:
                 visit(nested, heading)
             return
@@ -246,7 +264,7 @@ def extract_recipe(html: str, page_url: str) -> ExtractedRecipe:
     parser = RecipeHtmlParser()
     parser.feed(html)
     nodes = _parse_json_documents(parser)
-    recipe_node = next((node for node in nodes if "recipe" in _types(node.get("@type"))), None)
+    recipe_node = _best_recipe_node(nodes)
 
     reasons: list[str] = []
     if recipe_node is not None:
@@ -260,6 +278,10 @@ def extract_recipe(html: str, page_url: str) -> ExtractedRecipe:
         nutrition = parse_publisher_nutrition(recipe_node.get("nutrition"))
         instructions = _normalise_instructions(recipe_node.get("recipeInstructions"))
         method = "json_ld"
+        if not instructions and parser.instructions:
+            instructions = _normalise_instructions(parser.instructions)
+            method = "json_ld_semantic_method_fallback"
+            reasons.append("Cooking method was read from visible page markup and should be checked")
         if yield_was_range:
             reasons.append("Serving yield was a range; its midpoint must be confirmed")
     else:
@@ -269,7 +291,7 @@ def extract_recipe(html: str, page_url: str) -> ExtractedRecipe:
         publisher = parser.meta.get("og:site_name")
         image_url = parser.meta.get("og:image")
         nutrition = None
-        instructions = ()
+        instructions = _normalise_instructions(parser.instructions)
         method = "semantic_html_fallback"
         reasons.append("No Schema.org Recipe JSON-LD was found; fallback fields must be checked")
 

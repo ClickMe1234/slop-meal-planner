@@ -2,7 +2,7 @@
 
 > A free, self-hosted meal planner for real households.
 
-Current release: **1.2.0**. See the [latest release notes](#changelog) or the
+Current release: **1.3.2**. See the [latest release notes](#changelog) or the
 [full changelog](CHANGELOG.md).
 
 ## About
@@ -35,6 +35,11 @@ it is self-hosted, there is no subscription fee for the application.
 The week view puts every planned meal, portion, batch, leftover, and nutrition
 summary in one place. Plans can be regenerated while keeping meals that you
 have already chosen.
+
+Household members can share a recipe or be placed in separate meal groups for
+breakfast, lunch, dinner, or snacks. Save the usual grouping as a household
+default, override it for a particular date, and assign guests to the recipe
+they will join.
 
 ![Weekly meal plan](docs/examples/week.png)
 
@@ -89,6 +94,29 @@ Fuzzy matching of shopping list to pantry ingredients supported!
 ![Shopping list matching](docs/examples/shopping2.png)
 
 ## Changelog
+
+### 1.3.2 - 2026-08-14
+
+- Fetch current Allrecipes cooking methods through the protected server-side
+  importer, including recipe links pasted with trailing punctuation.
+- Save an edited method and mark it reviewed with one clear Save action.
+
+### 1.3.1 - 2026-08-14
+
+- Restore cooking-method imports from current Allrecipes recipe pages.
+- Drag an ingredient onto the exact word used in a method step so its amount is
+  shown even when the wording differs from the ingredient name.
+- Split long method actions at the text cursor without losing their cooking
+  order or linked data.
+
+### 1.3.0 - 2026-08-13
+
+- Plan different recipes for different household members at the same meal,
+  with reusable household defaults and date-specific overrides.
+- Assign guests to a meal group, review every group's recipe equally, and show
+  clear member labels, portions, and nutrition in Week view.
+- Regroup uncooked meals without replacing still-valid recipes; newly created
+  or invalid groups receive an automatic replacement recipe.
 
 ### 1.2.0 - 2026-08-08
 
@@ -198,7 +226,7 @@ Compose Manager is required for the application container.
    passwords, setup tokens, API keys, and session cookies to on-path devices.
 4. In Unraid Apps, choose **Add Container** and use the exact values in
    [`deploy/unraid-template.xml`](deploy/unraid-template.xml):
-   `ghcr.io/clickme1234/slop-meal-planner:1.2.0` as Repository, `Bridge` as
+   `ghcr.io/clickme1234/slop-meal-planner:1.3.2` as Repository, `Bridge` as
    Network Type, `Shell` as the console shell, Privileged off, and `--init` as
    Extra Parameters. The Repository is a Docker image reference, not the GitHub
    source URL. Leave Post Arguments blank.

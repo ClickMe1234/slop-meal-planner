@@ -213,6 +213,12 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   listMembers: () => request<BackendMember[]>('/household-members'),
+  getMealGroupDefaults: () => request<BackendMealGroupDefaults>('/households/current/meal-group-defaults'),
+  updateMealGroupDefaults: (payload: { expected_version: number; groups: BackendMealGroupDefaults['groups'] }) =>
+    request<BackendMealGroupDefaults>('/households/current/meal-group-defaults', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
   listTargets: () => request<BackendTarget[]>('/household-members/targets'),
   createMember: (name: string) =>
     request<BackendMember>('/household-members', {
@@ -821,6 +827,16 @@ export interface BackendMember {
   version: number
 }
 
+export interface BackendMealGroup {
+  group_key: string
+  member_ids: string[]
+}
+
+export interface BackendMealGroupDefaults {
+  household_version: number
+  groups: Record<BackendMealType, BackendMealGroup[]>
+}
+
 export interface BackendTarget {
   id: string
   member_id: string
@@ -1109,7 +1125,7 @@ export interface BackendPlan {
   status: 'draft' | 'generating' | 'ready' | 'accepted' | 'superseded'
   diagnostics: Array<Record<string, unknown>>
   calorie_boosts?: Array<{ meal_date: string; member_id: string; calories: ApiDecimal; meal_allocations?: Array<{ meal_type: string; percentage: number }> }>
-  guest_days?: Array<{ meal_date: string; guest_count: number; meal_types?: string[] }>
+  guest_days?: Array<{ meal_date: string; guest_count: number; meal_types?: string[]; meal_groups?: Array<{ meal_type: string; meal_group_key: string }> }>
   version: number
 }
 
@@ -1119,6 +1135,7 @@ export interface BackendPlanDetail {
     id: string
     meal_date: string
     meal_type: string
+    meal_group_key?: string
     batch_id: string
     parent_batch_id?: string
     component_slot: number
@@ -1155,9 +1172,18 @@ export interface BackendPlanPreservingEditRequest {
     meal_date: string
     guest_count: number
     meal_types?: string[]
+    meal_groups?: Array<{ meal_type: string; meal_group_key: string }>
   }>
-  added_cook_days: Array<{ meal_date: string; meal_type: string; recipe_id: string }>
-  removed_cook_days: Array<{ meal_date: string; meal_type: string }>
+  added_cook_days: Array<{ meal_date: string; meal_type: string; meal_group_key?: string; recipe_id: string }>
+  removed_cook_days: Array<{ meal_date: string; meal_type: string; meal_group_key?: string }>
   recipe_swaps: Array<{ batch_id: string; recipe_id: string }>
+  main_slots?: Array<{
+    meal_date: string
+    meal_type: string
+    meal_group_key: string
+    participant_member_ids: string[]
+    batch_key: string
+    food_safety_acknowledged: boolean
+  }>
   ignore_nutrition_tolerances?: boolean
 }

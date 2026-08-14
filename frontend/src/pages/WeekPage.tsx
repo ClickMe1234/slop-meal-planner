@@ -107,6 +107,7 @@ export function guestCountForOccurrence(
 ): number {
   const guestDay = plan.guest_days?.find(item => item.meal_date === occurrence.meal_date)
   if (!guestDay) return 0
+  if (guestDay.meal_groups?.length && !guestDay.meal_groups.some(item => item.meal_type === occurrence.meal_type && item.meal_group_key === (occurrence.meal_group_key ?? 'shared'))) return 0
   if (guestDay.meal_types?.length && !guestDay.meal_types.includes(occurrence.meal_type)) return 0
   return Number(guestDay.guest_count)
 }
@@ -251,7 +252,9 @@ function DemoWeekPage() {
 }
 
 function occurrenceNutrition(item: BackendPlanDetail['occurrences'][number], memberId?: string): NutritionTotals {
-  const servings = Number(item.portions.find(portion => portion.member_id === memberId)?.servings ?? 0)
+  const servings = memberId
+    ? Number(item.portions.find(portion => portion.member_id === memberId)?.servings ?? 0)
+    : item.portions.reduce((sum, portion) => sum + Number(portion.servings), 0)
   const nutrition = item.nutrition_per_serving ?? {}
   return {
     calories: Number(nutrition.energy_kcal ?? 0) * servings,
@@ -368,12 +371,13 @@ function LiveWeekPage() {
         <div className="meal-groups">{mealGroups.map(([mealType, group]) => <section className="meal-group" key={mealType}>
           <div className="meal-group__heading"><h3>{mealTypeLabel(mealType)}</h3><span>{group.length} {group.length === 1 ? 'recipe' : 'recipes'}</span></div>
           <div className="meal-list">{group.map(meal => {
-            const nutrition = occurrenceNutrition(meal, memberId)
+            const currentMemberParticipates = meal.portions.some(portion => portion.member_id === memberId)
+            const nutrition = occurrenceNutrition(meal, currentMemberParticipates ? memberId : undefined)
             const cooked = isCooked(meal)
             return <Card className={`meal-card${cooked ? ' is-cooked' : ''}`} key={meal.id}>
               <RecipePreview imageUrl={meal.image_url}/>
               <MealBatchInfo label={meal.component_slot > 0 ? `Side ${meal.component_slot}` : 'Batch'} servings={`${meal.batch_servings} servings`}/>
-              <div className="meal-body"><div><RecipeTitle title={meal.recipe_title} sourceUrl={meal.source_url}/><p>{Number(meal.portions.find(portion => portion.member_id === memberId)?.servings ?? 0)} serving · {Math.round(nutrition.calories)} kcal</p></div><div className="meal-macros"><span>P <strong>{Math.round(nutrition.protein)}g</strong></span><span>C <strong>{Math.round(nutrition.carbs)}g</strong></span><span>F <strong>{Math.round(nutrition.fat)}g</strong></span></div></div>
+              <div className="meal-body"><div><RecipeTitle title={meal.recipe_title} sourceUrl={meal.source_url}/><p>{currentMemberParticipates ? `${Number(meal.portions.find(portion => portion.member_id === memberId)?.servings ?? 0)} serving` : 'Group total'} · {Math.round(nutrition.calories)} kcal</p></div><div className="meal-macros"><span>P <strong>{Math.round(nutrition.protein)}g</strong></span><span>C <strong>{Math.round(nutrition.carbs)}g</strong></span><span>F <strong>{Math.round(nutrition.fat)}g</strong></span></div></div>
               <MealActionRail recipeId={meal.recipe_id} batchId={meal.batch_id} cooked={cooked} pending={pendingBatches.includes(meal.batch_id)} onCookedToggle={() => void toggleCooked(meal.batch_id, cooked)}/>
               {cooked && <BatchWeightControl
                 servings={Number(meal.batch_servings)}

@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.3.2 - 2026-08-14
+
+- Restore live Allrecipes method fetching by matching Python's standard HTTPS
+  TLS extensions while retaining DNS pinning, response bounds, and SSRF
+  protections; also tolerate a comma or full stop pasted after a recipe URL.
+- Replace the separate draft/review actions with one Save action that persists
+  the method and marks it reviewed.
+
+## 1.3.1 - 2026-08-14
+
+- Restore Allrecipes cooking-method imports by allowing bounded larger recipe
+  pages, selecting the most complete Recipe JSON-LD node, and using visible
+  Directions markup when structured instructions are absent.
+- Link ingredient quantities to exact source wording by dragging an ingredient
+  onto a word, with an equivalent select-and-choose interaction for touch and
+  keyboard use.
+- Split an editable cooking action at the text cursor while preserving its
+  source annotations, ingredient bindings, stage order, and sequence graph.
+
+## 1.3.0 - 2026-08-13
+
+- Add owner-managed breakfast, lunch, dinner, and snack meal-group defaults so
+  household members can routinely eat together or receive separate recipes.
+- Add per-date meal-group overrides to planning, including explicit guest
+  group selection and group-aware cook-day scheduling.
+- Generate, display, and customise parallel recipes for a single meal with
+  clear member labels, portions, and nutrition totals for every group.
+- Allow uncooked plans to be regrouped while preserving valid recipe choices;
+  new or no-longer-valid groups are filled automatically.
+- Keep cooked occurrences immutable and include meal-group configuration in
+  selective backup and restore workflows.
+
 ## 1.2.0 - 2026-08-08
 
 - Add on-demand cooking-method extraction for saved and discovered Good Food

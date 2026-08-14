@@ -15,6 +15,12 @@ from .errors import FetchError, ResponseTooLargeError
 from .urls import resolve_fetch_url
 
 
+# Allrecipes recipe documents regularly include several megabytes of publisher
+# navigation, media metadata, and consent markup around the Recipe JSON-LD.
+# Keep the fetch bounded, but leave enough room to reach the structured method.
+MAX_PUBLISHER_HTML_BYTES = 8_000_000
+
+
 class _PinnedHTTPConnection(http.client.HTTPConnection):
     """HTTP connection whose socket uses a previously validated IP address."""
 
@@ -34,11 +40,18 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     """HTTPS connection pinned to an IP while preserving hostname TLS checks."""
 
     def __init__(self, host: str, address: str, port: int, timeout: float) -> None:
+        context = ssl.create_default_context()
+        # Match Python's normal HTTPS client context. Some Cloudflare edges
+        # (including Allrecipes) reject the otherwise-valid TLS fingerprint
+        # produced when ALPN and TLS 1.3 post-handshake auth are omitted.
+        context.set_alpn_protocols(["http/1.1"])
+        if context.post_handshake_auth is not None:
+            context.post_handshake_auth = True
         super().__init__(
             host,
             port=port,
             timeout=timeout,
-            context=ssl.create_default_context(),
+            context=context,
         )
         self._validated_address = address
 
@@ -59,7 +72,7 @@ class PoliteHttpFetcher:
         *,
         min_host_interval_seconds: float = 1.0,
         timeout_seconds: float = 10.0,
-        max_response_bytes: int = 2_000_000,
+        max_response_bytes: int = MAX_PUBLISHER_HTML_BYTES,
         max_redirects: int = 3,
         user_agent: str = "HouseholdMealPlanner/0.1 (private recipe organiser; contact local administrator)",
         client: httpx.AsyncClient | None = None,

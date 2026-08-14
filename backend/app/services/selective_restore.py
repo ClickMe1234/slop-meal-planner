@@ -37,6 +37,7 @@ from ..models import (
     FoodNutrient,
     FoodRecord,
     Household,
+    HouseholdMealGroupAssignment,
     HouseholdMember,
     IngredientNameEquivalent,
     IngredientNameOverride,
@@ -116,6 +117,7 @@ MODEL_BY_TABLE = {
         IngredientNameEquivalent,
         IngredientNameOverride,
         HouseholdMember,
+        HouseholdMealGroupAssignment,
         TargetProfile,
         MealAllocation,
         Restriction,
@@ -423,6 +425,11 @@ def _load_source_bundle(db: Session, source_household_id: str | None) -> SourceB
     tables: dict[str, list[dict[str, Any]]] = {
         "household": [_row_data(household)],
         "household_member": _rows(db, HouseholdMember, HouseholdMember.household_id == household_id),
+        "household_meal_group_assignment": _rows(
+            db,
+            HouseholdMealGroupAssignment,
+            HouseholdMealGroupAssignment.household_id == household_id,
+        ),
         "ingredient_name_equivalent": [_row_data(row) for row in db.scalars(select(IngredientNameEquivalent)).all()],
         "ingredient_name_override": _rows(db, IngredientNameOverride, IngredientNameOverride.household_id == household_id),
         "app_user": _rows(db, User, User.household_id == household_id),
@@ -576,7 +583,7 @@ def preview_archive(archive_value: str, source_household_id: str | None = None) 
 def _component_tables(components: set[str], tables: dict[str, list[dict[str, Any]]]) -> set[str]:
     include: set[str] = set()
     if "household" in components:
-        include.update({"household_member", "target_profile", "meal_allocation", "restriction", "ingredient_name_override", "ingredient_name_equivalent"})
+        include.update({"household_member", "household_meal_group_assignment", "target_profile", "meal_allocation", "restriction", "ingredient_name_override", "ingredient_name_equivalent"})
     if "users" in components:
         include.add("app_user")
     if "recipes" in components:
@@ -665,6 +672,12 @@ def _find_existing(db: Session, model: Any, data: dict[str, Any], maps: dict[str
         unique_filters = [model.us_name == data["us_name"], model.uk_name == data["uk_name"]]
     elif table == "ingredient_name_override":
         unique_filters = [model.household_id == data["household_id"], model.ingredient_key == data["ingredient_key"]]
+    elif table == "household_meal_group_assignment":
+        unique_filters = [
+            model.household_id == data["household_id"],
+            model.member_id == data["member_id"],
+            model.meal_type == data["meal_type"],
+        ]
     elif table == "food_record":
         unique_filters = [model.provider == data["provider"], model.provider_record_id == data["provider_record_id"]]
     elif table == "food_nutrient":
@@ -690,7 +703,7 @@ def _find_existing(db: Session, model: Any, data: dict[str, Any], maps: dict[str
     elif table == "portion_allocation":
         unique_filters = [model.meal_occurrence_id == data["meal_occurrence_id"], model.member_id == data["member_id"]]
     elif table == "meal_occurrence":
-        unique_filters = [model.meal_plan_id == data["meal_plan_id"], model.meal_date == data["meal_date"], model.meal_type == data["meal_type"], model.component_slot == data["component_slot"]]
+        unique_filters = [model.meal_plan_id == data["meal_plan_id"], model.meal_date == data["meal_date"], model.meal_type == data["meal_type"], model.meal_group_key == data.get("meal_group_key", "shared"), model.component_slot == data["component_slot"]]
     if unique_filters:
         existing = db.scalar(select(model).where(*unique_filters))
         if existing is not None:
@@ -765,6 +778,7 @@ def restore_archive(
             ordered = (
                 "ingredient_name_equivalent",
                 "household_member",
+                "household_meal_group_assignment",
                 "target_profile",
                 "meal_allocation",
                 "restriction",

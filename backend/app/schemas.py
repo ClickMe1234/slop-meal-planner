@@ -138,6 +138,42 @@ class MemberOut(APIModel):
     version: int
 
 
+class MealGroupDefault(APIModel):
+    group_key: BoundedIdentifier
+    member_ids: list[BoundedIdentifier] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_members(self):
+        if len(self.member_ids) != len(set(self.member_ids)):
+            raise ValueError("meal group members must be unique")
+        return self
+
+
+class MealGroupDefaultsOut(APIModel):
+    household_version: int
+    groups: dict[MealType, list[MealGroupDefault]]
+
+
+class MealGroupDefaultsUpdate(VersionedUpdate):
+    groups: dict[MealType, list[MealGroupDefault]]
+
+    @model_validator(mode="after")
+    def validate_groups(self):
+        required = set(MealType)
+        if set(self.groups) != required:
+            raise ValueError("defaults are required for every meal type")
+        for meal_type, groups in self.groups.items():
+            if not groups:
+                raise ValueError(f"{meal_type.value} needs at least one meal group")
+            keys = [group.group_key for group in groups]
+            if len(keys) != len(set(keys)):
+                raise ValueError(f"{meal_type.value} meal group keys must be unique")
+            members = [member_id for group in groups for member_id in group.member_ids]
+            if len(members) != len(set(members)):
+                raise ValueError(f"a member can only appear once in {meal_type.value} defaults")
+        return self
+
+
 class MealAllocationIn(APIModel):
     meal_type: str = Field(min_length=1, max_length=40)
     percentage: Decimal = Field(gt=0, le=100)
@@ -708,6 +744,7 @@ class JobOut(APIModel):
 class PlanSlotIn(APIModel):
     meal_date: date
     meal_type: MealType
+    meal_group_key: BoundedIdentifier = "shared"
     participant_member_ids: list[BoundedIdentifier] = Field(min_length=1, max_length=50)
     # Slots sharing a key are cooked as one batch and allocated across dates.
     # Omit the key to cook that occurrence separately.
@@ -736,15 +773,26 @@ class DayCalorieBoostIn(APIModel):
         return self
 
 
+class GuestMealGroupIn(APIModel):
+    meal_type: MealType
+    meal_group_key: BoundedIdentifier = "shared"
+
+
 class GuestDayIn(APIModel):
     meal_date: date
     guest_count: int = Field(gt=0, le=50)
     meal_types: list[MealType] = Field(default_factory=list, max_length=20)
+    meal_groups: list[GuestMealGroupIn] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
     def validate_meal_types(self):
         if len(self.meal_types) != len(set(self.meal_types)):
             raise ValueError("guest meal types must be unique")
+        grouped_types = [item.meal_type for item in self.meal_groups]
+        if len(grouped_types) != len(set(grouped_types)):
+            raise ValueError("a guest meal can only select one meal group")
+        if self.meal_types and self.meal_groups and set(self.meal_types) != set(grouped_types):
+            raise ValueError("guest meal types and meal groups must describe the same meals")
         return self
 
 
@@ -818,6 +866,7 @@ class PlanRecipeReplaceRequest(APIModel):
 class PlanCookDayIn(APIModel):
     meal_date: date
     meal_type: MealType
+    meal_group_key: BoundedIdentifier = "shared"
 
 
 class PlanCookDayAddIn(PlanCookDayIn):
@@ -837,6 +886,7 @@ class PlanPreservingEditRequest(APIModel):
     added_cook_days: list[PlanCookDayAddIn] = Field(default_factory=list, max_length=250)
     removed_cook_days: list[PlanCookDayIn] = Field(default_factory=list, max_length=250)
     recipe_swaps: list[PlanBatchRecipeSwapIn] = Field(default_factory=list, max_length=250)
+    main_slots: list[PlanSlotIn] | None = Field(default=None, min_length=1, max_length=2000)
     ignore_nutrition_tolerances: bool = False
 
     @model_validator(mode="after")
@@ -849,14 +899,18 @@ class PlanPreservingEditRequest(APIModel):
         guest_dates = [item.meal_date for item in self.guest_days]
         if len(guest_dates) != len(set(guest_dates)):
             raise ValueError("a date can only have one guest count")
-        cook_keys = [(item.meal_date, item.meal_type) for item in self.added_cook_days]
+        cook_keys = [
+            (item.meal_date, item.meal_type, item.meal_group_key)
+            for item in self.added_cook_days
+        ]
         if len(cook_keys) != len(set(cook_keys)):
-            raise ValueError("a date and meal type can only add one cooking day")
+            raise ValueError("a meal group can only add one cooking day on a date")
         removed_cook_keys = [
-            (item.meal_date, item.meal_type) for item in self.removed_cook_days
+            (item.meal_date, item.meal_type, item.meal_group_key)
+            for item in self.removed_cook_days
         ]
         if len(removed_cook_keys) != len(set(removed_cook_keys)):
-            raise ValueError("a date and meal type can only remove one cooking day")
+            raise ValueError("a meal group can only remove one cooking day on a date")
         if set(cook_keys) & set(removed_cook_keys):
             raise ValueError("a cooking day cannot be added and removed together")
         swap_batches = [item.batch_id for item in self.recipe_swaps]

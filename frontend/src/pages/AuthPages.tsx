@@ -2,7 +2,7 @@ import { ArrowLeft, ArrowRight, Check, ExternalLink, Heart, KeyRound, ShieldChec
 import { FormEvent, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Badge, Button, Card, Notice, ProgressBar, Segmented } from '../components/ui'
+import { Badge, Button, Card, Loading, Notice, ProgressBar, Segmented } from '../components/ui'
 import { api, ApiError, isDemoMode, type IngredientLocale, type MeasurementSystem, type MethodViewPreference } from '../api/client'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
 import { clearOfflineShoppingData } from '../lib/offlineShopping'
@@ -10,6 +10,7 @@ import { clearOfflineShoppingData } from '../lib/offlineShopping'
 export function LoginPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false, refetchOnMount: 'always' })
   const [loading, setLoading] = useState(false)
   const [username, setUsername] = useState(isDemoMode ? 'zach' : '')
   const [password, setPassword] = useState(isDemoMode ? 'password' : '')
@@ -20,6 +21,12 @@ export function LoginPage() {
       api.setupStatus().then(status => status.setup_required && navigate('/setup')).catch(() => undefined)
     }
   }, [navigate])
+  useEffect(() => {
+    if (!isDemoMode && session.isSuccess && !session.isFetching && session.data) {
+      navigate(session.data.must_change_password ? '/change-password' : '/week', { replace: true })
+    }
+  }, [navigate, session.data, session.isFetching, session.isSuccess])
+  if (!isDemoMode && (session.isLoading || session.isFetching)) return <div className="page"><Loading label="Checking your household session…" /></div>
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setLoading(true); setError('')
     try {

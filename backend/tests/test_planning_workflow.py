@@ -100,6 +100,148 @@ def _generate(
     return response.json()
 
 
+def test_household_meal_group_defaults_and_split_generation(client, owner):
+    owner_member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    second = client.post(
+        "/api/v1/household-members",
+        headers=_headers(owner),
+        json={"name": "Bea"},
+    )
+    assert second.status_code == 201, second.text
+    second_member_id = second.json()["id"]
+    _set_dinner_target(client, owner, owner_member_id)
+    _set_dinner_target(client, owner, second_member_id)
+
+    defaults = client.get("/api/v1/households/current/meal-group-defaults")
+    assert defaults.status_code == 200
+    groups = defaults.json()["groups"]
+    groups["dinner"] = [
+        {"group_key": "owner-dinner", "member_ids": [owner_member_id]},
+        {"group_key": "bea-dinner", "member_ids": [second_member_id]},
+    ]
+    updated = client.put(
+        "/api/v1/households/current/meal-group-defaults",
+        headers=_headers(owner),
+        json={
+            "expected_version": defaults.json()["household_version"],
+            "groups": groups,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert len(updated.json()["groups"]["dinner"]) == 2
+
+    recipes = [
+        _create_recipe(client, owner, "Owner dinner", ["dinner"]),
+        _create_recipe(client, owner, "Bea dinner", ["dinner"]),
+    ]
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"] for recipe in recipes],
+        [
+            {
+                "meal_date": "2026-09-01",
+                "meal_type": "dinner",
+                "meal_group_key": "owner-dinner",
+                "participant_member_ids": [owner_member_id],
+                "batch_key": "owner-batch",
+            },
+            {
+                "meal_date": "2026-09-01",
+                "meal_type": "dinner",
+                "meal_group_key": "bea-dinner",
+                "participant_member_ids": [second_member_id],
+                "batch_key": "bea-batch",
+            },
+        ],
+    )
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    mains = [item for item in detail["occurrences"] if item["component_slot"] == 0]
+    assert {item["meal_group_key"] for item in mains} == {
+        "owner-dinner",
+        "bea-dinner",
+    }
+    assert {item["recipe_id"] for item in mains} == {recipe["id"] for recipe in recipes}
+    assert {portion["member_id"] for item in mains for portion in item["portions"]} == {
+        owner_member_id,
+        second_member_id,
+    }
+
+
+def test_duplicate_member_group_is_rejected_and_uncooked_plan_can_be_regrouped(client, owner):
+    owner_member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    second = client.post(
+        "/api/v1/household-members",
+        headers=_headers(owner),
+        json={"name": "Cal"},
+    ).json()
+    _set_dinner_target(client, owner, owner_member_id)
+    _set_dinner_target(client, owner, second["id"])
+    recipes = [
+        _create_recipe(client, owner, "Shared dinner", ["dinner"]),
+        _create_recipe(client, owner, "Alternative dinner", ["dinner"]),
+    ]
+    duplicate = client.post(
+        "/api/v1/meal-plans/generate",
+        headers=_headers(owner),
+        json={
+            "name": "Invalid split",
+            "recipe_ids": [recipe["id"] for recipe in recipes],
+            "slots": [
+                {"meal_date": "2026-09-02", "meal_type": "dinner", "meal_group_key": "one", "participant_member_ids": [owner_member_id]},
+                {"meal_date": "2026-09-02", "meal_type": "dinner", "meal_group_key": "two", "participant_member_ids": [owner_member_id]},
+            ],
+        },
+    )
+    assert duplicate.status_code == 422
+    assert duplicate.json()["code"] == "DUPLICATE_MEAL_PARTICIPANT"
+
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"] for recipe in recipes],
+        [{
+            "meal_date": "2026-09-02",
+            "meal_type": "dinner",
+            "participant_member_ids": [owner_member_id, second["id"]],
+            "batch_key": "shared-batch",
+        }],
+    )
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    existing = detail["occurrences"][0]
+    edited = client.put(
+        f"/api/v1/meal-plans/{plan['id']}/preserving-edit",
+        headers=_headers(owner),
+        json={
+            "expected_plan_version": detail["plan"]["version"],
+            "removed_dates": [],
+            "calorie_boosts": [],
+            "guest_days": [],
+            "added_cook_days": [],
+            "removed_cook_days": [],
+            "recipe_swaps": [],
+            "main_slots": [
+                {
+                    "meal_date": "2026-09-02",
+                    "meal_type": "dinner",
+                    "meal_group_key": "shared",
+                    "participant_member_ids": [owner_member_id],
+                    "batch_key": existing["batch_id"],
+                },
+                {
+                    "meal_date": "2026-09-02",
+                    "meal_type": "dinner",
+                    "meal_group_key": "cal-separate",
+                    "participant_member_ids": [second["id"]],
+                    "batch_key": "new-cal-batch",
+                },
+            ],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert len([item for item in edited.json()["occurrences"] if item["component_slot"] == 0]) == 2
+
+
 def test_shopping_sources_combine_and_recipe_unit_preview(client, owner, session_factory):
     member_id = client.get("/api/v1/auth/me").json()["member_id"]
     _set_dinner_target(client, owner, member_id)

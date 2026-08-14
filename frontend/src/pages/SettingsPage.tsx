@@ -2,7 +2,7 @@ import { Archive, Bell, BookOpenText, Check, ChevronRight, Database, Download, E
 import { FormEvent, ReactNode, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink } from 'react-router-dom'
-import { api, ApiError, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type MeasurementSystem, type MethodViewPreference, type RestoreComponent } from '../api/client'
+import { api, ApiError, type BackendMealGroup, type BackendMealType, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type MeasurementSystem, type MethodViewPreference, type RestoreComponent } from '../api/client'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import type { ThemeChoice } from '../types'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
@@ -263,6 +263,57 @@ export function HouseholdSettings() {
   )
 }
 
+const planningMealTypes: BackendMealType[] = ['breakfast', 'lunch', 'dinner', 'snack']
+
+function MealGroupDefaultsSettings() {
+  const queryClient = useQueryClient()
+  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers })
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me })
+  const defaults = useQuery({ queryKey: ['meal-group-defaults'], queryFn: api.getMealGroupDefaults })
+  const [draft, setDraft] = useState<Record<BackendMealType, BackendMealGroup[]> | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  useEffect(() => {
+    if (defaults.data) setDraft(defaults.data.groups)
+  }, [defaults.data])
+  const activeMembers = (members.data ?? []).filter(member => member.active)
+  const names = Object.fromEntries(activeMembers.map(member => [member.id, member.name]))
+  const setGroups = (mealType: BackendMealType, groups: BackendMealGroup[]) => setDraft(current => current ? ({ ...current, [mealType]: groups }) : current)
+  const moveMember = (mealType: BackendMealType, memberId: string, destination: string) => {
+    if (!draft) return
+    const groups = draft[mealType].map(group => ({ ...group, member_ids: group.member_ids.filter(id => id !== memberId) })).filter(group => group.member_ids.length)
+    if (destination === 'new') groups.push({ group_key: `${mealType}-${crypto.randomUUID()}`, member_ids: [memberId] })
+    else {
+      const target = groups.find(group => group.group_key === destination)
+      if (target) target.member_ids.push(memberId)
+      else groups.push({ group_key: destination, member_ids: [memberId] })
+    }
+    setGroups(mealType, groups)
+  }
+  const save = async () => {
+    if (!draft || !defaults.data) return
+    setSaving(true)
+    setError('')
+    setMessage('')
+    try {
+      const updated = await api.updateMealGroupDefaults({ expected_version: defaults.data.household_version, groups: draft })
+      queryClient.setQueryData(['meal-group-defaults'], updated)
+      setDraft(updated.groups)
+      setMessage('Household meal-sharing defaults were updated.')
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : 'Meal groups could not be saved.')
+    } finally {
+      setSaving(false)
+    }
+  }
+  return <Card className="settings-section meal-group-defaults"><div className="settings-card-heading"><div><h3>Who shares meals?</h3><p>Set the recipe groups used when a new plan starts. You can still override individual meals in the planner.</p></div>{session.data?.role === 'owner' && <Button disabled={saving || !draft} onClick={() => void save()}>{saving ? 'Savingâ€¦' : 'Save meal groups'}</Button>}</div>{error && <Notice tone="warning" title="Could not save meal groups">{error}</Notice>}{message && <Notice tone="success" title="Saved">{message}</Notice>}{defaults.isLoading || members.isLoading || !draft ? <Loading label="Loading meal groupsâ€¦"/> : session.data?.role !== 'owner' ? <Notice title="Owner setting">Only the household owner can change these defaults.</Notice> : <div className="meal-group-default-grid">{planningMealTypes.map(mealType => {
+    const groups = draft[mealType]
+    const label = (group: BackendMealGroup) => group.member_ids.map(id => names[id] ?? 'Household member').join(' & ')
+    return <section key={mealType} className="meal-group-default-card"><header><div><strong>{mealType[0].toUpperCase() + mealType.slice(1)}</strong><small>{groups.length === 1 ? 'Everyone shares' : `${groups.length} recipes by default`}</small></div><div><button type="button" onClick={() => setGroups(mealType, [{ group_key: groups[0]?.group_key ?? `${mealType}-shared`, member_ids: activeMembers.map(member => member.id) }])}>Share</button><button type="button" onClick={() => setGroups(mealType, activeMembers.map(member => ({ group_key: `${mealType}-${member.id}`, member_ids: [member.id] })))}>Separate</button></div></header>{groups.map((group, index) => <div className="meal-group-default-row" key={group.group_key}><span>Recipe {index + 1}</span><strong>{label(group)}</strong>{group.member_ids.map(memberId => <label key={memberId}><span>{names[memberId]}</span><select value={group.group_key} aria-label={`${names[memberId]} default ${mealType} recipe group`} onChange={event => moveMember(mealType, memberId, event.target.value)}>{groups.map((option, optionIndex) => <option value={option.group_key} key={option.group_key}>Recipe {optionIndex + 1}: {label(option)}</option>)}<option value="new">New separate recipe</option></select></label>)}</div>)}</section>
+  })}</div>}</Card>
+}
+
 export function TargetSettings() {
   const queryClient = useQueryClient()
   const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers })
@@ -468,6 +519,7 @@ export function TargetSettings() {
           Total: {total}% {total !== 100 && '— allocations must total 100%'}
         </p>
       </Card>
+      <MealGroupDefaultsSettings/>
     </SettingsLayout>
   )
 }
@@ -974,7 +1026,7 @@ export function SystemSettings() {
         </Button>
       </div>
       <div className="system-grid">
-        <StatusCard icon={<Server />} title="Application" value="Healthy" detail="v0.1.0 · schema current" />
+        <StatusCard icon={<Server />} title="Application" value="Healthy" detail="v1.3.1 · schema current" />
         <StatusCard icon={<Database />} title="PostgreSQL" value="Connected" detail="Local household database" />
         <StatusCard icon={<RefreshCw />} title="Workers" value="Online" detail="Imports and maintenance" />
         <StatusCard icon={<Shield />} title="Network" value="Local only" detail="Allowed hosts configured" />
