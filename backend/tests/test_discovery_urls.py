@@ -5,7 +5,7 @@ import pytest
 
 from app.discovery.errors import FetchError, InvalidUrlError, UnsafeUrlError
 from app.discovery.extraction import extract_recipe
-from app.discovery.http import MAX_PUBLISHER_HTML_BYTES, PoliteHttpFetcher
+from app.discovery.http import MAX_PUBLISHER_HTML_BYTES, PoliteHttpFetcher, _PinnedHTTPSConnection
 from app.discovery.urls import canonicalize_url, validate_fetch_url
 
 
@@ -13,6 +13,34 @@ def test_canonical_url_is_stable_and_removes_tracking():
     assert canonicalize_url(
         "HTTPS://Example.COM:443/recipes/a%20dish?z=2&utm_source=x&a=1#method"
     ) == "https://example.com/recipes/a%20dish?a=1&z=2"
+
+
+def test_canonical_url_removes_punctuation_accidentally_pasted_after_recipe_url():
+    assert canonicalize_url(
+        "https://www.allrecipes.com/cheesy-baked-broccoli-bites-recipe-11951704,"
+    ) == "https://www.allrecipes.com/cheesy-baked-broccoli-bites-recipe-11951704"
+
+
+def test_pinned_https_connection_uses_standard_python_tls_extensions(monkeypatch):
+    class FakeContext:
+        post_handshake_auth = False
+
+        def __init__(self):
+            self.alpn_protocols = []
+
+        def set_alpn_protocols(self, protocols):
+            self.alpn_protocols = protocols
+
+    context = FakeContext()
+    monkeypatch.setattr("app.discovery.http.ssl.create_default_context", lambda: context)
+
+    connection = _PinnedHTTPSConnection(
+        "www.allrecipes.com", "93.184.216.34", 443, 10
+    )
+
+    assert connection._context is context
+    assert context.alpn_protocols == ["http/1.1"]
+    assert context.post_handshake_auth is True
 
 
 def test_canonical_url_resolves_relative_and_rejects_credentials():
