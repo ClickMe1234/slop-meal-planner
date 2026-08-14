@@ -34,6 +34,25 @@ def _unique_for(columns: list[str]) -> dict | None:
     )
 
 
+def _has_split_meal_groups() -> bool:
+    return (
+        op.get_bind()
+        .execute(
+            sa.text(
+                """
+                SELECT 1
+                FROM meal_occurrence
+                GROUP BY meal_plan_id, meal_date, meal_type, component_slot
+                HAVING COUNT(DISTINCT meal_group_key) > 1
+                LIMIT 1
+                """
+            )
+        )
+        .first()
+        is not None
+    )
+
+
 def upgrade() -> None:
     op.create_table(
         "household_meal_group_assignment",
@@ -97,6 +116,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if _has_split_meal_groups():
+        raise RuntimeError(
+            "Cannot downgrade 0023_member_meal_groups while split meal groups "
+            "exist; merge those meals before retrying the downgrade."
+        )
+
     new_unique = _unique_for(
         [
             "meal_plan_id",
