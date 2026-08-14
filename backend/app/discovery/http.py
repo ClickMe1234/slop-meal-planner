@@ -15,6 +15,12 @@ from .errors import FetchError, ResponseTooLargeError
 from .urls import resolve_fetch_url
 
 
+# Allrecipes recipe documents regularly include several megabytes of publisher
+# navigation, media metadata, and consent markup around the Recipe JSON-LD.
+# Keep the fetch bounded, but leave enough room to reach the structured method.
+MAX_PUBLISHER_HTML_BYTES = 8_000_000
+
+
 class _PinnedHTTPConnection(http.client.HTTPConnection):
     """HTTP connection whose socket uses a previously validated IP address."""
 
@@ -59,7 +65,7 @@ class PoliteHttpFetcher:
         *,
         min_host_interval_seconds: float = 1.0,
         timeout_seconds: float = 10.0,
-        max_response_bytes: int = 2_000_000,
+        max_response_bytes: int = MAX_PUBLISHER_HTML_BYTES,
         max_redirects: int = 3,
         user_agent: str = "HouseholdMealPlanner/0.1 (private recipe organiser; contact local administrator)",
         client: httpx.AsyncClient | None = None,

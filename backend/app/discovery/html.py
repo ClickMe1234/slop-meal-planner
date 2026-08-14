@@ -26,11 +26,15 @@ class RecipeHtmlParser(HTMLParser):
         self.meta: dict[str, str] = {}
         self.h1_parts: list[str] = []
         self.ingredient_parts: list[list[str]] = []
+        self.instruction_parts: list[list[str]] = []
         self._script_parts: list[str] | None = None
         self._script_kind: str | None = None
         self._anchor: Anchor | None = None
         self._in_h1 = False
         self._ingredient_depth = 0
+        self._instruction_depth = 0
+        self._section_heading_parts: list[str] | None = None
+        self._instruction_section = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key.lower(): value or "" for key, value in attrs}
@@ -61,6 +65,11 @@ class RecipeHtmlParser(HTMLParser):
                 self.meta[key.lower()] = content.strip()
         elif tag == "h1":
             self._in_h1 = True
+        elif tag == "h2":
+            # A new top-level section closes the preceding Directions section.
+            # Whether this heading opens another one is known at its end tag.
+            self._section_heading_parts = []
+            self._instruction_section = False
 
         if self._anchor is not None:
             itemprop = {part.strip().lower() for part in values.get("itemprop", "").split()}
@@ -96,6 +105,13 @@ class RecipeHtmlParser(HTMLParser):
         elif self._ingredient_depth:
             self._ingredient_depth += 1
 
+        if self._instruction_section:
+            if tag == "li" and not self._instruction_depth:
+                self._instruction_depth = 1
+                self.instruction_parts.append([])
+            elif self._instruction_depth:
+                self._instruction_depth += 1
+
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
         if tag == "script" and self._script_parts is not None:
@@ -109,8 +125,16 @@ class RecipeHtmlParser(HTMLParser):
             self._anchor = None
         elif tag == "h1":
             self._in_h1 = False
+        elif tag == "h2" and self._section_heading_parts is not None:
+            heading = " ".join(" ".join(self._section_heading_parts).split()).casefold()
+            self._instruction_section = bool(
+                re.match(r"^(?:directions?|instructions?|method|steps?)(?:\b|\s*:)", heading)
+            )
+            self._section_heading_parts = None
         if self._ingredient_depth:
             self._ingredient_depth -= 1
+        if self._instruction_depth:
+            self._instruction_depth -= 1
 
     def handle_data(self, data: str) -> None:
         if self._script_parts is not None:
@@ -119,8 +143,12 @@ class RecipeHtmlParser(HTMLParser):
             self._anchor.text += f" {data}"
         if self._in_h1:
             self.h1_parts.append(data)
+        if self._section_heading_parts is not None:
+            self._section_heading_parts.append(data)
         if self._ingredient_depth and self.ingredient_parts:
             self.ingredient_parts[-1].append(data)
+        if self._instruction_depth and self.instruction_parts:
+            self.instruction_parts[-1].append(data)
 
     @property
     def h1(self) -> str | None:
@@ -131,3 +159,13 @@ class RecipeHtmlParser(HTMLParser):
     def ingredients(self) -> tuple[str, ...]:
         values = (" ".join(" ".join(parts).split()) for parts in self.ingredient_parts)
         return tuple(dict.fromkeys(value for value in values if value))
+
+    @property
+    def instructions(self) -> tuple[str, ...]:
+        values: list[str] = []
+        for parts in self.instruction_parts:
+            value = " ".join(" ".join(parts).split())
+            value = re.sub(r"^step\s+\d+\s*[:.)-]?\s*", "", value, flags=re.IGNORECASE)
+            if value and value not in values:
+                values.append(value)
+        return tuple(values)

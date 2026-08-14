@@ -35,7 +35,6 @@ import {
   GripVertical,
   Layers3,
   Link2,
-  MousePointer2,
   PencilLine,
   Plus,
   RefreshCw,
@@ -70,7 +69,7 @@ import { MealTypePicker, type RecipeMealType } from '../components/MealTypePicke
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import { safeExternalUrl } from '../lib/safeUrls'
 
-const TUTORIAL_VERSION = 1
+const TUTORIAL_VERSION = 2
 const semanticTools: Array<{ kind: MethodSemanticKind; label: string; icon: typeof Tag }> = [
   { kind: 'ingredient', label: 'Ingredient', icon: Tag },
   { kind: 'action', label: 'Action', icon: Sparkles },
@@ -82,6 +81,12 @@ const semanticTools: Array<{ kind: MethodSemanticKind; label: string; icon: type
 
 const localId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`
 const REVIEW_CONFIDENCE_THRESHOLD = .65
+type SourceRange = {
+  blockId: string
+  start: number
+  end: number
+  text: string
+}
 
 function isUnreviewedClause(annotation: BackendMethodAnnotation) {
   return annotation.kind === 'action' && Number(annotation.confidence) < REVIEW_CONFIDENCE_THRESHOLD && !annotation.accepted
@@ -99,32 +104,156 @@ function unreviewedClauses(sourceBlocks: BackendMethodSourceBlock[], annotations
     .filter(item => item.text)
 }
 
-function annotatedSource(block: BackendMethodSourceBlock, annotations: BackendMethodAnnotation[]) {
-  const ordered = annotations
-    .filter(item => item.block_id === block.id && item.start >= 0 && item.end <= block.text.length && item.end > item.start)
-    .sort((left, right) => left.start - right.start || right.end - left.end)
-  const parts: Array<{ text: string; annotation?: BackendMethodAnnotation }> = []
-  let cursor = 0
-  for (const annotation of ordered) {
-    if (annotation.start < cursor) continue
-    if (annotation.start > cursor) parts.push({ text: block.text.slice(cursor, annotation.start) })
-    parts.push({ text: block.text.slice(annotation.start, annotation.end), annotation })
-    cursor = annotation.end
+const annotationPriority: Record<MethodSemanticKind, number> = {
+  ingredient: 0,
+  time: 1,
+  temperature: 2,
+  equipment: 3,
+  cue: 4,
+  action: 5,
+}
+
+type AnnotatedSourcePart = {
+  start: number
+  end: number
+  text: string
+  annotation?: BackendMethodAnnotation
+  unreviewed?: BackendMethodAnnotation
+}
+
+function annotatedSourceParts(block: BackendMethodSourceBlock, annotations: BackendMethodAnnotation[]) {
+  const valid = annotations.filter(item => (
+    item.block_id === block.id
+    && item.start >= 0
+    && item.end <= block.text.length
+    && item.end > item.start
+  ))
+  const boundaries = [...new Set([0, block.text.length, ...valid.flatMap(item => [item.start, item.end])])]
+    .sort((left, right) => left - right)
+  const parts: AnnotatedSourcePart[] = []
+  for (let index = 0; index < boundaries.length - 1; index += 1) {
+    const start = boundaries[index]
+    const end = boundaries[index + 1]
+    if (end <= start) continue
+    const covering = valid.filter(item => item.start <= start && item.end >= end)
+    const annotation = [...covering].sort((left, right) => (
+      annotationPriority[left.kind] - annotationPriority[right.kind]
+      || (left.end - left.start) - (right.end - right.start)
+    ))[0]
+    const unreviewed = covering.find(isUnreviewedClause)
+    const previous = parts.at(-1)
+    if (previous && previous.annotation?.id === annotation?.id && previous.unreviewed?.id === unreviewed?.id) {
+      previous.end = end
+      previous.text += block.text.slice(start, end)
+    } else {
+      parts.push({ start, end, text: block.text.slice(start, end), annotation, unreviewed })
+    }
   }
-  if (cursor < block.text.length) parts.push({ text: block.text.slice(cursor) })
-  return parts.map((part, index) => {
-    if (!part.annotation) return <span key={`text-${index}`}>{part.text}</span>
-    const unreviewed = isUnreviewedClause(part.annotation)
-    return <mark
-      key={`${part.annotation.id}-${index}`}
-      id={unreviewed ? `unreviewed-clause-${part.annotation.id}` : undefined}
-      data-unreviewed-clause={unreviewed ? 'true' : undefined}
-      tabIndex={unreviewed ? -1 : undefined}
-      className={`semantic-mark semantic-mark--${part.annotation.kind}${part.annotation.accepted ? ' accepted' : ''}${unreviewed ? ' semantic-mark--unreviewed' : ''}`}
-      title={unreviewed ? 'Unaccounted source clause' : `${part.annotation.kind}${part.annotation.confidence < REVIEW_CONFIDENCE_THRESHOLD ? ' · check this suggestion' : ''}`}
-      aria-label={unreviewed ? `Unaccounted source clause: ${part.text}` : undefined}
-    >{part.text}</mark>
+  return parts
+}
+
+function sourceTokens(text: string, offset: number) {
+  const tokens: Array<{ text: string; start: number; end: number; word: boolean }> = []
+  const words = text.matchAll(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)
+  let cursor = 0
+  for (const match of words) {
+    const start = match.index ?? 0
+    if (start > cursor) tokens.push({ text: text.slice(cursor, start), start: offset + cursor, end: offset + start, word: false })
+    tokens.push({ text: match[0], start: offset + start, end: offset + start + match[0].length, word: true })
+    cursor = start + match[0].length
+  }
+  if (cursor < text.length) tokens.push({ text: text.slice(cursor), start: offset + cursor, end: offset + text.length, word: false })
+  return tokens
+}
+
+function DroppableSourceWord({ blockId, token, linkIngredientId, linkIngredientName, onLink }: {
+  blockId: string
+  token: { text: string; start: number; end: number }
+  linkIngredientId?: string
+  linkIngredientName?: string
+  onLink: (range: SourceRange) => void
+}) {
+  const range = { blockId, start: token.start, end: token.end, text: token.text }
+  const { setNodeRef, isOver } = useDroppable({
+    id: `source-word:${blockId}:${token.start}:${token.end}`,
+    data: { type: 'source-word', ...range },
   })
+  const linkable = Boolean(linkIngredientId)
+  const link = () => { if (linkable) onLink(range) }
+  return <span
+    ref={setNodeRef}
+    className={`method-source-word${linkable ? ' is-link-target' : ''}${isOver && linkable ? ' is-over' : ''}`}
+    role={linkable ? 'button' : undefined}
+    tabIndex={linkable ? 0 : undefined}
+    aria-label={linkable ? `Link ${linkIngredientName ?? 'ingredient'} to “${token.text}”` : undefined}
+    onClick={linkable ? event => { event.stopPropagation(); link() } : undefined}
+    onKeyDown={linkable ? event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        link()
+      }
+    } : undefined}
+  >{token.text}</span>
+}
+
+function annotatedSource(
+  block: BackendMethodSourceBlock,
+  annotations: BackendMethodAnnotation[],
+  linkIngredientId: string | undefined,
+  linkIngredientName: string | undefined,
+  onLink: (range: SourceRange) => void,
+) {
+  return annotatedSourceParts(block, annotations).map((part, index) => {
+    const content = sourceTokens(part.text, part.start).map((token, tokenIndex) => token.word
+      ? <DroppableSourceWord key={`${token.start}-${token.end}`} blockId={block.id} token={token} linkIngredientId={linkIngredientId} linkIngredientName={linkIngredientName} onLink={onLink}/>
+      : <span key={`separator-${tokenIndex}`}>{token.text}</span>)
+    if (!part.annotation && !part.unreviewed) return <span key={`text-${index}`}>{content}</span>
+    const annotation = part.annotation ?? part.unreviewed!
+    const unreviewed = part.unreviewed
+    const isWarningTarget = Boolean(unreviewed && part.start === unreviewed.start)
+    return <mark
+      key={`${annotation.id}-${part.start}`}
+      id={isWarningTarget ? `unreviewed-clause-${unreviewed!.id}` : undefined}
+      data-unreviewed-clause={isWarningTarget ? 'true' : undefined}
+      tabIndex={isWarningTarget ? -1 : undefined}
+      className={`semantic-mark semantic-mark--${annotation.kind}${annotation.accepted ? ' accepted' : ''}${unreviewed ? ' semantic-mark--unreviewed' : ''}`}
+      title={unreviewed ? 'Unaccounted source clause' : `${annotation.kind}${annotation.confidence < REVIEW_CONFIDENCE_THRESHOLD ? ' · check this suggestion' : ''}`}
+      aria-label={isWarningTarget ? `Unaccounted source clause: ${block.text.slice(unreviewed!.start, unreviewed!.end)}` : undefined}
+    >{content}</mark>
+  })
+}
+
+function actionForSourceRange(
+  document: BackendMethodDocument,
+  blocks: BackendMethodSourceBlock[],
+  target: SourceRange,
+) {
+  const annotations = new Map(document.annotations.map(item => [item.id, item]))
+  const candidates = document.actions.flatMap(action => action.source_annotation_ids
+    .map(id => annotations.get(id))
+    .filter((item): item is BackendMethodAnnotation => Boolean(item && item.block_id === target.blockId))
+    .map(annotation => ({ action, annotation })))
+  const containing = candidates
+    .filter(({ annotation }) => annotation.start <= target.start && annotation.end >= target.end)
+    .sort((left, right) => (left.annotation.end - left.annotation.start) - (right.annotation.end - right.annotation.start))
+  if (containing[0]) return containing[0].action
+
+  const block = blocks.find(item => item.id === target.blockId)
+  if (block) {
+    const lowered = block.text.toLocaleLowerCase()
+    const textMatch = document.actions.find(action => {
+      const start = lowered.indexOf(action.text.toLocaleLowerCase())
+      return start >= 0 && start <= target.start && start + action.text.length >= target.end
+    })
+    if (textMatch) return textMatch
+  }
+  return document.actions.length === 1 ? document.actions[0] : undefined
+}
+
+function validSplitPosition(text: string, index: number | null) {
+  if (index == null || index <= 0 || index >= text.length) return false
+  if (!text.slice(0, index).trim() || !text.slice(index).trim()) return false
+  return /[\s,;.!?]/.test(text[index - 1]) || /[\s,;.!?]/.test(text[index])
 }
 
 function manualDocument(text: string): { blocks: BackendMethodSourceBlock[]; method: BackendMethodDocument } {
@@ -204,7 +333,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const [selectedIngredients, setSelectedIngredients] = useState<Set<string>>(new Set())
   const [selectedActions, setSelectedActions] = useState<Set<string>>(new Set())
-  const [selection, setSelection] = useState<{ blockId: string; start: number; end: number; text: string } | null>(null)
+  const [selection, setSelection] = useState<SourceRange | null>(null)
   const [annotationIngredient, setAnnotationIngredient] = useState('')
   const [activeDrag, setActiveDrag] = useState<{ id: string; type: 'ingredient' | 'action'; label: string } | null>(null)
   const [breakingAction, setBreakingAction] = useState<string | null>(null)
@@ -351,12 +480,79 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     if (!text.trim()) { setSelection(null); return }
     setSelection({ blockId: block.id, start, end: start + text.length, text })
   }
+  const linkIngredientToSourceRange = (lineageId: string, target: SourceRange) => {
+    if (!method || !data) return
+    const ingredient = data.ingredients.find(item => item.lineage_id === lineageId)
+    const action = actionForSourceRange(method, sourceBlocks, target)
+    if (!ingredient || !action) {
+      setError('This word is not inside a cooking step. Tag the step as an action first, then try again.')
+      return
+    }
+    const overlapping = method.annotations.find(item => (
+      item.kind === 'ingredient'
+      && item.block_id === target.blockId
+      && item.start < target.end
+      && item.end > target.start
+    ))
+    updateDocument(current => {
+      const existingBinding = current.ingredient_bindings.find(item => (
+        item.action_id === action.id && item.ingredient_lineage_id === lineageId
+      ))
+      const annotationId = overlapping?.id ?? localId('annotation')
+      const replacedAnnotationIds = new Set(
+        [overlapping?.id, existingBinding?.annotation_id].filter((id): id is string => Boolean(id)),
+      )
+      const annotation: BackendMethodAnnotation = {
+        id: annotationId,
+        block_id: target.blockId,
+        start: target.start,
+        end: target.end,
+        kind: 'ingredient',
+        origin: 'user',
+        confidence: 1,
+        accepted: true,
+        ingredient_lineage_id: lineageId,
+      }
+      return {
+        ...current,
+        annotations: [
+          ...current.annotations.filter(item => !replacedAnnotationIds.has(item.id)),
+          annotation,
+        ],
+        ingredient_bindings: [
+          ...current.ingredient_bindings.filter(item => (
+            item.id !== existingBinding?.id
+            && !(item.annotation_id && replacedAnnotationIds.has(item.annotation_id))
+          )),
+          {
+            ...existingBinding,
+            id: existingBinding?.id ?? localId('binding'),
+            action_id: action.id,
+            ingredient_lineage_id: lineageId,
+            annotation_id: annotationId,
+            portion_mode: existingBinding?.portion_mode ?? 'unspecified',
+            confidence: 1,
+            accepted: true,
+          },
+        ],
+      }
+    })
+    setSelectedIngredients(new Set())
+    setAnnotationIngredient(lineageId)
+    setError('')
+    setMessage(`Linked ${ingredient.name} to “${target.text}”. Save the method to update the written view.`)
+  }
+
   const tagSelection = (kind: MethodSemanticKind) => {
     if (!selection || !method) return
+    if (kind === 'ingredient') {
+      if (annotationIngredient) linkIngredientToSourceRange(annotationIngredient, selection)
+      window.getSelection()?.removeAllRanges(); setSelection(null)
+      return
+    }
     const annotation: BackendMethodAnnotation = {
       id: localId('annotation'), block_id: selection.blockId, start: selection.start, end: selection.end,
       kind, origin: 'user', confidence: 1, accepted: true,
-      ingredient_lineage_id: kind === 'ingredient' ? annotationIngredient : undefined,
     }
     updateDocument(current => {
       const next = { ...current, annotations: [...current.annotations, annotation] }
@@ -383,6 +579,124 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     }))
     setJustGrouped(actionId); window.setTimeout(() => setJustGrouped(value => value === actionId ? null : value), 520)
   }
+  const splitAction = (actionId: string, splitAt: number) => {
+    updateDocument(current => {
+      const action = current.actions.find(item => item.id === actionId)
+      if (!action || !validSplitPosition(action.text, splitAt)) return current
+
+      const leftText = action.text.slice(0, splitAt).trim()
+      const rightText = action.text.slice(splitAt).trim()
+      const newActionId = localId('action')
+      let annotations = [...current.annotations]
+      let rightSourceAnnotationIds = [...action.source_annotation_ids]
+      let sourceBoundary: { blockId: string; index: number } | undefined
+
+      for (const annotationId of action.source_annotation_ids) {
+        const annotation = current.annotations.find(item => item.id === annotationId && item.kind === 'action')
+        const block = annotation && sourceBlocks.find(item => item.id === annotation.block_id)
+        if (!annotation || !block) continue
+        const sourceText = block.text.slice(annotation.start, annotation.end)
+        const actionStart = sourceText.indexOf(action.text)
+        const boundary = actionStart < 0 ? -1 : annotation.start + actionStart + splitAt
+        if (boundary <= annotation.start || boundary >= annotation.end) continue
+        const rightAnnotationId = localId('annotation')
+        annotations = annotations.map(item => item.id === annotation.id
+          ? { ...item, end: boundary, origin: 'user', confidence: 1, accepted: true }
+          : item)
+        annotations.push({
+          ...annotation,
+          id: rightAnnotationId,
+          start: boundary,
+          origin: 'user',
+          confidence: 1,
+          accepted: true,
+        })
+        rightSourceAnnotationIds = rightSourceAnnotationIds.map(id => id === annotation.id ? rightAnnotationId : id)
+        sourceBoundary = { blockId: annotation.block_id, index: boundary }
+        break
+      }
+
+      const annotationById = new Map(annotations.map(item => [item.id, item]))
+      const bindingBelongsToRight = (binding: BackendMethodBinding) => {
+        const annotation = binding.annotation_id ? annotationById.get(binding.annotation_id) : undefined
+        if (annotation && sourceBoundary && annotation.block_id === sourceBoundary.blockId) {
+          return annotation.start >= sourceBoundary.index
+        }
+        const ingredient = data?.ingredients.find(item => item.lineage_id === binding.ingredient_lineage_id)
+        const terms = (ingredient?.name.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+          .flatMap(term => term.endsWith('s') ? [term, term.slice(0, -1)] : [term])
+          .filter(term => term.length > 2)
+        const leftHasIngredient = terms.some(term => leftText.toLocaleLowerCase().includes(term))
+        const rightHasIngredient = terms.some(term => rightText.toLocaleLowerCase().includes(term))
+        return rightHasIngredient && !leftHasIngredient
+      }
+
+      const durationPattern = /\b\d+(?:[.,]\d+)?\s*(?:seconds?|secs?|minutes?|mins?|hours?|hrs?)\b/i
+      const temperaturePattern = /(?:°|\b(?:oven|degrees?|celsius|fahrenheit)\b)/i
+      const moveDuration = Boolean(action.duration_minutes != null && durationPattern.test(rightText) && !durationPattern.test(leftText))
+      const moveTemperature = Boolean(action.temperature_value != null && temperaturePattern.test(rightText) && !temperaturePattern.test(leftText))
+      const moveCue = Boolean(action.cue && rightText.toLocaleLowerCase().includes(action.cue.toLocaleLowerCase()) && !leftText.toLocaleLowerCase().includes(action.cue.toLocaleLowerCase()))
+      const rightEquipment = action.equipment.filter(item => rightText.toLocaleLowerCase().includes(item.toLocaleLowerCase()))
+      const leftEquipment = action.equipment.filter(item => !rightEquipment.includes(item) || leftText.toLocaleLowerCase().includes(item.toLocaleLowerCase()))
+      const originalAction: BackendMethodAction = {
+        ...action,
+        text: leftText,
+        source_annotation_ids: action.source_annotation_ids,
+        duration_minutes: moveDuration ? undefined : action.duration_minutes,
+        temperature_value: moveTemperature ? undefined : action.temperature_value,
+        temperature_unit: moveTemperature ? undefined : action.temperature_unit,
+        cue: moveCue ? undefined : action.cue,
+        equipment: leftEquipment,
+      }
+      const newAction: BackendMethodAction = {
+        ...action,
+        id: newActionId,
+        position: action.position + 1,
+        text: rightText,
+        source_annotation_ids: rightSourceAnnotationIds,
+        duration_minutes: moveDuration ? action.duration_minutes : undefined,
+        temperature_value: moveTemperature ? action.temperature_value : undefined,
+        temperature_unit: moveTemperature ? action.temperature_unit : undefined,
+        cue: moveCue ? action.cue : undefined,
+        equipment: rightEquipment,
+      }
+      const actionIndex = current.actions.findIndex(item => item.id === action.id)
+      const shiftedActions = current.actions.map(item => {
+        if (item.id === action.id) return originalAction
+        if (item.stage_id === action.stage_id && item.position > action.position) {
+          return { ...item, position: item.position + 1 }
+        }
+        return item
+      })
+      shiftedActions.splice(actionIndex + 1, 0, newAction)
+
+      return {
+        ...current,
+        annotations,
+        actions: shiftedActions,
+        ingredient_bindings: current.ingredient_bindings.map(binding => (
+          binding.action_id === action.id && bindingBelongsToRight(binding)
+            ? { ...binding, action_id: newActionId }
+            : binding
+        )),
+        edges: [
+          ...current.edges.map(edge => edge.from_action_id === action.id
+            ? { ...edge, from_action_id: newActionId }
+            : edge),
+          {
+            id: localId('edge'),
+            from_action_id: action.id,
+            to_action_id: newActionId,
+            kind: 'sequence',
+            confidence: 1,
+          },
+        ],
+      }
+    })
+    setSelectedActions(new Set())
+    setMessage('Step split into two editable steps.')
+  }
+
   const groupSelection = () => {
     if (!method) return
     const actionId = [...selectedActions][0]
@@ -426,7 +740,20 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     const activeType = event.active.data.current?.type
     const activeId = String(event.active.id)
     const overId = event.over ? String(event.over.id) : ''
-    if (activeType === 'ingredient' && event.over?.data.current?.type === 'action') attachIngredient(activeId.replace('ingredient:', ''), overId.replace('action:', ''))
+    if (activeType === 'ingredient') {
+      const lineageId = activeId.replace('ingredient:', '')
+      const overData = event.over?.data.current
+      if (overData?.type === 'source-word') {
+        linkIngredientToSourceRange(lineageId, {
+          blockId: String(overData.blockId),
+          start: Number(overData.start),
+          end: Number(overData.end),
+          text: String(overData.text),
+        })
+      } else if (overData?.type === 'action') {
+        attachIngredient(lineageId, overId.replace('action:', ''))
+      }
+    }
     if (activeType === 'action' && method) {
       const actionId = activeId.replace('action:', '')
       if (Math.abs(event.delta.x) > 120 && breakingAction) {
@@ -468,6 +795,10 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     </div>
   }
 
+  const selectedIngredientId = selectedIngredients.size === 1 ? [...selectedIngredients][0] : undefined
+  const draggedIngredientId = activeDrag?.type === 'ingredient' ? activeDrag.id.replace('ingredient:', '') : undefined
+  const linkIngredientId = draggedIngredientId ?? selectedIngredientId
+  const linkIngredientName = data.ingredients.find(item => item.lineage_id === linkIngredientId)?.name
   const stages = [...method.stages].sort((a, b) => a.position - b.position)
   const unreviewed = Number(data.coverage.unreviewed ?? 0)
   const lowConfidence = method.annotations.filter(item => item.confidence < .65 && !item.accepted).length + method.ingredient_bindings.filter(item => item.confidence < .65 && !item.accepted).length
@@ -508,6 +839,10 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         </aside>
         <section className="method-source-editor">
           <div className="method-section-heading"><div><span className="eyebrow">1 · Mark up the source</span><h2>Original written method</h2></div><Badge>{data.source_kind === 'publisher' ? 'Read-only source' : 'Editable source'}</Badge></div>
+          <div className="method-ingredient-linker">
+            <div><strong>Link amounts to exact wording</strong><span>{data.source_kind === 'publisher' ? 'Drag an ingredient onto a word, or select an ingredient then choose the word.' : 'Select wording below, choose its ingredient, then use the Ingredient label.'}</span></div>
+            <div className="method-ingredient-palette">{data.ingredients.map(ingredient => <DraggableIngredient key={ingredient.lineage_id} ingredient={ingredient} selected={selectedIngredients.has(ingredient.lineage_id)} onSelect={() => setSelectedIngredients(current => { const next = new Set(current); next.has(ingredient.lineage_id) ? next.delete(ingredient.lineage_id) : next.add(ingredient.lineage_id); return next })}/>)}</div>
+          </div>
           {unreviewed > 0 && <div className="method-unreviewed" role="region" aria-labelledby="method-unreviewed-title">
             <div className="method-unreviewed__heading"><strong id="method-unreviewed-title">{unreviewed} unaccounted clause{unreviewed === 1 ? '' : 's'}</strong><span>Check the highlighted wording when useful. This warning does not block saving or marking the method as reviewed.</span></div>
             {unresolvedClauses.length > 0 && <ol>{unresolvedClauses.map(({ annotation, text }, index) => <li key={annotation.id}><button type="button" onClick={() => {
@@ -518,15 +853,14 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
           </div>}
           {sourceBlocks.map((block, index) => <article className="method-source-block" key={block.id}>
             {block.heading && <h3>{block.heading}</h3>}
-            {data.source_kind === 'publisher' ? <p ref={node => { sourceRefs.current[block.id] = node }} onPointerUp={() => captureSelection(block)}>{annotatedSource(block, method.annotations)}</p> : <textarea value={block.text} rows={5} onChange={event => { const text = event.target.value; setSourceBlocks(items => items.map((item, itemIndex) => itemIndex === index ? { ...item, text } : item)); setDirty(true) }}/>}
+            {data.source_kind === 'publisher' ? <p ref={node => { sourceRefs.current[block.id] = node }} onPointerUp={() => captureSelection(block)}>{annotatedSource(block, method.annotations, linkIngredientId, linkIngredientName, range => linkIngredientToSourceRange(linkIngredientId!, range))}</p> : <textarea value={block.text} rows={5} onChange={event => { const text = event.target.value; setSourceBlocks(items => items.map((item, itemIndex) => itemIndex === index ? { ...item, text } : item)); setDirty(true) }}/>}
             <div className="method-source-tags">{method.annotations.filter(item => item.block_id === block.id).map(annotation => <button type="button" className={`semantic-chip semantic-chip--${annotation.kind}`} key={annotation.id} title="Remove this label" onClick={() => removeAnnotation(annotation.id)}><span>{annotation.kind}: {block.text.slice(annotation.start, annotation.end)}</span><X size={12}/></button>)}</div>
           </article>)}
           {selection && <div className="semantic-toolbar" role="toolbar" aria-label="Mark selected recipe text"><div><strong>“{selection.text.slice(0, 56)}{selection.text.length > 56 ? '…' : ''}”</strong><span>What does this text mean?</span></div>{semanticTools.map(tool => { const Icon = tool.icon; return <button type="button" key={tool.kind} onClick={() => tagSelection(tool.kind)}><Icon size={15}/>{tool.label}</button> })}<button type="button" onClick={() => { updateDocument(current => ({ ...current, omissions: [...current.omissions, { id: localId('omission'), block_id: selection.blockId, start: selection.start, end: selection.end, reason: 'Omitted from concise summary', accepted: true }] })); setSelection(null) }}><Trash2 size={15}/>Omit</button>{annotationIngredient && <select aria-label="Ingredient for selected text" value={annotationIngredient} onChange={event => setAnnotationIngredient(event.target.value)}>{data.ingredients.map(item => <option key={item.lineage_id} value={item.lineage_id}>{item.name}</option>)}</select>}</div>}
         </section>
         <section className="method-canvas-editor">
           <div className="method-section-heading"><div><span className="eyebrow">2 · Arrange the summary</span><h2>Cooking flow</h2></div><Button variant="ghost" onClick={() => updateDocument(current => ({ ...current, stages: [...current.stages, { id: localId('stage'), title: `Stage ${current.stages.length + 1}`, position: current.stages.length }] }))}><Plus size={15}/>Stage</Button></div>
-          <div className="method-ingredient-palette">{data.ingredients.map(ingredient => <DraggableIngredient key={ingredient.lineage_id} ingredient={ingredient} selected={selectedIngredients.has(ingredient.lineage_id)} onSelect={() => setSelectedIngredients(current => { const next = new Set(current); next.has(ingredient.lineage_id) ? next.delete(ingredient.lineage_id) : next.add(ingredient.lineage_id); return next })}/>)}</div>
-          <div className="method-stage-list">{stages.map(stage => <DroppableStage key={stage.id} stage={stage} actions={method.actions.filter(action => action.stage_id === stage.id).sort((a,b) => a.position-b.position)} method={method} ingredients={data.ingredients} selectedActions={selectedActions} setSelectedActions={setSelectedActions} updateDocument={updateDocument} breakingAction={breakingAction} breakingStrength={breakingStrength} justGrouped={justGrouped}/>)}</div>
+          <div className="method-stage-list">{stages.map(stage => <DroppableStage key={stage.id} stage={stage} actions={method.actions.filter(action => action.stage_id === stage.id).sort((a,b) => a.position-b.position)} method={method} ingredients={data.ingredients} selectedActions={selectedActions} setSelectedActions={setSelectedActions} updateDocument={updateDocument} onSplit={splitAction} breakingAction={breakingAction} breakingStrength={breakingStrength} justGrouped={justGrouped}/>)}</div>
         </section>
         <section className="method-editor-save"><label>Household notes<textarea rows={3} value={notes} onChange={event => { setNotes(event.target.value); setDirty(true) }} placeholder="Add adaptations or reminders without changing the publisher wording."/></label><div><Button type="button" variant="secondary" disabled={savePending !== null} onClick={() => void saveMethod(false)}><Save size={16}/>{savePending === 'draft' ? 'Saving…' : 'Save draft'}</Button><Button type="button" disabled={savePending !== null || Boolean(conflictLatest)} onClick={() => void saveMethod(true)}><Check size={16}/>{savePending === 'review' ? 'Saving…' : 'Mark as reviewed'}</Button></div></section>
       </div>
@@ -585,24 +919,74 @@ function DraggableIngredient({ ingredient, selected, onSelect }: { ingredient: B
   return <button ref={setNodeRef} style={{ transform: CSS.Translate.toString(transform) }} className={`method-ingredient-chip${selected ? ' selected' : ''}${isDragging ? ' is-dragging' : ''}`} type="button" onClick={onSelect} {...listeners} {...attributes}><GripVertical size={13}/><span>{ingredient.quantity_text} {ingredient.unit}</span><strong>{ingredient.name}</strong></button>
 }
 
-function DroppableStage({ stage, actions, method, ingredients, selectedActions, setSelectedActions, updateDocument, breakingAction, breakingStrength, justGrouped }: { stage: BackendMethodStage; actions: BackendMethodAction[]; method: BackendMethodDocument; ingredients: BackendMethodIngredient[]; selectedActions: Set<string>; setSelectedActions: Dispatch<SetStateAction<Set<string>>>; updateDocument: (updater: (current: BackendMethodDocument) => BackendMethodDocument) => void; breakingAction: string | null; breakingStrength: number; justGrouped: string | null }) {
+function DroppableStage({ stage, actions, method, ingredients, selectedActions, setSelectedActions, updateDocument, onSplit, breakingAction, breakingStrength, justGrouped }: {
+  stage: BackendMethodStage
+  actions: BackendMethodAction[]
+  method: BackendMethodDocument
+  ingredients: BackendMethodIngredient[]
+  selectedActions: Set<string>
+  setSelectedActions: Dispatch<SetStateAction<Set<string>>>
+  updateDocument: (updater: (current: BackendMethodDocument) => BackendMethodDocument) => void
+  onSplit: (actionId: string, splitAt: number) => void
+  breakingAction: string | null
+  breakingStrength: number
+  justGrouped: string | null
+}) {
   const { setNodeRef, isOver } = useDroppable({ id: `stage:${stage.id}`, data: { type: 'stage' } })
-  return <section ref={setNodeRef} className={`method-canvas-stage${isOver ? ' is-over' : ''}`}><header><input aria-label="Stage name" value={stage.title} onChange={event => updateDocument(current => ({ ...current, stages: current.stages.map(item => item.id === stage.id ? { ...item, title: event.target.value } : item) }))}/><Badge>{actions.length} steps</Badge></header><SortableContext items={actions.map(action => `action:${action.id}`)} strategy={verticalListSortingStrategy}>{actions.map(action => <SortableAction key={action.id} action={action} method={method} ingredients={ingredients} selected={selectedActions.has(action.id)} onSelect={() => setSelectedActions(current => { const next = new Set(current); next.has(action.id) ? next.delete(action.id) : next.add(action.id); return next })} updateDocument={updateDocument} breaking={breakingAction === `action:${action.id}`} breakingStrength={breakingStrength} grouped={justGrouped === action.id}/>)}</SortableContext>{!actions.length && <div className="method-stage-drop-hint">Drop actions here to build a parallel lane</div>}</section>
+  return <section ref={setNodeRef} className={`method-canvas-stage${isOver ? ' is-over' : ''}`}><header><input aria-label="Stage name" value={stage.title} onChange={event => updateDocument(current => ({ ...current, stages: current.stages.map(item => item.id === stage.id ? { ...item, title: event.target.value } : item) }))}/><Badge>{actions.length} steps</Badge></header><SortableContext items={actions.map(action => `action:${action.id}`)} strategy={verticalListSortingStrategy}>{actions.map(action => <SortableAction key={action.id} action={action} method={method} ingredients={ingredients} selected={selectedActions.has(action.id)} onSelect={() => setSelectedActions(current => { const next = new Set(current); next.has(action.id) ? next.delete(action.id) : next.add(action.id); return next })} updateDocument={updateDocument} onSplit={onSplit} breaking={breakingAction === `action:${action.id}`} breakingStrength={breakingStrength} grouped={justGrouped === action.id}/>)}</SortableContext>{!actions.length && <div className="method-stage-drop-hint">Drop actions here to build a parallel lane</div>}</section>
 }
 
-function SortableAction({ action, method, ingredients, selected, onSelect, updateDocument, breaking, breakingStrength, grouped }: { action: BackendMethodAction; method: BackendMethodDocument; ingredients: BackendMethodIngredient[]; selected: boolean; onSelect: () => void; updateDocument: (updater: (current: BackendMethodDocument) => BackendMethodDocument) => void; breaking: boolean; breakingStrength: number; grouped: boolean }) {
+function SortableAction({ action, method, ingredients, selected, onSelect, updateDocument, onSplit, breaking, breakingStrength, grouped }: {
+  action: BackendMethodAction
+  method: BackendMethodDocument
+  ingredients: BackendMethodIngredient[]
+  selected: boolean
+  onSelect: () => void
+  updateDocument: (updater: (current: BackendMethodDocument) => BackendMethodDocument) => void
+  onSplit: (actionId: string, splitAt: number) => void
+  breaking: boolean
+  breakingStrength: number
+  grouped: boolean
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } = useSortable({ id: `action:${action.id}`, data: { type: 'action', label: action.text } })
+  const [splitAt, setSplitAt] = useState<number | null>(null)
   const ingredientMap = new Map(ingredients.map(item => [item.lineage_id, item]))
   const bindings = method.ingredient_bindings.filter(item => item.action_id === action.id)
   const breakClass = breaking ? (breakingStrength > .72 ? ' is-breaking is-breaking--hard' : breakingStrength > .32 ? ' is-breaking is-breaking--medium' : ' is-breaking') : ''
-  return <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`method-action-card${selected ? ' selected' : ''}${isDragging ? ' is-dragging' : ''}${isOver ? ' is-over' : ''}${breakClass}${grouped ? ' just-grouped' : ''}`} onClick={onSelect}><button type="button" className="method-drag-handle" aria-label={`Move ${action.text}`} {...listeners} {...attributes}><GripVertical/></button><div className="method-action-inputs">{bindings.map(binding => { const ingredient = ingredientMap.get(binding.ingredient_lineage_id); return ingredient && <span key={binding.id}>{ingredient.name}<button type="button" aria-label={`Remove ${ingredient.name} from ${action.text}`} onClick={event => { event.stopPropagation(); updateDocument(current => ({ ...current, ingredient_bindings: current.ingredient_bindings.filter(item => item.id !== binding.id) })) }}><X/></button></span> })}</div><textarea aria-label="Action text" rows={2} value={action.text} onClick={event => event.stopPropagation()} onChange={event => updateDocument(current => ({ ...current, actions: current.actions.map(item => item.id === action.id ? { ...item, text: event.target.value } : item) }))}/><div className="method-action-properties">{action.duration_minutes != null && <span><Clock3/>{action.duration_minutes} min</span>}{action.temperature_value != null && <span><Thermometer/>{action.temperature_value}°{action.temperature_unit?.toUpperCase()}</span>}{action.cue && <span><Check/>{action.cue}</span>}</div></article>
+  const canSplit = validSplitPosition(action.text, splitAt)
+  const splitHelpId = `split-help-${action.id}`
+  return <article ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`method-action-card${selected ? ' selected' : ''}${isDragging ? ' is-dragging' : ''}${isOver ? ' is-over' : ''}${breakClass}${grouped ? ' just-grouped' : ''}`} onClick={onSelect}>
+    <button type="button" className="method-drag-handle" aria-label={`Move ${action.text}`} {...listeners} {...attributes}><GripVertical/></button>
+    <div className="method-action-inputs">{bindings.map(binding => { const ingredient = ingredientMap.get(binding.ingredient_lineage_id); return ingredient && <span key={binding.id}>{ingredient.name}<button type="button" aria-label={`Remove ${ingredient.name} from ${action.text}`} onClick={event => { event.stopPropagation(); updateDocument(current => ({ ...current, ingredient_bindings: current.ingredient_bindings.filter(item => item.id !== binding.id) })) }}><X/></button></span> })}</div>
+    <textarea
+      aria-label="Action text"
+      rows={2}
+      value={action.text}
+      onClick={event => { event.stopPropagation(); setSplitAt(event.currentTarget.selectionStart) }}
+      onSelect={event => setSplitAt(event.currentTarget.selectionStart)}
+      onKeyUp={event => setSplitAt(event.currentTarget.selectionStart)}
+      onChange={event => {
+        const text = event.currentTarget.value
+        setSplitAt(event.currentTarget.selectionStart)
+        updateDocument(current => ({ ...current, actions: current.actions.map(item => item.id === action.id ? { ...item, text } : item) }))
+      }}
+    />
+    <div className="method-action-edit-tools" onClick={event => event.stopPropagation()}>
+      <span id={splitHelpId}>{canSplit ? 'Ready to create the next step here.' : 'Place the text cursor between words to split this step.'}</span>
+      <button type="button" disabled={!canSplit} aria-describedby={splitHelpId} onClick={() => {
+        if (splitAt != null) onSplit(action.id, splitAt)
+        setSplitAt(null)
+      }}><Split size={14} aria-hidden="true"/>Split step at cursor</button>
+    </div>
+    <div className="method-action-properties">{action.duration_minutes != null && <span><Clock3/>{action.duration_minutes} min</span>}{action.temperature_value != null && <span><Thermometer/>{action.temperature_value}°{action.temperature_unit?.toUpperCase()}</span>}{action.cue && <span><Check/>{action.cue}</span>}</div>
+  </article>
 }
 
 function Tutorial({ step, setStep, dismiss }: { step: number; setStep: (step: number | null) => void; dismiss: () => Promise<void> }) {
   const slides = [
-    { icon: MousePointer2, title: 'Tag the source', copy: 'Select a phrase, then label it as an ingredient, action, time, temperature, equipment or doneness cue.' },
-    { icon: Layers3, title: 'Build meaningful groups', copy: 'Drag an ingredient onto an action, or select several boxes and use Group. Actions can live in parallel named stages.' },
-    { icon: Split, title: 'Pull groups apart safely', copy: 'Drag a grouped action across its boundary. The shake grows near the split threshold; let go early to cancel or continue to separate it.' },
+    { icon: Tag, title: 'Link exact ingredient words', copy: 'Drag an ingredient onto the matching word. For keyboard or touch editing, select the ingredient first and then choose the word.' },
+    { icon: Split, title: 'Split long steps', copy: 'Place the cursor between words in an action, then use Split step at cursor to create the next editable step.' },
+    { icon: Layers3, title: 'Arrange the cooking flow', copy: 'Drag actions into order or into named stages. You can still select an ingredient and action together, then use Group.' },
   ]
   const slide = slides[step]
   const Icon = slide.icon

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -43,6 +43,37 @@ const methodView: BackendMethodView = {
   scaling_available: true,
 }
 
+const onionSource = 'Fry the onions until soft, then add the stock.'
+const onionActionText = onionSource.slice(0, -1)
+const onionMethodView: BackendMethodView = {
+  ...methodView,
+  title: 'Onion supper',
+  source_blocks: [{ id: 'block-onion', position: 0, text: onionSource }],
+  method: {
+    schema_version: 1,
+    annotations: [{
+      id: 'annotation-action', block_id: 'block-onion', start: 0, end: onionSource.length,
+      kind: 'action', origin: 'automatic', confidence: .9, accepted: false,
+    }],
+    omissions: [],
+    stages: [{ id: 'stage-1', title: 'Cook', position: 0 }],
+    actions: [{
+      id: 'action-1', stage_id: 'stage-1', position: 0, text: onionActionText,
+      source_annotation_ids: ['annotation-action'], equipment: [], confidence: .9,
+    }],
+    ingredient_bindings: [],
+    edges: [],
+  },
+  ingredients: [{
+    id: 'ingredient-onion', lineage_id: 'red-onion-lineage', name: 'red onions',
+    quantity: 2, quantity_text: '2', unit: 'item', display: '2 item red onions', optional: false,
+  }],
+  rendered_blocks: [{
+    id: 'block-onion', position: 0, text: onionSource,
+    segments: [{ kind: 'text', text: onionSource }],
+  }],
+}
+
 function renderMethod() {
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -59,7 +90,7 @@ function mockMethodPage(view: BackendMethodView = methodView) {
   vi.spyOn(api, 'me').mockResolvedValue({
     id: 'user-1', username: 'owner', role: 'owner', must_change_password: false,
     ingredient_locale: 'uk', method_view_preference: 'written', measurement_system: 'source',
-    method_tutorial_version_seen: 1,
+    method_tutorial_version_seen: 2,
   })
   vi.spyOn(api, 'getRecipe').mockResolvedValue({
     id: 'recipe-1', title: 'Tomato supper', eligibility: 'planner_ready', source_type: 'url',
@@ -98,7 +129,7 @@ describe('MethodPage', () => {
     const updateMe = vi.spyOn(api, 'updateMe').mockResolvedValue({
       id: 'user-1', username: 'owner', role: 'owner', must_change_password: false,
       ingredient_locale: 'uk', method_view_preference: 'summary', measurement_system: 'source',
-      method_tutorial_version_seen: 1,
+      method_tutorial_version_seen: 2,
     })
 
     renderMethod()
@@ -175,7 +206,7 @@ describe('MethodPage', () => {
     vi.spyOn(api, 'updateMe').mockResolvedValue({
       id: 'user-1', username: 'owner', role: 'owner', must_change_password: false,
       ingredient_locale: 'uk', method_view_preference: 'summary', measurement_system: 'source',
-      method_tutorial_version_seen: 1,
+      method_tutorial_version_seen: 2,
     })
     vi.mocked(api.getRecipeMethod).mockImplementation(async () => currentView)
     const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => {
@@ -210,5 +241,87 @@ describe('MethodPage', () => {
     expect(await screen.findByText('Method reviewed and saved.')).toBeInTheDocument()
     await user.click(screen.getByRole('radio', { name: 'Summary' }))
     expect(screen.getByText('Gently fry the tomatoes')).toBeInTheDocument()
+  })
+
+  it('links a mismatched ingredient to the exact source word and saves its amount binding', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(onionMethodView)
+    const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => ({
+      ...onionMethodView,
+      recipe_version: 2,
+      recipe_version_number: 2,
+      method: payload.method,
+    }))
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Onion supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    await user.click(screen.getByRole('button', { name: /red onions/i }))
+    await user.click(screen.getByRole('button', { name: 'Link red onions to “onions”' }))
+
+    expect(screen.getByText(/Linked red onions to “onions”/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save draft' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+
+    const payload = save.mock.calls[0]![1]
+    const annotation = payload.method.annotations.find(item => item.kind === 'ingredient')
+    const binding = payload.method.ingredient_bindings.find(item => item.ingredient_lineage_id === 'red-onion-lineage')
+    expect(annotation).toMatchObject({
+      block_id: 'block-onion',
+      start: onionSource.indexOf('onions'),
+      end: onionSource.indexOf('onions') + 'onions'.length,
+      ingredient_lineage_id: 'red-onion-lineage',
+      origin: 'user',
+      accepted: true,
+    })
+    expect(binding).toMatchObject({
+      action_id: 'action-1',
+      ingredient_lineage_id: 'red-onion-lineage',
+      portion_mode: 'unspecified',
+      accepted: true,
+    })
+    expect(binding?.annotation_id).toBe(annotation?.id)
+  })
+
+  it('splits an action at the text cursor and preserves the cooking sequence', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(onionMethodView)
+    const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => ({
+      ...onionMethodView,
+      recipe_version: 2,
+      recipe_version_number: 2,
+      method: payload.method,
+    }))
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Onion supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    const actionText = screen.getByRole('textbox', { name: 'Action text' }) as HTMLTextAreaElement
+    const splitAt = onionActionText.indexOf('then')
+    actionText.focus()
+    actionText.setSelectionRange(splitAt, splitAt)
+    fireEvent.select(actionText)
+
+    const splitButton = screen.getByRole('button', { name: 'Split step at cursor' })
+    expect(splitButton).toBeEnabled()
+    await user.click(splitButton)
+
+    const splitActions = screen.getAllByRole('textbox', { name: 'Action text' })
+    expect(splitActions).toHaveLength(2)
+    expect(splitActions[0]).toHaveValue('Fry the onions until soft,')
+    expect(splitActions[1]).toHaveValue('then add the stock')
+
+    await user.click(screen.getByRole('button', { name: 'Save draft' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+    const payload = save.mock.calls[0]![1]
+    const newAction = payload.method.actions.find(item => item.id !== 'action-1')
+    expect(newAction).toMatchObject({ stage_id: 'stage-1', position: 1, text: 'then add the stock' })
+    expect(payload.method.edges).toContainEqual(expect.objectContaining({
+      from_action_id: 'action-1',
+      to_action_id: newAction?.id,
+      kind: 'sequence',
+    }))
   })
 })

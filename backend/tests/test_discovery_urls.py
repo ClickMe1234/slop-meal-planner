@@ -1,9 +1,11 @@
 import asyncio
 
+import httpx
 import pytest
 
 from app.discovery.errors import FetchError, InvalidUrlError, UnsafeUrlError
-from app.discovery.http import PoliteHttpFetcher
+from app.discovery.extraction import extract_recipe
+from app.discovery.http import MAX_PUBLISHER_HTML_BYTES, PoliteHttpFetcher
 from app.discovery.urls import canonicalize_url, validate_fetch_url
 
 
@@ -53,6 +55,41 @@ def test_fetcher_pins_the_address_returned_by_the_validating_lookup(monkeypatch)
         )
     ) == "<html></html>"
     assert connected == ["93.184.216.34"]
+
+
+def test_fetcher_accepts_bounded_allrecipes_sized_recipe_pages():
+    json_ld = '''<script type="application/ld+json">{
+      "@type": "Recipe",
+      "name": "Large onion recipe",
+      "recipeYield": "4 servings",
+      "recipeIngredient": ["2 red onions"],
+      "recipeInstructions": [{"@type": "HowToStep", "text": "Fry the onions."}]
+    }</script>'''
+    page = f"<html><head>{json_ld}</head><body><!--{'x' * 2_100_000}--></body></html>"
+
+    async def fetch_and_extract():
+        async def respond(_request):
+            return httpx.Response(200, headers={"content-type": "text/html"}, text=page)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            fetcher = PoliteHttpFetcher(
+                min_host_interval_seconds=0,
+                client=client,
+                resolver=lambda _: ["93.184.216.34"],
+            )
+            assert fetcher.max_response_bytes == MAX_PUBLISHER_HTML_BYTES
+            html = await fetcher.fetch_text(
+                "https://www.allrecipes.com/recipe/123/large-onion-recipe/",
+                allowed_hosts={"www.allrecipes.com", "allrecipes.com"},
+            )
+        return extract_recipe(
+            html,
+            "https://www.allrecipes.com/recipe/123/large-onion-recipe/",
+        )
+
+    result = asyncio.run(fetch_and_extract())
+
+    assert [block.text for block in result.instruction_blocks] == ["Fry the onions."]
 
 
 def test_image_fetcher_rejects_non_image_content(monkeypatch):

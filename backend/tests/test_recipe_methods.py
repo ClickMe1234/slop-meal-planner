@@ -201,6 +201,99 @@ def test_unaccounted_clause_warns_but_does_not_block_review_or_persistence(clien
     assert reloaded["household_notes"] == "Use the heavy pan."
 
 
+def test_manual_word_link_renders_the_full_ingredient_amount(client, owner):
+    create_response = client.post(
+        "/api/v1/recipes",
+        headers=_headers(owner),
+        json={
+            "title": "Red onion supper",
+            "source_type": "custom",
+            "yield_servings": 2,
+            "custom_instructions": "Fry the onions until soft.",
+            "meal_types": ["dinner"],
+            "ingredients": [
+                {
+                    "original_text": "2 red onions",
+                    "quantity": 2,
+                    "unit": "item",
+                    "food_phrase": "red onions",
+                    "included": True,
+                }
+            ],
+        },
+    )
+    assert create_response.status_code == 201, create_response.text
+    recipe = create_response.json()
+
+    method_response = client.get(f"/api/v1/recipes/{recipe['id']}/method")
+    assert method_response.status_code == 200, method_response.text
+    method = method_response.json()
+    source = method["source_blocks"][0]["text"]
+    word_start = source.index("onions")
+    lineage_id = method["ingredients"][0]["lineage_id"]
+    action_id = method["method"]["actions"][0]["id"]
+
+    document = method["method"]
+    document["annotations"] = [
+        annotation
+        for annotation in document["annotations"]
+        if annotation["kind"] != "ingredient"
+    ]
+    document["ingredient_bindings"] = []
+    document["annotations"].append(
+        {
+            "id": "manual-red-onion-word",
+            "block_id": method["source_blocks"][0]["id"],
+            "start": word_start,
+            "end": word_start + len("onions"),
+            "kind": "ingredient",
+            "origin": "user",
+            "confidence": 1,
+            "accepted": True,
+            "ingredient_lineage_id": lineage_id,
+        }
+    )
+    document["ingredient_bindings"].append(
+        {
+            "id": "manual-red-onion-binding",
+            "action_id": action_id,
+            "ingredient_lineage_id": lineage_id,
+            "annotation_id": "manual-red-onion-word",
+            "portion_mode": "unspecified",
+            "confidence": 1,
+            "accepted": True,
+        }
+    )
+
+    save_response = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method",
+        headers=_headers(owner),
+        json={
+            "expected_version": method["recipe_version"],
+            "method": document,
+            "mark_reviewed": False,
+            "source_kind": "custom",
+            "source_blocks": method["source_blocks"],
+        },
+    )
+    assert save_response.status_code == 200, save_response.text
+    ingredient_segments = [
+        segment
+        for block in save_response.json()["rendered_blocks"]
+        for segment in block["segments"]
+        if segment["kind"] == "ingredient"
+    ]
+    assert ingredient_segments == [
+        {
+            "kind": "ingredient",
+            "text": "onions",
+            "annotation_id": "manual-red-onion-word",
+            "ingredient_lineage_id": lineage_id,
+            "quantity_label": "2 item red onions",
+        }
+    ]
+
+
 def test_method_preferences_are_user_scoped_and_partially_update(client, owner):
     response = client.patch(
         "/api/v1/auth/me",

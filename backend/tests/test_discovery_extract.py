@@ -57,6 +57,42 @@ def test_nested_schema_org_instructions_keep_exact_order_and_section_headings():
     ]
 
 
+def test_allrecipes_prefers_complete_recipe_and_falls_back_to_visible_directions():
+    html = '''
+      <script type="application/ld+json">[
+        {"@type": "Recipe", "name": "Incomplete recommendation card"},
+        {
+          "@type": "Recipe",
+          "name": "Allrecipes onion supper",
+          "recipeYield": ["4", "4 servings"],
+          "recipeIngredient": ["2 red onions", "1 tbsp olive oil"]
+        }
+      ]</script>
+      <h2>Directions</h2>
+      <ol>
+        <li><p>Step 1 Fry the onions until soft.</p></li>
+        <li><p>Step 2 Stir in the oil and serve.</p></li>
+      </ol>
+      <h2>Nutrition Facts</h2>
+      <ol><li>This is not a recipe step.</li></ol>
+    '''
+
+    result = extract_recipe(
+        html,
+        "https://www.allrecipes.com/recipe/123/allrecipes-onion-supper/",
+    )
+
+    assert result.title == "Allrecipes onion supper"
+    assert result.yield_servings == Decimal("4")
+    assert result.ingredient_lines == ("2 red onions", "1 tbsp olive oil")
+    assert result.extraction_method == "json_ld_semantic_method_fallback"
+    assert [block.text for block in result.instruction_blocks] == [
+        "Fry the onions until soft.",
+        "Stir in the oil and serve.",
+    ]
+    assert any("visible page markup" in reason for reason in result.review_reasons)
+
+
 def test_semantic_fallback_is_explicit_and_incomplete():
     result = extract_recipe(
         (FIXTURES / "recipe_semantic.html").read_text(encoding="utf-8"),

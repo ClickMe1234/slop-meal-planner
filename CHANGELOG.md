@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.1 - 2026-08-14
+
+- Restore Allrecipes cooking-method imports by allowing bounded larger recipe
+  pages, selecting the most complete Recipe JSON-LD node, and using visible
+  Directions markup when structured instructions are absent.
+- Link ingredient quantities to exact source wording by dragging an ingredient
+  onto a word, with an equivalent select-and-choose interaction for touch and
+  keyboard use.
+- Split an editable cooking action at the text cursor while preserving its
+  source annotations, ingredient bindings, stage order, and sequence graph.
+
 ## 1.3.0 - 2026-08-13
 
 - Add owner-managed breakfast, lunch, dinner, and snack meal-group defaults so
