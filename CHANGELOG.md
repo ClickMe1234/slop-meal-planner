@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.2 - 2026-08-14
+
+- Restore live Allrecipes method fetching by matching Python's standard HTTPS
+  TLS extensions while retaining DNS pinning, response bounds, and SSRF
+  protections; also tolerate a comma or full stop pasted after a recipe URL.
+- Replace the separate draft/review actions with one Save action that persists
+  the method and marks it reviewed.
+
 ## 1.3.1 - 2026-08-14
 
 - Restore Allrecipes cooking-method imports by allowing bounded larger recipe

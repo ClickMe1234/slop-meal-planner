@@ -40,11 +40,18 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     """HTTPS connection pinned to an IP while preserving hostname TLS checks."""
 
     def __init__(self, host: str, address: str, port: int, timeout: float) -> None:
+        context = ssl.create_default_context()
+        # Match Python's normal HTTPS client context. Some Cloudflare edges
+        # (including Allrecipes) reject the otherwise-valid TLS fingerprint
+        # produced when ALPN and TLS 1.3 post-handshake auth are omitted.
+        context.set_alpn_protocols(["http/1.1"])
+        if context.post_handshake_auth is not None:
+            context.post_handshake_auth = True
         super().__init__(
             host,
             port=port,
             timeout=timeout,
-            context=ssl.create_default_context(),
+            context=context,
         )
         self._validated_address = address
 

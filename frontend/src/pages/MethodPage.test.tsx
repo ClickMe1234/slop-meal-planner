@@ -144,7 +144,7 @@ describe('MethodPage', () => {
     expect(screen.getByText('Fry the tomatoes')).toBeInTheDocument()
   })
 
-  it('marks a complete needs-review method as reviewed without opening the editor', async () => {
+  it('saves a complete needs-review method as reviewed without opening the editor', async () => {
     const user = userEvent.setup()
     mockMethodPage()
     let currentView = methodView
@@ -158,7 +158,7 @@ describe('MethodPage', () => {
     renderMethod()
 
     expect(await screen.findByRole('heading', { name: 'Tomato supper' })).toBeInTheDocument()
-    const reviewButton = screen.getByRole('button', { name: 'Mark as reviewed' })
+    const reviewButton = screen.getByRole('button', { name: 'Save' })
     expect(reviewButton).toBeEnabled()
     expect(screen.queryByText('Original written method')).not.toBeInTheDocument()
 
@@ -169,9 +169,9 @@ describe('MethodPage', () => {
       mark_reviewed: true,
       source_kind: 'publisher',
     })))
-    expect(await screen.findByText('Method reviewed and saved.')).toBeInTheDocument()
+    expect(await screen.findByText('Method saved and reviewed.')).toBeInTheDocument()
     expect(screen.getByText('Reviewed')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Mark as reviewed' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
   })
 
   it('makes each unaccounted clause exact, prominent, and locatable in the editor', async () => {
@@ -181,13 +181,12 @@ describe('MethodPage', () => {
     renderMethod()
 
     await screen.findByRole('heading', { name: 'Tomato supper' })
-    expect(screen.getByRole('button', { name: 'Mark as reviewed' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: 'Edit method' }))
 
     expect(screen.getByText('1 unaccounted clause')).toBeInTheDocument()
-    expect(screen.getByText(/This warning does not block saving or marking the method as reviewed/)).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Mark as reviewed' })).toHaveLength(2)
-    screen.getAllByRole('button', { name: 'Mark as reviewed' }).forEach(button => expect(button).toBeEnabled())
+    expect(screen.getByText(/This warning does not block saving the reviewed method/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
     const locator = screen.getByRole('button', { name: `Locate unaccounted clause 1: ${unresolvedText}` })
     expect(locator).toHaveTextContent(unresolvedText)
     const sourceSpan = document.querySelector('mark[data-unreviewed-clause="true"]') as HTMLElement
@@ -229,7 +228,7 @@ describe('MethodPage', () => {
     await user.clear(actionText)
     await user.type(actionText, 'Gently fry the tomatoes')
     await user.type(screen.getByRole('textbox', { name: 'Household notes' }), 'Use the heavy pan.')
-    await user.click(screen.getAllByRole('button', { name: 'Mark as reviewed' }).at(-1)!)
+    await user.click(screen.getAllByRole('button', { name: 'Save' }).at(-1)!)
 
     await waitFor(() => expect(save).toHaveBeenCalledWith('recipe-1', expect.objectContaining({
       mark_reviewed: true,
@@ -238,7 +237,7 @@ describe('MethodPage', () => {
         actions: expect.arrayContaining([expect.objectContaining({ text: 'Gently fry the tomatoes' })]),
       }),
     })))
-    expect(await screen.findByText('Method reviewed and saved.')).toBeInTheDocument()
+    expect(await screen.findByText('Method saved and reviewed.')).toBeInTheDocument()
     await user.click(screen.getByRole('radio', { name: 'Summary' }))
     expect(screen.getByText('Gently fry the tomatoes')).toBeInTheDocument()
   })
@@ -261,7 +260,7 @@ describe('MethodPage', () => {
     await user.click(screen.getByRole('button', { name: 'Link red onions to “onions”' }))
 
     expect(screen.getByText(/Linked red onions to “onions”/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Save draft' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(save).toHaveBeenCalled())
 
     const payload = save.mock.calls[0]![1]
@@ -313,7 +312,7 @@ describe('MethodPage', () => {
     expect(splitActions[0]).toHaveValue('Fry the onions until soft,')
     expect(splitActions[1]).toHaveValue('then add the stock')
 
-    await user.click(screen.getByRole('button', { name: 'Save draft' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(save).toHaveBeenCalled())
     const payload = save.mock.calls[0]![1]
     const newAction = payload.method.actions.find(item => item.id !== 'action-1')
