@@ -1,5 +1,13 @@
 # Agent workflow
 
+- Before changing the repository, read the root [CODEBASE_MAP.md](CODEBASE_MAP.md).
+  It is the maintained orientation guide for the product features, frontend
+  routes, API modules, domain model, services, runtime/deployment paths,
+  migrations, tests, security boundaries, and safe change patterns. Use it to
+  locate the nearest code and test, then verify details against the source.
+- When an architectural, feature, workflow, deployment, or migration change
+  makes that guide inaccurate, update CODEBASE_MAP.md in the same change.
+
 - Use the current Codex agent directly for implementation work unless the user explicitly requests delegation or a multi-agent workflow.
 - Do not require the `sol-luna-router` skill or a separate reasoning-level confirmation before starting implementation.
 
