@@ -2,7 +2,7 @@ import { Archive, Bell, BookOpenText, Check, ChevronRight, Database, Download, E
 import { FormEvent, ReactNode, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink } from 'react-router-dom'
-import { api, ApiError, type BackendMealGroup, type BackendMealType, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type MeasurementSystem, type MethodViewPreference, type RestoreComponent } from '../api/client'
+import { api, ApiError, isDemoMode, type BackendMealGroup, type BackendMealType, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type MeasurementSystem, type MethodViewPreference, type RestoreComponent } from '../api/client'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import type { ThemeChoice } from '../types'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
@@ -20,7 +20,9 @@ function SettingsLayout({ children }: { children: ReactNode }) {
   return (
     <div className="page">
       <PageHeader eyebrow="Slop" title="Settings" description="Household profiles, planning defaults and this local installation." />
-      <div className="settings-layout">
+      {isDemoMode ? <Notice tone="info" title="Settings need a live household">
+        Connect the app to a private household API to manage members, targets, preferences, backups and integrations. Theme changes remain available from the app menu.
+      </Notice> : <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
           {nav.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end}>
@@ -31,15 +33,15 @@ function SettingsLayout({ children }: { children: ReactNode }) {
           ))}
         </nav>
         <section className="settings-content">{children}</section>
-      </div>
+      </div>}
     </div>
   )
 }
 
 export function HouseholdSettings() {
   const queryClient = useQueryClient()
-  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers })
-  const session = useQuery({ queryKey: ['session'], queryFn: api.me })
+  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers, enabled: !isDemoMode })
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode })
   const [adding, setAdding] = useState(false)
   const [newName, setNewName] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -236,28 +238,9 @@ export function HouseholdSettings() {
       </Card>
       <Card className="settings-section">
         <h3>Planning defaults</h3>
-        <label className="switch-row">
-          <span>
-            <strong>Reserve allowance for unplanned meals</strong>
-            <small>Eating-out calories are not redistributed automatically.</small>
-          </span>
-          <input type="checkbox" defaultChecked />
-        </label>
-        <label className="switch-row">
-          <span>
-            <strong>Quarter-serving portions</strong>
-            <small>People can receive different portions of a shared recipe.</small>
-          </span>
-          <input type="checkbox" defaultChecked />
-        </label>
-        <label>
-          Default planning period
-          <select defaultValue="7">
-            <option value="7">7 days</option>
-            <option value="5">5 days</option>
-            <option value="14">14 days</option>
-          </select>
-        </label>
+        <Notice tone="info" title="Set these per plan">
+          Attendance, planning period and portion choices are configured while building each meal plan. There are no household-wide defaults to save here.
+        </Notice>
       </Card>
     </SettingsLayout>
   )
@@ -267,9 +250,9 @@ const planningMealTypes: BackendMealType[] = ['breakfast', 'lunch', 'dinner', 's
 
 function MealGroupDefaultsSettings() {
   const queryClient = useQueryClient()
-  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers })
-  const session = useQuery({ queryKey: ['session'], queryFn: api.me })
-  const defaults = useQuery({ queryKey: ['meal-group-defaults'], queryFn: api.getMealGroupDefaults })
+  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers, enabled: !isDemoMode })
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode })
+  const defaults = useQuery({ queryKey: ['meal-group-defaults'], queryFn: api.getMealGroupDefaults, enabled: !isDemoMode })
   const [draft, setDraft] = useState<Record<BackendMealType, BackendMealGroup[]> | null>(null)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -316,13 +299,13 @@ function MealGroupDefaultsSettings() {
 
 export function TargetSettings() {
   const queryClient = useQueryClient()
-  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers })
+  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers, enabled: !isDemoMode })
   const [memberId, setMemberId] = useState('')
   const selectedMemberId = memberId || members.data?.[0]?.id || ''
   const target = useQuery({
     queryKey: ['target', selectedMemberId],
     queryFn: () => api.getTarget(selectedMemberId),
-    enabled: Boolean(selectedMemberId),
+    enabled: !isDemoMode && Boolean(selectedMemberId),
     retry: false,
   })
   const [mode, setMode] = useState<'calorie' | 'macros'>('calorie')
@@ -538,14 +521,14 @@ function MacroMinimumInput({ label, value, onChange }: { label: string; value: n
 
 export function PreferenceSettings() {
   const queryClient = useQueryClient()
-  const session = useQuery({ queryKey: ['session'], queryFn: api.me })
-  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers })
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode })
+  const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers, enabled: !isDemoMode })
   const [memberId, setMemberId] = useState('')
   const selectedMemberId = memberId || members.data?.[0]?.id || ''
   const restrictions = useQuery({
     queryKey: ['restrictions', selectedMemberId],
     queryFn: () => api.listRestrictions(selectedMemberId),
-    enabled: Boolean(selectedMemberId),
+    enabled: !isDemoMode && Boolean(selectedMemberId),
   })
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -768,16 +751,17 @@ export function AppearanceSettings({ theme, setTheme }: { theme: ThemeChoice; se
 
 export function DataSettings() {
   const queryClient = useQueryClient()
-  const session = useQuery({ queryKey: ['session'], queryFn: api.me })
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode })
   const isOwner = session.data?.role === 'owner'
   const status = useQuery({
     queryKey: ['backup-status'],
     queryFn: api.backupStatus,
+    enabled: !isDemoMode,
   })
   const archives = useQuery({
     queryKey: ['restore-archives'],
     queryFn: api.restoreArchives,
-    enabled: isOwner,
+    enabled: !isDemoMode && isOwner,
   })
   const [running, setRunning] = useState(false)
   const [restoreArchive, setRestoreArchive] = useState('')
@@ -969,12 +953,12 @@ function RestoreComponentCard({ component, selected, onToggle }: { component: Ba
 
 export function SystemSettings() {
   const queryClient = useQueryClient()
-  const session = useQuery({ queryKey: ['session'], queryFn: api.me })
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode })
   const isOwner = session.data?.role === 'owner'
   const integration = useQuery({
     queryKey: ['usda-integration'],
     queryFn: api.usdaIntegration,
-    enabled: isOwner,
+    enabled: !isDemoMode && isOwner,
   })
   const [apiKey, setApiKey] = useState('')
   const [saving, setSaving] = useState(false)
@@ -1123,7 +1107,8 @@ export function SystemSettings() {
           </div>
           <Badge>Disabled</Badge>
         </div>
-        <Button variant="secondary" disabled>
+        <p id="openclaw-disabled-help" className="field-help">This integration is not enabled in this installation.</p>
+        <Button variant="secondary" disabled aria-describedby="openclaw-disabled-help" title="This integration is not enabled in this installation.">
           <KeyRound />
           Configure connection
         </Button>

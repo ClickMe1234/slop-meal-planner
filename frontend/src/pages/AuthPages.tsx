@@ -16,6 +16,7 @@ export function LoginPage() {
   const [password, setPassword] = useState(isDemoMode ? 'password' : '')
   const [rememberMe, setRememberMe] = useState(true)
   const [error, setError] = useState('')
+  const [showHelp, setShowHelp] = useState(false)
   useEffect(() => {
     if (!isDemoMode) {
       api.setupStatus().then(status => status.setup_required && navigate('/setup')).catch(() => undefined)
@@ -52,7 +53,7 @@ export function LoginPage() {
       <div><p className="eyebrow">Your week, made easier</p><h1>Plan once.<br/>Eat well all week.</h1><p>Recipes you trust, nutrition calculated consistently and one shopping list for the household.</p></div>
       <blockquote>“Dinner is sorted before the week even begins.”</blockquote>
     </section>
-    <section className="auth-panel"><Card className="auth-card"><div className="auth-heading"><div className="mobile-auth-mark"><Heart fill="currentColor" /></div><p className="eyebrow">Welcome home</p><h2>Sign in to your household</h2><p>Your meal plan is waiting.</p></div><form onSubmit={submit} className="form-stack"><label>Username<input required value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" /></label><label>Password<input required type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" /></label>{error && <p role="alert" className="field-error">{error}</p>}<div className="form-inline"><label className="check-label"><input type="checkbox" checked={rememberMe} onChange={event => setRememberMe(event.target.checked)} /> Keep me signed in</label><button className="text-button" type="button">Need help?</button></div><Button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}<ArrowRight size={18} /></Button></form><div className="secure-note"><ShieldCheck size={17} /><span>Private to your home network</span></div></Card></section>
+    <section className="auth-panel"><Card className="auth-card"><div className="auth-heading"><div className="mobile-auth-mark"><Heart fill="currentColor" /></div><p className="eyebrow">Welcome home</p><h2>Sign in to your household</h2><p>Your meal plan is waiting.</p></div><form onSubmit={submit} className="form-stack"><label>Username<input required value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" /></label><label>Password<input required type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" /></label>{error && <p role="alert" className="field-error">{error}</p>}<div className="form-inline"><label className="check-label"><input type="checkbox" checked={rememberMe} onChange={event => setRememberMe(event.target.checked)} /> Keep me signed in</label><button className="text-button" type="button" aria-expanded={showHelp} aria-controls="login-help" onClick={() => setShowHelp(value => !value)}>{showHelp ? 'Hide help' : 'Need help?'}</button></div><Button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}<ArrowRight size={18} /></Button></form>{showHelp && <div id="login-help" role="region" aria-label="Sign-in help"><Notice tone="info" title="Need help signing in?">Use the username and password created for this household. If you do not know them, contact the household owner; this private installation does not provide a self-service password reset.</Notice></div>}<div className="secure-note"><ShieldCheck size={17} /><span>Private to your home network</span></div></Card></section>
   </div>
 }
 
@@ -106,47 +107,6 @@ const newOnboardingTarget = (): OnboardingTarget => ({
   proteinTarget: 130, carbohydrateTarget: 225, fatTarget: 67,
   allocations: { Breakfast: 25, Lunch: 30, Dinner: 35, Snacks: 10 },
 })
-
-function LegacyOnboardingPage() {
-  const navigate = useNavigate()
-  const [step, setStep] = useState(0)
-  const [mode, setMode] = useState<'calorie' | 'macros'>('calorie')
-  const [tolerance, setTolerance] = useState(5)
-  const [calorieTarget, setCalorieTarget] = useState(2000)
-  const [proteinTarget, setProteinTarget] = useState(130)
-  const [carbohydrateTarget, setCarbohydrateTarget] = useState(225)
-  const [fatTarget, setFatTarget] = useState(67)
-  const [allocations, setAllocations] = useState({ Breakfast:25, Lunch:30, Dinner:35, Snacks:10 })
-  const [error, setError] = useState('')
-  const finish = async () => {
-    if (isDemoMode) { navigate('/week'); return }
-    try {
-      const user = await api.me()
-      if (!user.member_id) throw new Error('The owner has no linked planning profile.')
-      await api.setTarget(user.member_id, {
-        mode,
-        tolerance_percent:tolerance,
-        calorie_target:mode==='calorie'?calorieTarget:null,
-        protein_target_g:mode==='macros'?proteinTarget:null,
-        carbohydrate_target_g:mode==='macros'?carbohydrateTarget:null,
-        fat_target_g:mode==='macros'?fatTarget:null,
-        allocations:Object.entries(allocations).map(([name,percentage])=>({meal_type:name==='Snacks'?'snack':name.toLowerCase(),percentage})),
-      })
-      navigate('/week')
-    } catch (reason) { setError(reason instanceof ApiError ? reason.message : 'Your nutrition target could not be saved.') }
-  }
-  return <div className="onboarding-page"><header className="onboarding-header"><div className="brand"><div className="brand-mark"><Heart size={20} fill="currentColor" /></div><div><strong>Slop</strong><span>meal planner</span></div></div><span>Setup {step + 1} of {steps.length}</span></header><div className="onboarding-progress"><ProgressBar value={(step + 1) / steps.length * 100} /><ol>{steps.map((name, index) => <li key={name} className={index <= step ? 'active' : ''}><span>{index < step ? <Check size={14} /> : index + 1}</span>{name}</li>)}</ol></div>
-    <main className="onboarding-main"><div className="onboarding-copy"><p className="eyebrow">{steps[step]}</p><h1>{['Who are we planning for?','Set your nutrition targets','Shape your day','Food that works for you','What is already at home?'][step]}</h1><p>{['Add the people sharing meals. You can give everyone their own portions and targets.','Choose one clear way to guide the planner. We will never widen your tolerance silently.','Allocate your target across the meals you normally eat.','Hard exclusions are always respected; preferences help rank good options.','A quick pantry start makes your first shopping list more useful.'][step]}</p></div>
-      <Card className="onboarding-card">{step === 0 && <div className="form-stack"><label>Your display name<input defaultValue="Zach" /></label><label>Household name<input defaultValue="Our household" /></label><div className="member-row"><span>Z</span><div><strong>Zach</strong><small>Owner · planning profile linked</small></div><Button variant="ghost">Edit</Button></div><Button variant="secondary" type="button">+ Add another person</Button></div>}
-        {step === 1 && <div className="form-stack"><label>Planning method<Segmented value={mode} onChange={setMode} label="Nutrition target mode" options={[{ value:'calorie', label:'Calories' },{ value:'macros', label:'Macros' }]} /></label>{mode === 'calorie' ? <label>Daily calorie target<div className="input-suffix"><input type="number" min="1" value={calorieTarget} onChange={event=>setCalorieTarget(Number(event.target.value))}/><span>kcal</span></div></label> : <div className="form-grid form-grid--3"><label>Protein<input type="number" min="0" value={proteinTarget} onChange={event=>setProteinTarget(Number(event.target.value))}/></label><label>Carbs<input type="number" min="0" value={carbohydrateTarget} onChange={event=>setCarbohydrateTarget(Number(event.target.value))}/></label><label>Fat<input type="number" min="0" value={fatTarget} onChange={event=>setFatTarget(Number(event.target.value))}/></label></div>}<label>Allowed tolerance<div className="range-header"><strong>{tolerance}%</strong><span>Planner must stay within this range</span></div><input type="range" min="1" max="15" value={tolerance} onChange={e => setTolerance(Number(e.target.value))} /></label></div>}
-        {step === 2 && <div className="allocation-list">{(Object.keys(allocations) as Array<keyof typeof allocations>).map(name => <label key={name}><span>{name}</span><div className="input-suffix"><input type="number" min="0" max="100" value={allocations[name]} onChange={event=>setAllocations(values=>({...values,[name]:Number(event.target.value)}))}/><span>%</span></div></label>)}<div className="total-row"><span>Total allocation</span><strong><Check size={16}/>{Object.values(allocations).reduce((sum,value)=>sum+value,0)}%</strong></div></div>}
-        {step === 3 && <div className="form-stack"><label>Allergies and strict exclusions<input placeholder="Search an ingredient…" /></label><div className="tag-row"><span className="tag tag--danger">Peanuts ×</span></div><label>Foods you would rather avoid<input placeholder="e.g. olives, blue cheese…" /></label><label>Recipes you enjoy<input placeholder="e.g. curries, traybakes…" /></label></div>}
-        {step === 4 && <div className="form-stack"><p className="muted">Add a few staples now, or skip and fill your pantry later.</p>{['Olive oil','Basmati rice','Eggs'].map(item => <label className="check-card" key={item}><input type="checkbox" defaultChecked/><span><strong>{item}</strong><small>Keep as a household staple</small></span></label>)}<Button variant="secondary">+ Add another staple</Button></div>}
-      </Card>
-      {error&&<p role="alert" className="field-error">{error}</p>}<div className="wizard-actions"><Button variant="ghost" disabled={step === 0} onClick={() => setStep(value => value - 1)}><ArrowLeft size={18}/>Back</Button><Button onClick={() => step === steps.length - 1 ? finish() : setStep(value => value + 1)}>{step === steps.length - 1 ? 'Finish setup' : 'Continue'}<ArrowRight size={18}/></Button></div>
-    </main>
-  </div>
-}
 
 export function OnboardingPage() {
   const navigate = useNavigate()

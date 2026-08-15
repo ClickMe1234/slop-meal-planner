@@ -37,6 +37,20 @@ describe('WeekPage', () => {
     expect(screen.getByRole('link', { name: 'Plan next week' })).toHaveAttribute('href', planNextWeekPath)
   })
 
+  it('explains fixed demo actions instead of silently doing nothing', async () => {
+    const user = userEvent.setup()
+    renderWeek()
+
+    await user.click(screen.getByRole('button', { name: 'Regenerate unlocked' }))
+    expect(screen.getByText(/the demo week is fixed/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Previous week' }))
+    expect(screen.getByText(/one fixed week/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'View batch' }))
+    expect(screen.getByText(/batch details are available/i)).toBeInTheDocument()
+  })
+
   it('starts daily nutrition at zero and adds a recipe when it is marked cooked', async () => {
     const user = userEvent.setup()
     renderWeek()

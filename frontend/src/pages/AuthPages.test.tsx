@@ -90,4 +90,18 @@ describe('LoginPage', () => {
 
     await waitFor(() => expect(api.login).toHaveBeenCalledWith('owner', 'password', false))
   })
+
+  it('opens actionable sign-in help instead of leaving the help control inert', async () => {
+    const user = userEvent.setup()
+    renderLogin()
+
+    await screen.findByRole('heading', { name: /sign in to your household/i })
+    const help = screen.getByRole('button', { name: 'Need help?' })
+    expect(help).toHaveAttribute('aria-expanded', 'false')
+
+    await user.click(help)
+
+    expect(help).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('region', { name: 'Sign-in help' })).toHaveTextContent(/contact the household owner/i)
+  })
 })
