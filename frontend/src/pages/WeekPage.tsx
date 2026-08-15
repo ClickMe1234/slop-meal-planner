@@ -195,6 +195,7 @@ function DemoWeekPage() {
   const [cooked, setCooked] = useState<string[]>([])
   const [batchWeights, setBatchWeights] = useState<Record<string, number>>({})
   const [weightDrafts, setWeightDrafts] = useState<Record<string, string>>({})
+  const [demoNotice, setDemoNotice] = useState('')
   const day = demoWeek[selected]
   const mealGroups = groupByMealType(day.meals, meal => meal.kind)
   const totals = useMemo(() => day.meals.filter(item => cooked.includes(item.id)).reduce((sum, item) => ({
@@ -205,8 +206,9 @@ function DemoWeekPage() {
   }), emptyNutrition()), [cooked, day])
 
   return <div className="page">
-    <PageHeader eyebrow="13–19 July" title="This week" description="Everything is planned. Make changes without losing the meals you want to keep." actions={<><Button variant="secondary"><RefreshCw size={17}/>Regenerate unlocked</Button><Link className="button" to={planNextWeekPath}>Plan next week</Link></>}/>
-    <div className="week-toolbar"><button aria-label="Previous week"><ChevronLeft/></button><strong>13 – 19 July 2026</strong><button aria-label="Next week"><ChevronRight/></button><Badge tone="green">Within targets</Badge></div>
+    <PageHeader eyebrow="13–19 July" title="This week" description="Everything is planned. Make changes without losing the meals you want to keep." actions={<><Button type="button" variant="secondary" onClick={() => setDemoNotice('The demo week is fixed. In a connected household, Regenerate unlocked refreshes only meals that have not been cooked.')}><RefreshCw size={17}/>Regenerate unlocked</Button><Link className="button" to={planNextWeekPath}>Plan next week</Link></>}/>
+    <div className="week-toolbar"><button type="button" aria-label="Previous week" onClick={() => setDemoNotice('The demo includes one fixed week. Connect a household to browse previous or next weeks.')}><ChevronLeft/></button><strong>13 – 19 July 2026</strong><button type="button" aria-label="Next week" onClick={() => setDemoNotice('The demo includes one fixed week. Connect a household to browse previous or next weeks.')}><ChevronRight/></button><Badge tone="green">Within targets</Badge></div>
+    {demoNotice && <Notice tone="info" title="Demo mode">{demoNotice}</Notice>}
     <div className="day-tabs" style={{ '--day-count': demoWeek.length } as CSSProperties}>{demoWeek.map((item, index) => <button key={item.date} className={selected === index ? 'active' : ''} onClick={() => setSelected(index)}><span>{item.day.slice(0, 3)}</span><strong>{item.shortDate.split(' ')[0]}</strong></button>)}</div>
     <div className="week-layout">
       <section>
@@ -246,7 +248,7 @@ function DemoWeekPage() {
           })}</div>
         </section>)}</div>
       </section>
-      <aside className="day-summary"><NutritionCard totals={totals} calorieTarget={day.targetCalories}/><Card className="prep-card"><div><Clock3/><h3>Prep ahead</h3></div><p>Make 3 portions of harissa chicken at lunch. Two are reserved for Tuesday and Wednesday.</p><Button variant="ghost">View batch</Button></Card></aside>
+      <aside className="day-summary"><NutritionCard totals={totals} calorieTarget={day.targetCalories}/><Card className="prep-card"><div><Clock3/><h3>Prep ahead</h3></div><p>Make 3 portions of harissa chicken at lunch. Two are reserved for Tuesday and Wednesday.</p><Button type="button" variant="ghost" onClick={() => setDemoNotice('Batch details are available in a connected household. Mark a demo meal cooked to preview its local portion-weight controls.')}>View batch</Button></Card></aside>
     </div>
   </div>
 }

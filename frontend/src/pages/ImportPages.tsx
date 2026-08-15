@@ -657,6 +657,7 @@ function ImportReviewDrawerFrame({ children, saving, onDismiss }: { children: Re
 function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoTitle = 'Harissa chicken with chickpeas' }: ImportReviewPresentationProps = {}) {
   const navigate = useNavigate()
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
+  const [yieldServings, setYieldServings] = useState('4')
   const demoIngredients = ['600g boneless skinless chicken thighs', '2 x 400g cans chickpeas, drained', '2 tbsp rose harissa', 'a splash of olive oil', '1 lemon, zest and juice']
   const deleteRecipe = () => {
     if (!window.confirm(`Delete “${demoTitle}”? This removes it from your recipes. Existing meal plans keep their history.`)) return
@@ -672,20 +673,14 @@ function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoT
       <PageHeader
         eyebrow="Import review"
         title={demoTitle}
-        description="Nutrition is reported by Good Food and will be used for planning."
-        actions={
-          <Button variant="secondary">
-            <ExternalLink size={17} />
-            Original recipe
-          </Button>
-        }
+        description="Nutrition is reported by Good Food and will be used for planning. The original source link is unavailable in demo mode."
       />
       <div className="review-layout">
         <section>
           <Card className="yield-card recipe-basics-card">
             <label>
               Confirmed servings
-              <input type="number" min="0.25" step="0.25" defaultValue="4" />
+              <input aria-label="Confirmed servings" type="number" min="0.25" step="0.25" value={yieldServings} onChange={(event) => setYieldServings(event.target.value)} />
             </label>
             <div className="recipe-meal-type-review">
               <MealTypePicker value={mealTypes} onChange={setMealTypes} />
@@ -716,7 +711,7 @@ function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoT
                 basis: 'per_serving',
               }}
             />
-            <p>Per serving · reported by Good Food · used for planning</p>
+            <p>Per serving · reported by Good Food · used for planning · {yieldServings} servings confirmed</p>
             <Button onClick={() => onSaved ? onSaved() : navigate('/recipes')}>Save recipe</Button>
             <div className="recipe-delete-action">
               <p>Remove this recipe from your collection.</p>

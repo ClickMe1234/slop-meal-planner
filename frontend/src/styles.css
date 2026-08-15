@@ -1071,6 +1071,11 @@ button.tag { cursor: pointer; font: inherit; }
   .shopping-pantry-review-actions { display:grid;grid-template-columns:1fr; }
 }
 
+@media (max-width: 340px) {
+  .page-actions { align-items:stretch;flex-direction:column;gap:8px;margin-inline:0;overflow:visible;padding:0;width:100%; }
+  .page-actions .button,.page-actions .button:nth-child(n) { width:100%; }
+}
+
 /* Ingredient library */
 .ingredients-page { display:grid;gap:22px; }
 .ingredients-page>.page-header { margin-bottom:0; }
