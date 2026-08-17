@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -194,7 +194,7 @@ describe('MethodPage', () => {
     expect(sourceSpan).toHaveFocus()
   })
 
-  it('persists editor changes when reviewing with an unaccounted clause', async () => {
+  it('persists written-method notes when reviewing with an unaccounted clause', async () => {
     const user = userEvent.setup()
     let currentView = unreviewedMethodView
     mockMethodPage(currentView)
@@ -220,18 +220,13 @@ describe('MethodPage', () => {
 
     await screen.findByRole('heading', { name: 'Tomato supper' })
     await user.click(screen.getByRole('button', { name: 'Edit method' }))
-    const actionText = screen.getAllByRole('textbox', { name: 'Action text' })[0]
-    await user.clear(actionText)
-    await user.type(actionText, 'Gently fry the tomatoes')
     await user.type(screen.getByRole('textbox', { name: 'Household notes' }), 'Use the heavy pan.')
     await user.click(screen.getAllByRole('button', { name: 'Save' }).at(-1)!)
 
     await waitFor(() => expect(save).toHaveBeenCalledWith('recipe-1', expect.objectContaining({
       mark_reviewed: true,
       household_notes: 'Use the heavy pan.',
-      method: expect.objectContaining({
-        actions: expect.arrayContaining([expect.objectContaining({ text: 'Gently fry the tomatoes' })]),
-      }),
+      method: expect.objectContaining({ actions: unreviewedMethodView.method.actions }),
     })))
     expect(await screen.findByText('Method saved and reviewed.')).toBeInTheDocument()
     expect(screen.getByText('Use the heavy pan.')).toBeInTheDocument()
@@ -278,44 +273,17 @@ describe('MethodPage', () => {
     expect(binding?.annotation_id).toBe(annotation?.id)
   })
 
-  it('splits an action at the text cursor and preserves the cooking sequence', async () => {
+  it('does not expose cooking-flow controls that cannot affect the written view', async () => {
     const user = userEvent.setup()
     mockMethodPage(onionMethodView)
-    const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => ({
-      ...onionMethodView,
-      recipe_version: 2,
-      recipe_version_number: 2,
-      method: payload.method,
-    }))
 
     renderMethod()
 
     await screen.findByRole('heading', { name: 'Onion supper' })
     await user.click(screen.getByRole('button', { name: 'Edit method' }))
-    const actionText = screen.getByRole('textbox', { name: 'Action text' }) as HTMLTextAreaElement
-    const splitAt = onionActionText.indexOf('then')
-    actionText.focus()
-    actionText.setSelectionRange(splitAt, splitAt)
-    fireEvent.select(actionText)
-
-    const splitButton = screen.getByRole('button', { name: 'Split step at cursor' })
-    expect(splitButton).toBeEnabled()
-    await user.click(splitButton)
-
-    const splitActions = screen.getAllByRole('textbox', { name: 'Action text' })
-    expect(splitActions).toHaveLength(2)
-    expect(splitActions[0]).toHaveValue('Fry the onions until soft,')
-    expect(splitActions[1]).toHaveValue('then add the stock')
-
-    await user.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(save).toHaveBeenCalled())
-    const payload = save.mock.calls[0]![1]
-    const newAction = payload.method.actions.find(item => item.id !== 'action-1')
-    expect(newAction).toMatchObject({ stage_id: 'stage-1', position: 1, text: 'then add the stock' })
-    expect(payload.method.edges).toContainEqual(expect.objectContaining({
-      from_action_id: 'action-1',
-      to_action_id: newAction?.id,
-      kind: 'sequence',
-    }))
+    expect(screen.queryByRole('textbox', { name: 'Action text' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Split step at cursor' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Stage name' })).not.toBeInTheDocument()
+    expect(screen.getByText((_, element) => element?.tagName === 'P' && element.textContent === onionSource)).toBeInTheDocument()
   })
 })

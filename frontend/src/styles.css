@@ -1556,7 +1556,7 @@ button.tag { cursor: pointer; font: inherit; }
 .method-empty-state textarea { min-height:180px;padding-block:12px; }
 .method-empty-divider { align-items:center;color:var(--muted);display:flex;font-size:.7rem;gap:10px;text-transform:uppercase; }
 .method-empty-divider:before,.method-empty-divider:after { background:var(--border);content:'';flex:1;height:1px; }
-.method-editor-shell { align-items:start;display:grid;gap:18px;grid-template-columns:190px minmax(300px,.9fr) minmax(380px,1.1fr); }
+.method-editor-shell { align-items:start;display:grid;gap:18px;grid-template-columns:190px minmax(0,1fr); }
 .method-editor-guide { background:var(--surface);border:1px solid var(--border);border-radius:15px;display:grid;gap:16px;padding:16px;position:sticky;top:84px; }
 .method-editor-guide ol { display:grid;gap:10px;list-style:none;margin:0;padding:0; }
 .method-editor-guide li { align-items:center;color:var(--muted);display:flex;font-size:.7rem;gap:7px; }
@@ -1642,7 +1642,7 @@ button.tag { cursor: pointer; font: inherit; }
 .method-action-inputs button { align-items:center;background:rgba(255,255,255,.45);border:0;border-radius:50%;color:inherit;display:flex;height:16px;justify-content:center;padding:2px;width:16px; }
 .method-action-inputs svg { height:10px;width:10px; }
 .method-stage-drop-hint { border:1px dashed var(--border);border-radius:10px;color:var(--muted);font-size:.68rem;padding:17px;text-align:center; }
-.method-editor-save { align-items:end;background:var(--surface);border:1px solid var(--border);border-radius:15px;display:flex;gap:15px;grid-column:2/4;justify-content:space-between;padding:16px; }
+.method-editor-save { align-items:end;background:var(--surface);border:1px solid var(--border);border-radius:15px;display:flex;gap:15px;grid-column:2;justify-content:space-between;padding:16px; }
 .method-editor-save label { flex:1; }
 .method-editor-save>div { display:flex;gap:8px; }
 .method-drag-overlay { align-items:center;background:var(--surface);border:2px solid var(--primary);border-radius:11px;box-shadow:0 18px 35px rgba(0,0,0,.18);display:flex;font-size:.72rem;font-weight:800;gap:6px;max-width:260px;padding:10px 12px; }

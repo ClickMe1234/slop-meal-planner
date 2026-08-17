@@ -787,7 +787,6 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const draggedIngredientId = activeDrag?.type === 'ingredient' ? activeDrag.id.replace('ingredient:', '') : undefined
   const linkIngredientId = draggedIngredientId ?? selectedIngredientId
   const linkIngredientName = data.ingredients.find(item => item.lineage_id === linkIngredientId)?.name
-  const stages = [...method.stages].sort((a, b) => a.position - b.position)
   const unreviewed = Number(data.coverage.unreviewed ?? 0)
   const lowConfidence = method.annotations.filter(item => item.confidence < .65 && !item.accepted).length + method.ingredient_bindings.filter(item => item.confidence < .65 && !item.accepted).length
   const unresolvedClauses = unreviewedClauses(sourceBlocks, method.annotations)
@@ -820,8 +819,8 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
       <div className="method-editor-shell">
         <aside className="method-editor-guide">
           <p className="eyebrow">Review path</p>
-          <ol><li className="done"><Check/>Ingredient mentions</li><li className={method.annotations.length ? 'done' : ''}><Check/>Semantic spans</li><li className={method.actions.length ? 'done' : ''}><Check/>Arrange the graph</li><li className={data.method_status === 'reviewed' ? 'done' : ''}><Check/>Review and save</li></ol>
-          <div className="method-editor-selection"><strong>{selectedIngredients.size} ingredients · {selectedActions.size} actions</strong><Button variant="secondary" disabled={!((selectedIngredients.size && selectedActions.size === 1) || selectedActions.size > 1)} onClick={groupSelection}><Layers3 size={15}/>Group</Button><Button variant="ghost" disabled={!selectedActions.size} onClick={ungroupActions}><Split size={15}/>Ungroup</Button></div>
+          <ol><li className="done"><Check/>Ingredient mentions</li><li className={method.annotations.length ? 'done' : ''}><Check/>Semantic spans</li><li className={data.method_status === 'reviewed' ? 'done' : ''}><Check/>Review and save</li></ol>
+          <div className="method-editor-selection"><strong>{selectedIngredients.size} ingredient{selectedIngredients.size === 1 ? '' : 's'} selected</strong></div>
           {lowConfidence > 0 && <Button variant="ghost" onClick={acceptSuggestions}><Check size={15}/>Accept {lowConfidence} suggestions</Button>}
         </aside>
         <section className="method-source-editor">
@@ -844,10 +843,6 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
             <div className="method-source-tags">{method.annotations.filter(item => item.block_id === block.id).map(annotation => <button type="button" className={`semantic-chip semantic-chip--${annotation.kind}`} key={annotation.id} title="Remove this label" onClick={() => removeAnnotation(annotation.id)}><span>{annotation.kind}: {block.text.slice(annotation.start, annotation.end)}</span><X size={12}/></button>)}</div>
           </article>)}
           {selection && <div className="semantic-toolbar" role="toolbar" aria-label="Mark selected recipe text"><div><strong>“{selection.text.slice(0, 56)}{selection.text.length > 56 ? '…' : ''}”</strong><span>What does this text mean?</span></div>{semanticTools.map(tool => { const Icon = tool.icon; return <button type="button" key={tool.kind} onClick={() => tagSelection(tool.kind)}><Icon size={15}/>{tool.label}</button> })}<button type="button" onClick={() => { updateDocument(current => ({ ...current, omissions: [...current.omissions, { id: localId('omission'), block_id: selection.blockId, start: selection.start, end: selection.end, reason: 'Omitted from concise summary', accepted: true }] })); setSelection(null) }}><Trash2 size={15}/>Omit</button>{annotationIngredient && <select aria-label="Ingredient for selected text" value={annotationIngredient} onChange={event => setAnnotationIngredient(event.target.value)}>{data.ingredients.map(item => <option key={item.lineage_id} value={item.lineage_id}>{item.name}</option>)}</select>}</div>}
-        </section>
-        <section className="method-canvas-editor">
-          <div className="method-section-heading"><div><span className="eyebrow">2 · Arrange the summary</span><h2>Cooking flow</h2></div><Button variant="ghost" onClick={() => updateDocument(current => ({ ...current, stages: [...current.stages, { id: localId('stage'), title: `Stage ${current.stages.length + 1}`, position: current.stages.length }] }))}><Plus size={15}/>Stage</Button></div>
-          <div className="method-stage-list">{stages.map(stage => <DroppableStage key={stage.id} stage={stage} actions={method.actions.filter(action => action.stage_id === stage.id).sort((a,b) => a.position-b.position)} method={method} ingredients={data.ingredients} selectedActions={selectedActions} setSelectedActions={setSelectedActions} updateDocument={updateDocument} onSplit={splitAction} breakingAction={breakingAction} breakingStrength={breakingStrength} justGrouped={justGrouped}/>)}</div>
         </section>
         <section className="method-editor-save"><label>Household notes<textarea rows={3} value={notes} onChange={event => { setNotes(event.target.value); setDirty(true) }} placeholder="Add adaptations or reminders without changing the publisher wording."/></label><div><Button type="button" disabled={savePending || Boolean(conflictLatest)} onClick={() => void saveMethod()}><Save size={16}/>{savePending ? 'Saving…' : 'Save'}</Button></div></section>
       </div>
@@ -935,8 +930,6 @@ function SortableAction({ action, method, ingredients, selected, onSelect, updat
 function Tutorial({ step, setStep, dismiss }: { step: number; setStep: (step: number | null) => void; dismiss: () => Promise<void> }) {
   const slides = [
     { icon: Tag, title: 'Link exact ingredient words', copy: 'Drag an ingredient onto the matching word. For keyboard or touch editing, select the ingredient first and then choose the word.' },
-    { icon: Split, title: 'Split long steps', copy: 'Place the cursor between words in an action, then use Split step at cursor to create the next editable step.' },
-    { icon: Layers3, title: 'Arrange the cooking flow', copy: 'Drag actions into order or into named stages. You can still select an ingredient and action together, then use Group.' },
   ]
   const slide = slides[step]
   const Icon = slide.icon
