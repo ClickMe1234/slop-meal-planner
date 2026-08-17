@@ -103,11 +103,12 @@ export function plannerSetupFromPlan(detail: BackendPlanDetail): PlannerSetup {
       }
     }
   }
-  const batchDates = new Map<string, { mealType: MealType; dates: string[] }>()
+  const batchDates = new Map<string, { mealType: MealType; mealGroupKey: string; dates: string[] }>()
   for (const occurrence of main) {
     if (!MEAL_TYPES.includes(occurrence.meal_type as MealType)) continue
     const batch = batchDates.get(occurrence.batch_id) ?? {
       mealType: occurrence.meal_type as MealType,
+      mealGroupKey: occurrence.meal_group_key ?? 'shared',
       dates: [],
     }
     batch.dates.push(occurrence.meal_date)
@@ -117,7 +118,7 @@ export function plannerSetupFromPlan(detail: BackendPlanDetail): PlannerSetup {
   let foodSafetyAcknowledged = false
   for (const batch of batchDates.values()) {
     const ordered = [...batch.dates].sort()
-    cookStarts[cookStartKey(ordered[0], batch.mealType)] = true
+    cookStarts[cookStartKey(ordered[0], batch.mealType, batch.mealGroupKey)] = true
     const start = new Date(`${ordered[0]}T12:00:00`).getTime()
     const end = new Date(`${ordered.at(-1)}T12:00:00`).getTime()
     if (end - start > 2 * 24 * 60 * 60 * 1000) foodSafetyAcknowledged = true
@@ -243,6 +244,30 @@ export function mealGroupsFor(
   const missing = participants.filter(memberId => !assigned.has(memberId))
   if (!groups.length) return participants.length ? [{ group_key: 'shared', member_ids: participants }] : []
   if (missing.length) groups[0] = { ...groups[0], member_ids: [...groups[0].member_ids, ...missing] }
+  return groups
+}
+
+export function editableMealGroupsFor(
+  defaults: MealGroupDefaults | undefined,
+  overrides: MealGroupOverrides,
+  date: string,
+  mealType: MealType,
+  participants: string[],
+): PlannerMealGroup[] {
+  if (!participants.length) return []
+  const configured = overrides[mealGroupOverrideKey(date, mealType)]
+  if (!configured) return mealGroupsFor(defaults, overrides, date, mealType, participants)
+
+  const attending = new Set(participants)
+  const groups = configured.slice(0, participants.length).map(group => ({
+    ...group,
+    member_ids: group.member_ids.filter(memberId => attending.has(memberId)),
+  }))
+  if (!groups.length) return [{ group_key: 'shared', member_ids: participants }]
+
+  const assigned = new Set(groups.flatMap(group => group.member_ids))
+  const missing = participants.filter(memberId => !assigned.has(memberId))
+  if (missing.length) groups[0].member_ids.push(...missing)
   return groups
 }
 
@@ -404,12 +429,16 @@ export function buildPlanSlots({
 
   for (const mealType of MEAL_TYPES) {
     const batchKeys: Record<string, string> = {}
+    let previousGroupKeys = new Set<string>()
     for (const date of dates) {
       const participants = participantsFor(attendance, date.iso, mealType, selectedMemberIds)
-      if (!participants.length) continue
       const groups = mealGroupsFor(mealGroupDefaults, mealGroupOverrides, date.iso, mealType, participants)
       for (const group of groups) {
-        if (!batchKeys[group.group_key] || cookStarts[cookStartKey(date.iso, mealType, group.group_key)]) {
+        // A recipe lane cannot reuse a batch across a day where that lane was
+        // not needed. Its first day after every gap is always a fresh cook.
+        if (!batchKeys[group.group_key]
+          || !previousGroupKeys.has(group.group_key)
+          || cookStarts[cookStartKey(date.iso, mealType, group.group_key)]) {
           batchKeys[group.group_key] = group.group_key === 'shared'
             ? `${mealType}-${date.iso}`
             : `${mealType}-${group.group_key}-${date.iso}`
@@ -423,6 +452,7 @@ export function buildPlanSlots({
           food_safety_acknowledged: foodSafetyAcknowledged,
         })
       }
+      previousGroupKeys = new Set(groups.map(group => group.group_key))
     }
   }
 
