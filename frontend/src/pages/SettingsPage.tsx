@@ -2,7 +2,7 @@ import { Archive, Bell, BookOpenText, Check, ChevronRight, Database, Download, E
 import { FormEvent, ReactNode, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink } from 'react-router-dom'
-import { api, ApiError, isDemoMode, type BackendMealGroup, type BackendMealType, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type MeasurementSystem, type MethodViewPreference, type RestoreComponent } from '../api/client'
+import { api, ApiError, isDemoMode, type BackendMealGroup, type BackendMealType, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type MeasurementSystem, type RestoreComponent } from '../api/client'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import type { ThemeChoice } from '../types'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
@@ -545,7 +545,7 @@ export function PreferenceSettings() {
       setSaving(false)
     }
   }
-  const saveMethodPreference = async (update: { method_view_preference?: MethodViewPreference; measurement_system?: MeasurementSystem; method_tutorial_version_seen?: number }) => {
+  const saveMethodPreference = async (update: { measurement_system?: MeasurementSystem; method_tutorial_version_seen?: number }) => {
     setSaving(true)
     setError('')
     try {
@@ -631,19 +631,10 @@ export function PreferenceSettings() {
           <span className="settings-icon"><BookOpenText /></span>
           <div>
             <p className="eyebrow">Cooking method</p>
-            <h3>How should recipes open?</h3>
-            <p className="muted">The week view remembers this choice. You can still switch between the concise flow and original wording on every recipe.</p>
+            <h3>Written recipe methods</h3>
+            <p className="muted">Recipes open with their original written method and your preferred measurements.</p>
           </div>
         </div>
-        <Segmented
-          value={session.data?.method_view_preference ?? 'summary'}
-          onChange={(value) => void saveMethodPreference({ method_view_preference: value })}
-          label="Default cooking method view"
-          options={[
-            { value: 'summary', label: 'Summary flow' },
-            { value: 'written', label: 'Written method' },
-          ]}
-        />
         <div className="settings-section-heading settings-section-heading--compact">
           <span className="settings-icon"><Ruler /></span>
           <div>
