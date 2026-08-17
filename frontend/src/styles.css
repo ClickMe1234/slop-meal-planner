@@ -590,7 +590,7 @@ button.tag { cursor: pointer; font: inherit; }
 .recipe-assignment-box>div:first-child strong { color:var(--primary);font-size:.68rem; }
 .recipe-assignment-box>div:first-child small { color:var(--muted);font-size:.58rem; }
 .recipe-member-pills { display:flex;flex-wrap:wrap;gap:5px;min-width:0; }
-.recipe-member-pill { align-items:center;background:var(--primary-soft);border:1px solid color-mix(in srgb,var(--primary) 32%,var(--border));border-radius:999px;color:var(--primary);cursor:grab;display:inline-flex;font-size:.64rem;font-weight:800;gap:3px;min-height:34px;max-width:100%;padding:5px 8px 5px 5px; }
+.recipe-member-pill { align-items:center;background:var(--primary-soft);border:1px solid color-mix(in srgb,var(--primary) 32%,var(--border));border-radius:999px;color:var(--primary);cursor:grab;display:inline-flex;font-size:.64rem;font-weight:800;gap:3px;min-height:44px;max-width:100%;padding:7px 10px 7px 7px; }
 .recipe-member-pill:active { cursor:grabbing; }
 .recipe-member-pill svg { flex:none;height:13px;width:13px; }
 .recipe-assignment-empty { align-items:center;color:var(--muted);display:flex;font-size:.61rem;justify-content:center;min-height:34px;text-align:center; }

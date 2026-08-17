@@ -51,6 +51,7 @@ import {
   compareMealTypes,
   cookStartKey,
   emptyIngredientGuidance,
+  editableMealGroupsFor,
   formatDateRange,
   hasLongBatch,
   isAttending,
@@ -64,7 +65,6 @@ import {
   guestDayEntries,
   guestMealKey,
   mealGroupOverrideKey,
-  mealGroupsFor,
   type CalorieBoosts,
   type CalorieBoostMealShares,
   type AttendanceOverrides,
@@ -278,8 +278,9 @@ export function PlanPage() {
   const incompleteMealGroups = dates.some(date => MEAL_TYPES.some(mealType => {
     const configured = mealGroupOverrides[mealGroupOverrideKey(date.iso, mealType)]
     if (!configured) return false
-    const participants = new Set(participantsFor(attendance, date.iso, mealType, selectedMemberIds))
-    return configured.some(group => !group.member_ids.some(memberId => participants.has(memberId)))
+    const participants = participantsFor(attendance, date.iso, mealType, selectedMemberIds)
+    return editableMealGroupsFor(mealGroupDefaults, mealGroupOverrides, date.iso, mealType, participants)
+      .some(group => !group.member_ids.length)
   }))
 
   const restoredPlan = useQuery({
@@ -512,18 +513,8 @@ function AttendanceStep({ dates, members, attendance, onToggle }: { dates: Plann
 export function MealGroupsStep({ dates, members, selectedMemberIds, attendance, defaults, overrides, onChange }: { dates: PlannerDate[]; members: BackendMember[]; selectedMemberIds: string[]; attendance: AttendanceOverrides; defaults: MealGroupDefaults; overrides: MealGroupOverrides; onChange: (date: string, mealType: MealType, groups: PlannerMealGroup[]) => void }) {
   const names = Object.fromEntries(members.map(member => [member.id, member.name]))
   const [draggedMemberId, setDraggedMemberId] = useState('')
-  const editorGroups = (date: string, mealType: MealType, participants: string[]) => {
-    const configured = overrides[mealGroupOverrideKey(date, mealType)]
-    if (!configured) return mealGroupsFor(defaults, overrides, date, mealType, participants)
-    const attending = new Set(participants)
-    const groups = configured.map(group => ({ ...group, member_ids: group.member_ids.filter(id => attending.has(id)) }))
-    const assigned = new Set(groups.flatMap(group => group.member_ids))
-    const missing = participants.filter(memberId => !assigned.has(memberId))
-    if (groups.length && missing.length) groups[0].member_ids.push(...missing)
-    return groups.length ? groups : [{ group_key: 'shared', member_ids: participants }]
-  }
   const setRecipeCount = (date: string, mealType: MealType, participants: string[], count: number) => {
-    const current = editorGroups(date, mealType, participants)
+    const current = editableMealGroupsFor(defaults, overrides, date, mealType, participants)
     const kept = current.slice(0, count).map(group => ({ ...group, member_ids: [...group.member_ids] }))
     while (kept.length < count) kept.push({ group_key: `recipe-${kept.length + 1}`, member_ids: [] })
     const retained = new Set(kept.flatMap(group => group.member_ids))
@@ -532,7 +523,7 @@ export function MealGroupsStep({ dates, members, selectedMemberIds, attendance, 
     onChange(date, mealType, kept)
   }
   const moveMember = (date: string, mealType: MealType, participants: string[], memberId: string, destination: string) => {
-    const groups = editorGroups(date, mealType, participants)
+    const groups = editableMealGroupsFor(defaults, overrides, date, mealType, participants)
       .map(group => ({ ...group, member_ids: group.member_ids.filter(id => id !== memberId) }))
     const target = groups.find(group => group.group_key === destination)
     if (target) target.member_ids.push(memberId)
@@ -541,7 +532,7 @@ export function MealGroupsStep({ dates, members, selectedMemberIds, attendance, 
   return <div className="meal-group-planner"><Notice title="One box, one recipe">Choose how many recipes each meal needs. Everyone starts in Recipe 1; drag a name to another box, or tap it to move it to the next recipe.</Notice><div className="planner-table-wrap" tabIndex={0} aria-label="Recipe assignments grid"><table className="planner-grid planner-assignment-grid"><thead><tr><th scope="col">Meal</th>{dates.map(date => <th scope="col" key={date.iso}><strong>{date.weekday}</strong><small>{date.shortDate}</small></th>)}</tr></thead><tbody>{MEAL_TYPES.map(mealType => <tr key={mealType}><th scope="row">{capitalise(mealType)}</th>{dates.map(date => {
     const participants = participantsFor(attendance, date.iso, mealType, selectedMemberIds)
     if (!participants.length) return <td className="recipe-assignment-unused" key={date.iso} data-date={`${date.weekday} ${date.shortDate}`}>Not needed</td>
-    const groups = editorGroups(date.iso, mealType, participants).slice(0, participants.length)
+    const groups = editableMealGroupsFor(defaults, overrides, date.iso, mealType, participants)
     return <td key={date.iso} data-date={`${date.weekday} ${date.shortDate}`}><label className="recipe-count-label"><span>Recipes</span><select aria-label={`Number of ${mealType} recipes on ${date.shortDate}`} value={groups.length} onChange={event => setRecipeCount(date.iso, mealType, participants, Number(event.target.value))}>{participants.map((_, index) => <option key={index + 1} value={index + 1}>{index + 1}</option>)}</select></label><div className="recipe-assignment-boxes">{groups.map((group, groupIndex) => <div className="recipe-assignment-box" key={group.group_key} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }} onDrop={event => { event.preventDefault(); const memberId = event.dataTransfer.getData('text/member-id') || draggedMemberId; if (memberId) moveMember(date.iso, mealType, participants, memberId, group.group_key); setDraggedMemberId('') }}><div><strong>Recipe {groupIndex + 1}</strong><small>{group.member_ids.length === participants.length ? 'Everyone' : `${group.member_ids.length} ${group.member_ids.length === 1 ? 'person' : 'people'}`}</small></div><div className="recipe-member-pills">{group.member_ids.map(memberId => <button type="button" className="recipe-member-pill" draggable key={memberId} onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/member-id', memberId); setDraggedMemberId(memberId) }} onDragEnd={() => setDraggedMemberId('')} onClick={() => { if (groups.length > 1) moveMember(date.iso, mealType, participants, memberId, groups[(groupIndex + 1) % groups.length].group_key) }} aria-label={`${names[memberId] ?? 'Household member'} assigned to recipe ${groupIndex + 1} for ${mealType} on ${date.shortDate}${groups.length > 1 ? `; move to recipe ${(groupIndex + 1) % groups.length + 1}` : ''}`}><GripVertical aria-hidden="true"/>{names[memberId] ?? 'Household member'}</button>)}</div>{!group.member_ids.length && <span className="recipe-assignment-empty">Drop a name here</span>}</div>)}</div></td>
   })}</tr>)}</tbody></table></div></div>
 }

@@ -9,6 +9,7 @@ import {
   boostSharesFor,
   compareMealTypes,
   cookStartKey,
+  editableMealGroupsFor,
   hasLongBatch,
   guestDayEntries,
   guestMealKey,
@@ -136,6 +137,26 @@ describe('planner helpers', () => {
       ['2026-07-13', 'sam', ['sam'], 'lunch-sam-2026-07-13'],
       ['2026-07-14', 'together', ['alex', 'sam'], 'lunch-together-2026-07-14'],
     ])
+  })
+
+  it('ignores hidden recipe groups when attendance reduces the available recipes', () => {
+    const defaults = {
+      breakfast: [{ group_key: 'shared', member_ids: ['alex', 'sam'] }],
+      lunch: [{ group_key: 'shared', member_ids: ['alex', 'sam'] }],
+      dinner: [{ group_key: 'shared', member_ids: ['alex', 'sam'] }],
+      snack: [{ group_key: 'shared', member_ids: ['alex', 'sam'] }],
+    }
+    const overrides = {
+      '2026-07-13:breakfast': [
+        { group_key: 'shared', member_ids: ['alex'] },
+        { group_key: 'recipe-2', member_ids: [] },
+      ],
+    }
+
+    expect(editableMealGroupsFor(defaults, overrides, '2026-07-13', 'breakfast', ['alex']))
+      .toEqual([{ group_key: 'shared', member_ids: ['alex'] }])
+    expect(editableMealGroupsFor(defaults, overrides, '2026-07-13', 'breakfast', []))
+      .toEqual([])
   })
 
   it('keeps recipe lanes stable across the week and starts a fresh batch after a gap', () => {

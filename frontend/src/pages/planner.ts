@@ -247,6 +247,30 @@ export function mealGroupsFor(
   return groups
 }
 
+export function editableMealGroupsFor(
+  defaults: MealGroupDefaults | undefined,
+  overrides: MealGroupOverrides,
+  date: string,
+  mealType: MealType,
+  participants: string[],
+): PlannerMealGroup[] {
+  if (!participants.length) return []
+  const configured = overrides[mealGroupOverrideKey(date, mealType)]
+  if (!configured) return mealGroupsFor(defaults, overrides, date, mealType, participants)
+
+  const attending = new Set(participants)
+  const groups = configured.slice(0, participants.length).map(group => ({
+    ...group,
+    member_ids: group.member_ids.filter(memberId => attending.has(memberId)),
+  }))
+  if (!groups.length) return [{ group_key: 'shared', member_ids: participants }]
+
+  const assigned = new Set(groups.flatMap(group => group.member_ids))
+  const missing = participants.filter(memberId => !assigned.has(memberId))
+  if (missing.length) groups[0].member_ids.push(...missing)
+  return groups
+}
+
 export function defaultBoostShares(mealTypes: MealType[]): Record<MealType, number> {
   const result = Object.fromEntries(MEAL_TYPES.map(mealType => [mealType, 0])) as Record<MealType, number>
   const focus = mealTypes.includes('snack') ? 'snack' : mealTypes.at(-1)
