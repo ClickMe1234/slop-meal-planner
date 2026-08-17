@@ -123,10 +123,9 @@ const unreviewedMethodView: BackendMethodView = {
 }
 
 describe('MethodPage', () => {
-  it('opens in the user default, shows scaled ingredient labels, and remembers a toggle', async () => {
-    const user = userEvent.setup()
+  it('shows only the written method when the saved view preference is summary', async () => {
     mockMethodPage()
-    const updateMe = vi.spyOn(api, 'updateMe').mockResolvedValue({
+    vi.mocked(api.me).mockResolvedValue({
       id: 'user-1', username: 'owner', role: 'owner', must_change_password: false,
       ingredient_locale: 'uk', method_view_preference: 'summary', measurement_system: 'source',
       method_tutorial_version_seen: 2,
@@ -137,11 +136,8 @@ describe('MethodPage', () => {
     expect(await screen.findByRole('heading', { name: 'Tomato supper' })).toBeInTheDocument()
     expect(screen.getByText('4 item tomatoes')).toBeInTheDocument()
     expect(screen.getByText(/for 5 minutes/)).toBeInTheDocument()
-    await user.click(screen.getByRole('radio', { name: 'Summary' }))
-    await waitFor(() => expect(updateMe).toHaveBeenCalledWith({ method_view_preference: 'summary' }))
-    expect(screen.getByRole('heading', { name: 'Cook' })).toBeInTheDocument()
-    expect(screen.getAllByText((_, element) => element?.textContent === '2 item tomatoes')).not.toHaveLength(0)
-    expect(screen.getByText('Fry the tomatoes')).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Summary' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Cook' })).not.toBeInTheDocument()
   })
 
   it('saves a complete needs-review method as reviewed without opening the editor', async () => {
@@ -238,8 +234,7 @@ describe('MethodPage', () => {
       }),
     })))
     expect(await screen.findByText('Method saved and reviewed.')).toBeInTheDocument()
-    await user.click(screen.getByRole('radio', { name: 'Summary' }))
-    expect(screen.getByText('Gently fry the tomatoes')).toBeInTheDocument()
+    expect(screen.getByText('Use the heavy pan.')).toBeInTheDocument()
   })
 
   it('links a mismatched ingredient to the exact source word and saves its amount binding', async () => {

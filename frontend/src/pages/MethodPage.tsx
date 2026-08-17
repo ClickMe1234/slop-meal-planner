@@ -25,9 +25,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
   ArrowLeft,
-  BookOpenText,
   Check,
-  ChefHat,
   CircleHelp,
   Clock3,
   ExternalLink,
@@ -63,10 +61,9 @@ import {
   type BackendMethodView,
   type BackendRecipeDetail,
   type MethodSemanticKind,
-  type MethodViewPreference,
 } from '../api/client'
 import { MealTypePicker, type RecipeMealType } from '../components/MealTypePicker'
-import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
+import { Badge, Button, Card, Loading, Notice, PageHeader } from '../components/ui'
 import { safeExternalUrl } from '../lib/safeUrls'
 
 const TUTORIAL_VERSION = 2
@@ -312,7 +309,6 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false })
   const recipe = useQuery({ queryKey: ['recipe', recipeId], queryFn: () => api.getRecipe(recipeId!), enabled: Boolean(recipeId) && !preview && !isDemoMode })
   const [servings, setServings] = useState<number | undefined>()
-  const [view, setView] = useState<MethodViewPreference>('summary')
   const methodQueryKey = preview ? ['method-preview', sourceUrl] : ['recipe-method', recipeId, batchId, servings]
   const methodQuery = useQuery({
     queryKey: methodQueryKey,
@@ -344,9 +340,8 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const [refreshCandidate, setRefreshCandidate] = useState<BackendMethodView | null>(null)
 
   useEffect(() => {
-    if (session.data?.method_view_preference) setView(session.data.method_view_preference)
     if ((session.data?.method_tutorial_version_seen ?? TUTORIAL_VERSION) < TUTORIAL_VERSION) setTutorialStep(0)
-  }, [session.data?.method_view_preference, session.data?.method_tutorial_version_seen])
+  }, [session.data?.method_tutorial_version_seen])
   useEffect(() => {
     if (!methodQuery.data || dirty) return
     setData(methodQuery.data)
@@ -356,13 +351,6 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     setAnnotationIngredient(methodQuery.data.ingredients[0]?.lineage_id ?? '')
   }, [methodQuery.data, dirty])
 
-  const toggleView = async (next: MethodViewPreference) => {
-    setView(next)
-    if (!isDemoMode) {
-      await api.updateMe({ method_view_preference: next })
-      await queryClient.invalidateQueries({ queryKey: ['session'] })
-    }
-  }
   const dismissTutorial = async () => {
     setTutorialStep(null)
     if (!isDemoMode) {
@@ -822,12 +810,11 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     {data.method_status === 'needs_review' && <Notice tone="warning" title="Automatically generated draft">Save when you have finished reviewing. {unreviewed ? `${unreviewed} unaccounted clause${unreviewed === 1 ? '' : 's'} will remain highlighted as a warning.` : 'The highlighted suggestions are optional to accept.'}</Notice>}
     {data.batch_context && <Card className="method-batch-banner"><Flame/><div><strong>Cook the whole batch: {data.batch_context.servings} servings</strong><span>{data.batch_context.occurrences.map(item => `${item.date} ${item.meal_type}`).join(' · ')}</span></div></Card>}
     <div className="method-toolbar">
-      <Segmented value={view} onChange={toggleView} label="Method view" options={[{ value: 'summary', label: 'Summary' }, { value: 'written', label: 'Written' }]}/>
       {!data.batch_context && data.scaling_available && <label className="method-serving-control">Servings<input type="number" min=".25" step=".25" value={servings ?? data.requested_servings ?? ''} onChange={event => setServings(Number(event.target.value) || undefined)}/></label>}
       <button className="method-help-button" type="button" onClick={() => setTutorialStep(0)}><CircleHelp size={17}/>How to edit</button>
     </div>
 
-    {preview && <Card className="method-preview-save"><div><span className="eyebrow">Keep this recipe</span><strong>Save ingredients, written method and summary together</strong></div><MealTypePicker value={mealTypes} onChange={setMealTypes}/><Button disabled={!mealTypes.length || savePreview.isPending} onClick={() => savePreview.mutate()}><Save size={16}/>{savePreview.isPending ? 'Saving…' : 'Save recipe'}</Button></Card>}
+    {preview && <Card className="method-preview-save"><div><span className="eyebrow">Keep this recipe</span><strong>Save ingredients and the written method together</strong></div><MealTypePicker value={mealTypes} onChange={setMealTypes}/><Button disabled={!mealTypes.length || savePreview.isPending} onClick={() => savePreview.mutate()}><Save size={16}/>{savePreview.isPending ? 'Saving…' : 'Save recipe'}</Button></Card>}
 
     {editing ? <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragMove={handleDragMove} onDragCancel={() => { setActiveDrag(null); setBreakingAction(null); setBreakingStrength(0) }} onDragEnd={handleDragEnd}>
       <div className="method-editor-shell">
@@ -865,49 +852,12 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         <section className="method-editor-save"><label>Household notes<textarea rows={3} value={notes} onChange={event => { setNotes(event.target.value); setDirty(true) }} placeholder="Add adaptations or reminders without changing the publisher wording."/></label><div><Button type="button" disabled={savePending || Boolean(conflictLatest)} onClick={() => void saveMethod()}><Save size={16}/>{savePending ? 'Saving…' : 'Save'}</Button></div></section>
       </div>
       <DragOverlay>{activeDrag && <div className={`method-drag-overlay method-drag-overlay--${activeDrag.type}`}><GripVertical size={15}/>{activeDrag.label}</div>}</DragOverlay>
-    </DndContext> : view === 'summary' ? <MethodSummary data={data}/> : <WrittenMethod data={data}/>}
+    </DndContext> : <WrittenMethod data={data}/>}
 
     {conflictLatest && <div className="modal-backdrop" role="presentation"><Card className="method-conflict" role="dialog" aria-modal="true" aria-labelledby="method-conflict-title"><AlertTriangle/><div><p className="eyebrow">Version conflict</p><h2 id="method-conflict-title">Someone saved this method first</h2><p>Your local draft is safe. The latest version has {conflictLatest.method.actions.length} actions; yours has {method.actions.length}.</p><div className="button-row"><Button variant="secondary" onClick={() => { setData(conflictLatest); setMethod(structuredClone(conflictLatest.method)); setSourceBlocks(structuredClone(conflictLatest.source_blocks)); setDirty(false); setConflictLatest(null) }}>Load latest</Button><Button onClick={() => { setData(current => current ? { ...current, recipe_version: conflictLatest.recipe_version } : current); setConflictLatest(null); setMessage('Your draft is ready to reapply over the latest version.') }}>Reapply my draft</Button></div></div></Card></div>}
     {refreshCandidate && <div className="modal-backdrop" role="presentation"><Card className="method-refresh-dialog" role="dialog" aria-modal="true" aria-labelledby="method-refresh-title"><RefreshCw/><div><p className="eyebrow">Source comparison</p><h2 id="method-refresh-title">{refreshCandidate.refresh_diff?.changed ? 'The publisher method changed' : 'The publisher method is unchanged'}</h2><p>{refreshCandidate.refresh_diff?.changed ? `The saved method has ${refreshCandidate.refresh_diff.old_block_count ?? 0} source blocks; the current page has ${refreshCandidate.refresh_diff.new_block_count ?? 0}. Applying creates a new immutable recipe version and keeps your history intact.` : 'Your saved source checksum matches the current page. No update is needed.'}</p><div className="button-row"><Button variant="ghost" onClick={() => setRefreshCandidate(null)}>Close</Button>{refreshCandidate.refresh_diff?.changed && <Button disabled={applyRefresh.isPending} onClick={() => applyRefresh.mutate()}><RefreshCw className={applyRefresh.isPending ? 'spin' : ''} size={16}/>{applyRefresh.isPending ? 'Applying…' : 'Apply as new draft'}</Button>}</div></div></Card></div>}
     {tutorialStep != null && <Tutorial step={tutorialStep} setStep={setTutorialStep} dismiss={dismissTutorial}/>}
   </div>
-}
-
-function MethodSummary({ data }: { data: BackendMethodView }) {
-  const method = data.method
-  const ingredients = new Map(data.ingredients.map(item => [item.lineage_id, item]))
-  return <div className="method-view-grid">
-    <aside className="method-ingredients-panel"><div className="method-panel-heading"><span>Ingredient rail</span><Badge>{data.ingredients.length}</Badge></div><ol>{data.ingredients.map(item => <li key={item.lineage_id}><span>{item.quantity_text} {item.unit}</span><strong>{item.name}</strong>{item.preparation && <small>{item.preparation}</small>}</li>)}</ol></aside>
-    <main className="method-summary-board">{[...method.stages].sort((a,b) => a.position-b.position).map((stage, stageIndex) => {
-      const actions = method.actions.filter(item => item.stage_id === stage.id).sort((a,b) => a.position-b.position)
-      return <section className="method-summary-stage" key={stage.id}><header><span>{String(stageIndex + 1).padStart(2, '0')}</span><h2>{stage.title}</h2></header><div className="method-action-flow">{actions.map((action, index) => {
-        const inputs = method.ingredient_bindings.filter(item => item.action_id === action.id).map(binding => {
-          const ingredient = ingredients.get(binding.ingredient_lineage_id)
-          return ingredient ? { binding, ingredient } : null
-        }).filter(Boolean) as { binding: BackendMethodBinding; ingredient: BackendMethodIngredient }[]
-        const incoming = method.edges.filter(edge => edge.to_action_id === action.id)
-        return <div className="method-summary-step" key={action.id}>{index > 0 && <span className="method-flow-line"/>}{incoming.some(edge => edge.kind === 'merge') && <Badge tone="warm"><Layers3 size={12}/>Merge</Badge>}<div className="method-inputs">{inputs.map(({ binding, ingredient }) => <span key={binding.id}>{bindingIngredientQuantity(binding, ingredient, method.ingredient_bindings)} {binding.portion_unit ?? ingredient.unit} <b>{ingredient.name}</b></span>)}</div><strong>{action.text}</strong><div className="method-action-meta">{action.duration_minutes != null && <span><Clock3/>{action.duration_minutes} min</span>}{action.temperature_value != null && <span><Thermometer/>{action.temperature_value}°{action.temperature_unit?.toUpperCase()}</span>}{action.equipment.map(item => <span key={item}><Utensils/>{item}</span>)}</div>{action.cue && <small>Ready when {action.cue}</small>}</div>
-      })}</div></section>
-    })}</main>
-  </div>
-}
-
-function bindingIngredientQuantity(binding: BackendMethodBinding, ingredient: BackendMethodIngredient, bindings: BackendMethodBinding[]) {
-  const baseQuantity = ingredient.quantity == null ? undefined : Number(ingredient.quantity)
-  if (binding.portion_mode === 'absolute' && binding.portion_value != null) return displayMethodNumber(Number(binding.portion_value))
-  if (baseQuantity == null) return ingredient.quantity_text ?? ''
-  if (binding.portion_mode === 'fraction' && binding.portion_value != null) return displayMethodNumber(baseQuantity * Number(binding.portion_value))
-  if (binding.portion_mode === 'remainder') {
-    const usedFraction = bindings
-      .filter(item => item.ingredient_lineage_id === binding.ingredient_lineage_id && item.portion_mode === 'fraction')
-      .reduce((total, item) => total + Number(item.portion_value ?? 0), 0)
-    return displayMethodNumber(baseQuantity * Math.max(0, 1 - usedFraction))
-  }
-  return ingredient.quantity_text ?? displayMethodNumber(baseQuantity)
-}
-
-function displayMethodNumber(value: number) {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(value)
 }
 
 function WrittenMethod({ data }: { data: BackendMethodView }) {
