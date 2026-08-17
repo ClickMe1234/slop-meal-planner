@@ -138,6 +138,45 @@ describe('planner helpers', () => {
     ])
   })
 
+  it('keeps recipe lanes stable across the week and starts a fresh batch after a gap', () => {
+    const dates = plannerDates('2026-07-13', 7)
+    const split = [{ group_key: 'shared', member_ids: ['alex'] }, { group_key: 'recipe-2', member_ids: ['sam'] }]
+    const mealGroupOverrides = Object.fromEntries([
+      ...dates.slice(0, 3).map(date => [`${date.iso}:breakfast`, split]),
+      ...dates.slice(5).map(date => [`${date.iso}:breakfast`, split]),
+    ])
+    const slots = buildPlanSlots({
+      dates,
+      selectedMemberIds: ['alex', 'sam'],
+      attendance: {},
+      cookStarts: {
+        [cookStartKey(dates[3].iso, 'breakfast', 'shared')]: true,
+        [cookStartKey(dates[5].iso, 'breakfast', 'shared')]: true,
+      },
+      foodSafetyAcknowledged: false,
+      mealGroupOverrides,
+    }).filter(slot => slot.meal_type === 'breakfast')
+
+    const recipeOne = slots.filter(slot => slot.meal_group_key === 'shared')
+    const recipeTwo = slots.filter(slot => slot.meal_group_key === 'recipe-2')
+    expect(recipeOne.map(slot => slot.batch_key)).toEqual([
+      'breakfast-2026-07-13',
+      'breakfast-2026-07-13',
+      'breakfast-2026-07-13',
+      'breakfast-2026-07-16',
+      'breakfast-2026-07-16',
+      'breakfast-2026-07-18',
+      'breakfast-2026-07-18',
+    ])
+    expect(recipeTwo.map(slot => slot.batch_key)).toEqual([
+      'breakfast-recipe-2-2026-07-13',
+      'breakfast-recipe-2-2026-07-13',
+      'breakfast-recipe-2-2026-07-13',
+      'breakfast-recipe-2-2026-07-18',
+      'breakfast-recipe-2-2026-07-18',
+    ])
+  })
+
   it('records which split meal group guests join', () => {
     const dates = plannerDates('2026-07-13', 1)
     const slots = buildPlanSlots({

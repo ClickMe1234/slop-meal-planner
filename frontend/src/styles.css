@@ -580,6 +580,21 @@ button.tag { cursor: pointer; font: inherit; }
 .cook-choice.selected { background:var(--primary-soft);border-color:var(--primary);color:var(--primary);font-weight:700; }
 .cook-choice.disabled { background:var(--surface-2);color:var(--muted);cursor:not-allowed; }
 .planner-grid-note { color:var(--muted);font-size:.72rem;line-height:1.5;margin:10px 2px 0; }
+.planner-assignment-grid td { min-width:158px; }
+.recipe-count-label { align-items:center;display:flex;font-size:.66rem;font-weight:800;gap:7px;justify-content:space-between;margin-bottom:8px; }
+.recipe-count-label select { min-height:36px;padding:5px 25px 5px 9px;width:58px; }
+.recipe-assignment-boxes { display:grid;gap:7px; }
+.recipe-assignment-box { background:var(--surface-2);border:1px dashed var(--border);border-radius:9px;display:grid;gap:7px;min-height:70px;padding:8px; }
+.recipe-assignment-box:has(.recipe-member-pill) { border-style:solid; }
+.recipe-assignment-box>div:first-child { align-items:baseline;display:flex;gap:5px;justify-content:space-between;min-width:0; }
+.recipe-assignment-box>div:first-child strong { color:var(--primary);font-size:.68rem; }
+.recipe-assignment-box>div:first-child small { color:var(--muted);font-size:.58rem; }
+.recipe-member-pills { display:flex;flex-wrap:wrap;gap:5px;min-width:0; }
+.recipe-member-pill { align-items:center;background:var(--primary-soft);border:1px solid color-mix(in srgb,var(--primary) 32%,var(--border));border-radius:999px;color:var(--primary);cursor:grab;display:inline-flex;font-size:.64rem;font-weight:800;gap:3px;min-height:34px;max-width:100%;padding:5px 8px 5px 5px; }
+.recipe-member-pill:active { cursor:grabbing; }
+.recipe-member-pill svg { flex:none;height:13px;width:13px; }
+.recipe-assignment-empty { align-items:center;color:var(--muted);display:flex;font-size:.61rem;justify-content:center;min-height:34px;text-align:center; }
+.recipe-assignment-unused { background:var(--surface-2);color:var(--muted);font-size:.65rem;text-align:center;vertical-align:middle!important; }
 .notice .check-label { color:var(--text);display:flex;margin-top:8px; }
 .special-days { display:grid;gap:18px; }
 .special-days-summary { display:grid;gap:10px;grid-template-columns:repeat(2,minmax(0,1fr)); }
