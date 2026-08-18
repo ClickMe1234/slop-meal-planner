@@ -1,8 +1,21 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models import FoodRecord, MealPlan, PantryLot, PlanStatus, RecipeIngredient, RecipeVersion, ShoppingItem, ShoppingList
+from app.models import (
+    FoodRecord,
+    MealBatch,
+    MealOccurrence,
+    MealPlan,
+    PantryLot,
+    PlanStatus,
+    PortionAllocation,
+    RecipeIngredient,
+    RecipeVersion,
+    ShoppingItem,
+    ShoppingList,
+)
 
 
 PUBLISHER_NUTRITION = {
@@ -354,7 +367,9 @@ def test_shopping_sources_combine_and_recipe_unit_preview(client, owner, session
         assert all(row.shopping_measurement_overridden for row in rows)
 
 
-def test_recipe_review_rebuilds_the_current_plan_shopping_list(client, owner):
+def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list(
+    client, owner, session_factory
+):
     member_id = client.get("/api/v1/auth/me").json()["member_id"]
     _set_dinner_target(client, owner, member_id)
     recipe = _create_recipe(
@@ -380,6 +395,20 @@ def test_recipe_review_rebuilds_the_current_plan_shopping_list(client, owner):
             "participant_member_ids": [member_id],
         }],
     )
+    with session_factory() as db:
+        allocation = db.scalar(
+            select(PortionAllocation)
+            .join(
+                MealOccurrence,
+                MealOccurrence.id == PortionAllocation.meal_occurrence_id,
+            )
+            .join(MealBatch, MealBatch.id == MealOccurrence.batch_id)
+            .where(MealBatch.meal_plan_id == plan["id"])
+        )
+        allocation.servings = Decimal("0.75")
+        batch = db.scalar(select(MealBatch).where(MealBatch.meal_plan_id == plan["id"]))
+        batch.servings = Decimal("0.75")
+        db.commit()
     assert client.post(
         f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
     ).status_code == 200
@@ -393,6 +422,8 @@ def test_recipe_review_rebuilds_the_current_plan_shopping_list(client, owner):
             "expected_version": current["version"],
             "title": current["title"],
             "yield_servings": current["yield_servings"],
+            "minimum_servings": 1,
+            "serving_increment": 1,
             "meal_types": current["meal_types"],
             "ingredients": [{
                 "original_text": ingredient["original_text"],
@@ -410,9 +441,172 @@ def test_recipe_review_rebuilds_the_current_plan_shopping_list(client, owner):
     )
     assert reviewed.status_code == 200, reviewed.text
     assert reviewed.json()["plan_sync"]["shopping_list_rebuilt"] is True
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    assert detail["occurrences"][0]["portions"][0]["servings"] == 1
+    assert detail["occurrences"][0]["batch_servings"] == 1
     active = client.get("/api/v1/shopping-lists/active").json()
     assert active["id"] != previous_list["id"]
     assert active["items"][0]["exact_quantity"] == "200"
+
+    with session_factory() as db:
+        allocation = db.scalar(
+            select(PortionAllocation)
+            .join(
+                MealOccurrence,
+                MealOccurrence.id == PortionAllocation.meal_occurrence_id,
+            )
+            .join(MealBatch, MealBatch.id == MealOccurrence.batch_id)
+            .where(MealBatch.meal_plan_id == plan["id"])
+        )
+        allocation.servings = Decimal("0.25")
+        batch = db.scalar(select(MealBatch).where(MealBatch.meal_plan_id == plan["id"]))
+        batch.servings = Decimal("0.25")
+        db.commit()
+    current = reviewed.json()
+    ingredient = current["ingredients"][0]
+    cleared = client.put(
+        f"/api/v1/recipes/{recipe['id']}/review",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "minimum_servings": None,
+            "serving_increment": None,
+            "meal_types": current["meal_types"],
+            "ingredients": [{
+                "original_text": ingredient["original_text"],
+                "quantity": 200,
+                "unit": "g",
+                "quantity_grams": 200,
+                "food_phrase": ingredient["food_phrase"],
+                "included": True,
+                "optional": False,
+                "needs_review": False,
+                "shopping_excluded": False,
+            }],
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    assert detail["occurrences"][0]["portions"][0]["servings"] == 0.5
+    assert detail["occurrences"][0]["batch_servings"] == 0.5
+
+    with session_factory() as db:
+        allocation = db.scalar(
+            select(PortionAllocation)
+            .join(
+                MealOccurrence,
+                MealOccurrence.id == PortionAllocation.meal_occurrence_id,
+            )
+            .join(MealBatch, MealBatch.id == MealOccurrence.batch_id)
+            .where(MealBatch.meal_plan_id == plan["id"])
+        )
+        allocation.servings = Decimal("2")
+        batch = db.scalar(select(MealBatch).where(MealBatch.meal_plan_id == plan["id"]))
+        batch.servings = Decimal("2")
+        db.commit()
+    current = cleared.json()
+    constrained = client.put(
+        f"/api/v1/recipes/{recipe['id']}/review",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "minimum_servings": 0.25,
+            "serving_increment": 2,
+            "meal_types": current["meal_types"],
+            "ingredients": [{
+                "original_text": ingredient["original_text"],
+                "quantity": 200,
+                "unit": "g",
+                "quantity_grams": 200,
+                "food_phrase": ingredient["food_phrase"],
+                "included": True,
+                "optional": False,
+                "needs_review": False,
+                "shopping_excluded": False,
+            }],
+        },
+    )
+    assert constrained.status_code == 200, constrained.text
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    assert detail["occurrences"][0]["portions"][0]["servings"] == 0.25
+    assert detail["occurrences"][0]["batch_servings"] == 0.25
+
+
+def test_recipe_review_never_rewrites_a_cooked_ready_batch(
+    client, owner, session_factory
+):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    recipe = _create_recipe(
+        client,
+        owner,
+        "Cooked constraint dinner",
+        ["dinner"],
+        ingredients=[{
+            "original_text": "100 g spinach",
+            "quantity": 100,
+            "unit": "g",
+            "quantity_grams": 100,
+            "food_phrase": "spinach",
+        }],
+    )
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [{
+            "meal_date": "2026-08-11",
+            "meal_type": "dinner",
+            "participant_member_ids": [member_id],
+        }],
+    )
+    before = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    occurrence = before["occurrences"][0]
+    cooked = client.post(
+        f"/api/v1/meal-plans/{plan['id']}/batches/{occurrence['batch_id']}/cooked",
+        headers=_headers(owner),
+    )
+    assert cooked.status_code == 204, cooked.text
+    with session_factory() as db:
+        cooked_version_id = db.get(MealBatch, occurrence["batch_id"]).recipe_version_id
+
+    current = client.get(f"/api/v1/recipes/{recipe['id']}").json()
+    ingredient = current["ingredients"][0]
+    reviewed = client.put(
+        f"/api/v1/recipes/{recipe['id']}/review",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "minimum_servings": 2,
+            "serving_increment": 1,
+            "meal_types": current["meal_types"],
+            "ingredients": [{
+                "original_text": ingredient["original_text"],
+                "quantity": ingredient["quantity"],
+                "unit": ingredient["unit"],
+                "quantity_grams": ingredient["quantity_grams"],
+                "food_phrase": ingredient["food_phrase"],
+                "included": True,
+                "optional": False,
+                "needs_review": False,
+                "shopping_excluded": False,
+            }],
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["plan_sync"]["plans_updated"] == 0
+    assert reviewed.json()["plan_sync"]["cooked_batches_unchanged"] == 1
+    after = client.get(f"/api/v1/meal-plans/{plan['id']}").json()["occurrences"][0]
+    with session_factory() as db:
+        assert db.get(MealBatch, occurrence["batch_id"]).recipe_version_id == cooked_version_id
+    assert after["portions"] == occurrence["portions"]
+    assert after["batch_servings"] == occurrence["batch_servings"]
 
 
 def test_recipe_meal_types_are_optional_filterable_and_required_by_planner(client, owner):

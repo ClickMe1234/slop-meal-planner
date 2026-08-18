@@ -65,7 +65,7 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0023_member_meal_groups (head)" in current.stdout
+    assert "0024_recipe_serving_constraints (head)" in current.stdout
     assert len("0017_quarantine_urls") <= 32
     assert "recipe_publisher_tag" in _tables(database)
 
@@ -117,7 +117,7 @@ def test_downgrade_refuses_split_meal_groups_without_mutating_data(tmp_path):
         )
         connection.commit()
 
-    result = _run_alembic(database, "downgrade", "-1")
+    result = _run_alembic(database, "downgrade", "-2")
 
     assert result.returncode != 0
     assert "Cannot downgrade 0023_member_meal_groups" in result.stderr

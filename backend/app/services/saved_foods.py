@@ -218,9 +218,13 @@ def sync_planner_food(
         db.flush()
         saved.planner_recipe_id = recipe.id
         version_number = 1
+        minimum_servings = None
+        serving_increment = None
     else:
         latest = _latest_recipe_version(db, recipe.id)
         version_number = (latest.version_number if latest else 0) + 1
+        minimum_servings = latest.minimum_servings if latest else None
+        serving_increment = latest.serving_increment if latest else None
         recipe.title = saved.display_name
         recipe.image_url = metadata.get("image_url")
         recipe.archived_at = None
@@ -234,6 +238,8 @@ def sync_planner_food(
         version_number=version_number,
         title=saved.display_name,
         yield_servings=Decimal("1"),
+        minimum_servings=minimum_servings,
+        serving_increment=serving_increment,
     )
     db.add(version)
     db.flush()

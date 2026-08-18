@@ -10,6 +10,8 @@ class RecipeCandidate:
     recipe_id: str
     recipe_version_id: str
     nutrition: dict[str, Decimal]
+    minimum_servings: Decimal | None = None
+    serving_increment: Decimal | None = None
     food_record_ids: frozenset[str] = frozenset()
     ingredient_text: str = ""
 
@@ -61,6 +63,25 @@ BOOSTED_MEAL_TARGET_WEIGHT = Decimal("10")
 
 class PlannerInfeasibleError(ValueError):
     """No shared recipe/portion combination satisfies every hard boundary."""
+
+
+def recipe_portions(
+    standard_portions: tuple[Decimal, ...],
+    minimum_servings: Decimal | None,
+    serving_increment: Decimal | None,
+) -> tuple[Decimal, ...]:
+    """Return recipe-specific portions without changing legacy defaults."""
+    if minimum_servings is None and serving_increment is None:
+        return standard_portions
+    if minimum_servings is None or serving_increment is None or serving_increment <= 0:
+        raise ValueError("Recipe serving constraints are incomplete or invalid")
+    maximum = standard_portions[-1]
+    portions: list[Decimal] = []
+    portion = minimum_servings
+    while portion <= maximum:
+        portions.append(portion)
+        portion += serving_increment
+    return tuple(portions)
 
 
 def _target_values(target: ParticipantTarget) -> dict[str, Decimal]:
@@ -366,7 +387,7 @@ def rebalance_plan_portions(
 
     if best_portions is None or (enforce_nutrition_bounds and not best_feasible):
         raise PlannerInfeasibleError(
-            "No whole-plan quarter-portion combination meets every daily nutrition tolerance"
+            "No whole-plan serving combination meets every daily nutrition tolerance"
         )
     return best_portions
 
@@ -387,6 +408,9 @@ def choose_shared_recipe(
 
     best: PlannerChoice | None = None
     for candidate in candidates:
+        allowed_portions = recipe_portions(
+            PORTIONS, candidate.minimum_servings, candidate.serving_increment
+        )
         portions: dict[str, Decimal] = {}
         score = Decimal("0")
         candidate_is_feasible = True
@@ -395,7 +419,7 @@ def choose_shared_recipe(
             minimums = _minimum_values(participant)
             best_portion: Decimal | None = None
             best_error: Decimal | None = None
-            for portion in PORTIONS:
+            for portion in allowed_portions:
                 if enforce_nutrition_bounds and not _within_hard_bounds(
                     participant, candidate.nutrition, portion
                 ):
@@ -441,6 +465,6 @@ def choose_shared_recipe(
             best = choice
     if best is None:
         raise PlannerInfeasibleError(
-            "No recipe and quarter-portion combination meets every participant's nutrition tolerance"
+            "No recipe and allowed serving combination meets every participant's nutrition tolerance"
         )
     return best
