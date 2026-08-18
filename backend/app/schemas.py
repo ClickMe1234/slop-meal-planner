@@ -347,6 +347,21 @@ class RecipeReviewUpdate(VersionedUpdate):
         return self
 
 
+class RecipeServingConstraintsUpdate(VersionedUpdate):
+    minimum_servings: Decimal | None = Field(
+        ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
+    serving_increment: Decimal | None = Field(
+        ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
+
+    @model_validator(mode="after")
+    def validate_pair(self):
+        if (self.minimum_servings is None) != (self.serving_increment is None):
+            raise ValueError("minimum servings and serving increment must be supplied together")
+        return self
+
+
 class PublisherTagOut(APIModel):
     kind: str
     label: str

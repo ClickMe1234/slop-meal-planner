@@ -276,6 +276,56 @@ describe('PlanPage wizard', () => {
     expect(screen.getByText('Oats')).not.toBeVisible()
   })
 
+  it('sets and clears recipe serving limits from the generated plan', async () => {
+    const plan: BackendPlanDetail = {
+      plan: {
+        id: 'demo',
+        name: 'Serving limits plan',
+        start_date: '2026-07-13',
+        end_date: '2026-07-13',
+        status: 'ready',
+        diagnostics: [],
+        version: 1,
+      },
+      occurrences: [{
+        id: 'breakfast',
+        meal_date: '2026-07-13',
+        meal_type: 'breakfast',
+        batch_id: 'breakfast-batch',
+        component_slot: 0,
+        recipe_id: 'oats',
+        recipe_title: 'Whole egg oats',
+        minimum_servings: null,
+        serving_increment: null,
+        batch_servings: 1,
+        portions: [{ member_id: 'demo-you', servings: 1 }],
+      }],
+    }
+    storeDemoPlan(plan)
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan?plan=demo']}><PlanPage/></MemoryRouter></QueryClientProvider>)
+
+    await user.click(screen.getByRole('button', { name: 'Serving limits' }))
+    const dialog = screen.getByRole('dialog', { name: 'Serving limits for Whole egg oats' })
+    expect(within(dialog).getByRole('checkbox', { name: /use recipe-specific serving sizes/i })).not.toBeChecked()
+    await user.click(within(dialog).getByRole('checkbox', { name: /use recipe-specific serving sizes/i }))
+    expect(within(dialog).getByText('1, 1.5, 2, 2.5, 3, …')).toBeInTheDocument()
+    const minimum = within(dialog).getByRole('spinbutton', { name: /minimum servings/i })
+    await user.clear(minimum)
+    await user.type(minimum, '0.3')
+    expect(within(dialog).getByRole('button', { name: 'Save serving limits' })).toBeDisabled()
+    await user.clear(minimum)
+    await user.type(minimum, '1')
+    await user.click(within(dialog).getByRole('button', { name: 'Save serving limits' }))
+
+    expect(screen.getByText('Serving rule · starts at 1, steps by 0.5')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Serving limits' }))
+    const reopened = screen.getByRole('dialog', { name: 'Serving limits for Whole egg oats' })
+    await user.click(within(reopened).getByRole('checkbox', { name: /use recipe-specific serving sizes/i }))
+    await user.click(within(reopened).getByRole('button', { name: 'Save serving limits' }))
+    expect(screen.queryByText(/Serving rule ·/)).not.toBeInTheDocument()
+  })
+
   it('shows meals in breakfast, lunch, dinner, snack order', () => {
     const meal = (mealType: string): BackendPlanDetail['occurrences'][number] => ({
       id: mealType,

@@ -269,6 +269,18 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
+  saveRecipeServingConstraints: (
+    id: string,
+    payload: {
+      expected_version: number
+      minimum_servings: number | null
+      serving_increment: number | null
+    },
+  ) =>
+    request<BackendRecipeDetail>(`/recipes/${id}/serving-constraints`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
   searchRecipeIngredients: (query = '') => request<{ items: BackendRecipeIngredientChoice[]; total: number }>(`/recipe-ingredients?q=${encodeURIComponent(query)}`),
   recipeCategories: () => request<RecipeCategoryResponse>('/recipe-discovery/categories'),
   searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[], publisherCategories: string[] = [], publisherCategoryMatch: RecipeCategoryMatchMode = 'any') => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}&publisher_category_match=${publisherCategoryMatch}${publisherCategories.map((value) => `&publisher_category=${encodeURIComponent(value)}`).join('')}`),
@@ -1146,6 +1158,9 @@ export interface BackendPlanDetail {
     guest_servings?: number
     recipe_id: string
     recipe_title: string
+    recipe_version?: number
+    minimum_servings?: number | null
+    serving_increment?: number | null
     source_url?: string
     image_url?: string
     batch_servings: number

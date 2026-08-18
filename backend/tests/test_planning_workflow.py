@@ -536,6 +536,98 @@ def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list
     assert detail["occurrences"][0]["batch_servings"] == 0.25
 
 
+def test_planner_serving_constraints_update_only_the_rule_and_refresh_ready_plan(
+    client, owner, session_factory
+):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id)
+    recipe = _create_recipe(
+        client,
+        owner,
+        "Planner limit dinner",
+        ["dinner"],
+        ingredients=[{
+            "original_text": "2 eggs",
+            "quantity": 2,
+            "unit": "item",
+            "food_phrase": "eggs",
+        }],
+    )
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [{
+            "meal_date": "2026-08-12",
+            "meal_type": "dinner",
+            "participant_member_ids": [member_id],
+        }],
+    )
+    with session_factory() as db:
+        allocation = db.scalar(
+            select(PortionAllocation)
+            .join(MealOccurrence, MealOccurrence.id == PortionAllocation.meal_occurrence_id)
+            .join(MealBatch, MealBatch.id == MealOccurrence.batch_id)
+            .where(MealBatch.meal_plan_id == plan["id"])
+        )
+        allocation.servings = Decimal("0.75")
+        batch = db.scalar(select(MealBatch).where(MealBatch.meal_plan_id == plan["id"]))
+        batch.servings = Decimal("0.75")
+        db.commit()
+
+    current = client.get(f"/api/v1/recipes/{recipe['id']}").json()
+    updated = client.put(
+        f"/api/v1/recipes/{recipe['id']}/serving-constraints",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "minimum_servings": 1,
+            "serving_increment": 0.5,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["plan_sync"]["plans_updated"] == 1
+    assert Decimal(updated.json()["minimum_servings"]) == Decimal("1")
+    assert Decimal(updated.json()["serving_increment"]) == Decimal("0.5")
+
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    occurrence = detail["occurrences"][0]
+    assert occurrence["recipe_version"] == current["version"] + 1
+    assert Decimal(str(occurrence["minimum_servings"])) == Decimal("1")
+    assert Decimal(str(occurrence["serving_increment"])) == Decimal("0.5")
+    assert occurrence["portions"][0]["servings"] == 1
+    assert occurrence["batch_servings"] == 1
+    with session_factory() as db:
+        latest = db.scalar(
+            select(RecipeVersion)
+            .where(RecipeVersion.recipe_id == recipe["id"])
+            .order_by(RecipeVersion.version_number.desc())
+        )
+        assert len(latest.ingredients) == 1
+        assert latest.ingredients[0].original_text == "2 eggs"
+
+    stale = client.put(
+        f"/api/v1/recipes/{recipe['id']}/serving-constraints",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "minimum_servings": None,
+            "serving_increment": None,
+        },
+    )
+    assert stale.status_code == 409
+    incomplete = client.put(
+        f"/api/v1/recipes/{recipe['id']}/serving-constraints",
+        headers=_headers(owner),
+        json={
+            "expected_version": updated.json()["version"],
+            "minimum_servings": 1,
+            "serving_increment": None,
+        },
+    )
+    assert incomplete.status_code == 422
+
+
 def test_recipe_review_never_rewrites_a_cooked_ready_batch(
     client, owner, session_factory
 ):

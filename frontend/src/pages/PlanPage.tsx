@@ -13,6 +13,7 @@ import {
   Flame,
   PackageOpen,
   Search,
+  SlidersHorizontal,
   Plus,
   Trash2,
   TriangleAlert,
@@ -768,6 +769,89 @@ function ReviewStep({ dates, slots, members, guidance, profileRestrictionCount, 
   return <div className="constraint-review"><dl><div><dt>Dates</dt><dd>{formatDateRange(dates)} · {dates.length} {dates.length === 1 ? 'day' : 'days'}</dd></div><div><dt>Meal slots</dt><dd>{slots.length} total · {mealCounts}</dd></div><div><dt>People</dt><dd>{members.map(member => member.name).join(', ')}</dd></div><div><dt>Special days</dt><dd>{boosts.length} calorie {boosts.length === 1 ? 'boost' : 'boosts'} · {guestPlaces} guest {guestPlaces === 1 ? 'place' : 'places'}</dd></div><div><dt>Cooking</dt><dd>{batchCount(slots)} new recipe {batchCount(slots) === 1 ? 'batch' : 'batches'}</dd></div><div><dt>Plan guidance</dt><dd>{guidance.must.length} must use · {guidance.prefer.length} preferred · {guidance.exclude.length} excluded</dd></div><div><dt>Profile rules</dt><dd>{profileRestrictionCount} applied automatically</dd></div></dl><Notice title="Recipes are meal-tagged">Only planner-ready recipes tagged for the relevant breakfast, lunch, dinner or snack slot will be considered.</Notice>{generating && <ProgressBar value={72} label="Balancing nutrition, portions, batches and preferences…"/>}</div>
 }
 
+type PlannedOccurrence = BackendPlanDetail['occurrences'][number]
+
+function servingSequence(minimum: number, increment: number): string {
+  return Array.from({ length: 5 }, (_, index) => minimum + increment * index)
+    .map(value => Number(value.toFixed(2)).toLocaleString())
+    .join(', ')
+}
+
+function validServingConstraint(value: number): boolean {
+  return Number.isFinite(value) && value >= 0.25 && value <= 2 && Math.abs(value * 4 - Math.round(value * 4)) < 0.0001
+}
+
+export function ServingLimitsDialog({ item, plan, onClose, onPlanChange }: { item: PlannedOccurrence; plan: BackendPlanDetail; onClose: () => void; onPlanChange: (plan: BackendPlanDetail) => void }) {
+  const queryClient = useQueryClient()
+  const initiallyEnabled = item.minimum_servings != null && item.serving_increment != null
+  const [enabled, setEnabled] = useState(initiallyEnabled)
+  const [minimum, setMinimum] = useState(String(item.minimum_servings ?? 1))
+  const [increment, setIncrement] = useState(String(item.serving_increment ?? 0.5))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const minimumValue = Number(minimum)
+  const incrementValue = Number(increment)
+  const valid = !enabled || (validServingConstraint(minimumValue) && validServingConstraint(incrementValue))
+  const dirty = enabled !== initiallyEnabled || (enabled && (
+    minimumValue !== Number(item.minimum_servings)
+    || incrementValue !== Number(item.serving_increment)
+  ))
+
+  const save = async () => {
+    if (!valid || !dirty || saving) return
+    setSaving(true)
+    setError('')
+    const nextMinimum = enabled ? minimumValue : undefined
+    const nextIncrement = enabled ? incrementValue : undefined
+    try {
+      if (isDemoMode) {
+        const updated = {
+          ...plan,
+          occurrences: plan.occurrences.map(occurrence => occurrence.recipe_id === item.recipe_id ? {
+            ...occurrence,
+            minimum_servings: nextMinimum,
+            serving_increment: nextIncrement,
+          } : occurrence),
+        }
+        storeDemoPlan(updated)
+        onPlanChange(updated)
+      } else {
+        const expectedVersion = item.recipe_version ?? (await api.getRecipe(item.recipe_id)).version
+        await api.saveRecipeServingConstraints(item.recipe_id, {
+          expected_version: expectedVersion,
+          minimum_servings: nextMinimum ?? null,
+          serving_increment: nextIncrement ?? null,
+        })
+        const updated = await api.getPlan(plan.plan.id)
+        queryClient.setQueryData(['plan', plan.plan.id], updated)
+        onPlanChange(updated)
+      }
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : 'The serving limits could not be saved.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !saving) onClose() }}>
+    <Card className="serving-limits-dialog" role="dialog" aria-modal="true" aria-labelledby="serving-limits-title">
+      <button type="button" className="modal-close" aria-label="Close serving limits" disabled={saving} onClick={onClose}><X/></button>
+      <div><p className="eyebrow">Planner recipe rule</p><h2 id="serving-limits-title">Serving limits for {item.recipe_title}</h2><p className="muted">Keep planned portions practical for ingredients that cannot be divided freely.</p></div>
+      <label className="serving-limits-toggle"><span><strong>Use recipe-specific serving sizes</strong><small>Turn this off to restore the planner's flexible defaults.</small></span><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)}/></label>
+      {enabled && <div className="form-grid form-grid--2 serving-limits-fields">
+        <label>Minimum servings<input type="number" min="0.25" max="2" step="0.25" inputMode="decimal" value={minimum} onChange={event => setMinimum(event.target.value)}/><small>Smallest portion the planner may assign.</small></label>
+        <label>Serving increment<input type="number" min="0.25" max="2" step="0.25" inputMode="decimal" value={increment} onChange={event => setIncrement(event.target.value)}/><small>How much each next allowed portion increases.</small></label>
+      </div>}
+      {enabled && valid && <div className="serving-limits-preview"><span>Allowed sequence</span><strong>{servingSequence(minimumValue, incrementValue)}, …</strong></div>}
+      {enabled && !valid && <p className="field-error" role="alert">Use values from 0.25 to 2, in steps of 0.25.</p>}
+      {error && <Notice tone="warning" title="Could not save serving limits">{error}</Notice>}
+      <Notice title="Applies across this recipe">Saving updates every uncooked use of this recipe in current plans. Cooked batches keep their recorded portions.</Notice>
+      <div className="button-row"><Button variant="ghost" disabled={saving} onClick={onClose}>Cancel</Button><Button disabled={!valid || !dirty || saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save serving limits'}</Button></div>
+    </Card>
+  </div>
+}
+
 function GeneratedPlan({ plan, memberNames, onEditSetup, onPlanChange }: { plan: BackendPlanDetail; memberNames: Record<string, string>; onEditSetup: () => void; onPlanChange: (plan: BackendPlanDetail) => void }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -776,6 +860,7 @@ function GeneratedPlan({ plan, memberNames, onEditSetup, onPlanChange }: { plan:
   const [acceptError, setAcceptError] = useState<{ message: string; code?: string; actions: ApiAction[] } | null>(null)
   const [removingSideId, setRemovingSideId] = useState('')
   const [failedRemovalId, setFailedRemovalId] = useState('')
+  const [servingLimitsItem, setServingLimitsItem] = useState<PlannedOccurrence | null>(null)
   const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({})
   const grouped = useMemo(() => plan.occurrences.reduce<Record<string, BackendPlanDetail['occurrences']>>((result, item) => {
     ;(result[item.meal_date] ??= []).push(item)
@@ -861,20 +946,22 @@ function GeneratedPlan({ plan, memberNames, onEditSetup, onPlanChange }: { plan:
       const coverage = coveredDates.length > 1 ? `${shortBatchDate(coveredDates[0])}–${shortBatchDate(coveredDates.at(-1) as string)}` : shortBatchDate(coveredDates[0])
       return <div className={`generated-meal${isSide ? ' generated-meal--side' : ''}`} key={item.id}>
         <span>{isSide ? item.meal_type === 'snack' ? 'Snack' : 'Side' : capitalise(item.meal_type)}</span>
-        <div className="generated-meal-copy"><strong>{item.recipe_title}</strong><small>{item.portions.map(portion => `${memberNames[portion.member_id] ?? 'Household member'} ${Number(portion.servings)} serving${Number(portion.servings) === 1 ? '' : 's'}`).join(' · ')}{Number(item.guest_servings ?? 0) > 0 && ` · Guests ${Number(item.guest_servings)} serving${Number(item.guest_servings) === 1 ? '' : 's'}`}</small>{!isSide && <small>Cooking batch · {coverage}</small>}</div>
+        <div className="generated-meal-copy"><strong>{item.recipe_title}</strong><small>{item.portions.map(portion => `${memberNames[portion.member_id] ?? 'Household member'} ${Number(portion.servings)} serving${Number(portion.servings) === 1 ? '' : 's'}`).join(' · ')}{Number(item.guest_servings ?? 0) > 0 && ` · Guests ${Number(item.guest_servings)} serving${Number(item.guest_servings) === 1 ? '' : 's'}`}</small>{!isSide && <small>Cooking batch · {coverage}</small>}{item.minimum_servings != null && item.serving_increment != null && <small className="generated-serving-rule">Serving rule · starts at {Number(item.minimum_servings)}, steps by {Number(item.serving_increment)}</small>}</div>
         <small>{Math.round(kcal)} kcal</small>
         {editable && <div className="generated-meal-actions">
           {isSide ? <>
             <Link className="generated-meal-customise" to={`/plan/${plan.plan.id}/batches/${item.parent_batch_id}/sides/${item.component_slot}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><WandSparkles size={15}/>Replace</Link>
+            <button type="button" className="generated-meal-customise" onClick={() => setServingLimitsItem(item)}><SlidersHorizontal size={15}/>Serving limits</button>
             <button type="button" className="generated-meal-remove" disabled={removingSideId === item.batch_id} onClick={() => void removeSide(item.batch_id, failedRemovalId === item.batch_id)}><Trash2 size={15}/>{removingSideId === item.batch_id ? 'Removing…' : failedRemovalId === item.batch_id ? 'Continue anyway' : 'Remove'}</button>
           </> : <>
             <Link className="generated-meal-customise" to={`/plan/${plan.plan.id}/occurrences/${item.id}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><WandSparkles size={15}/>Customise</Link>
+            <button type="button" className="generated-meal-customise" onClick={() => setServingLimitsItem(item)}><SlidersHorizontal size={15}/>Serving limits</button>
             {nextSideSlot && <Link className="generated-meal-customise generated-meal-add" to={`/plan/${plan.plan.id}/batches/${item.batch_id}/sides/${nextSideSlot}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><Plus size={15}/>{item.meal_type === 'snack' ? 'Add snacks' : 'Add side'}</Link>}
           </>}
         </div>}
       </div>
     })}</div></Card>
-  })}</div></div>
+  })}</div>{servingLimitsItem && <ServingLimitsDialog key={`${servingLimitsItem.recipe_id}-${servingLimitsItem.recipe_version ?? 'demo'}`} item={servingLimitsItem} plan={plan} onClose={() => setServingLimitsItem(null)} onPlanChange={onPlanChange}/>}</div>
 }
 
 function appendReturnTo(href: string, returnTo: string): string {
