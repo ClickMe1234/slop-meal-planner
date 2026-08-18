@@ -259,6 +259,8 @@ export const api = {
       expected_version: number
       title: string
       yield_servings: number
+      minimum_servings?: number | null
+      serving_increment?: number | null
       meal_types?: BackendMealType[]
       ingredients: Array<Record<string, unknown>>
     },
@@ -540,6 +542,8 @@ export interface BackendRecipe {
   image_url?: string
   version: number
   yield_servings?: number
+  minimum_servings?: number
+  serving_increment?: number
   publisher_nutrition?: {
     basis?: string
     energy_kcal?: number

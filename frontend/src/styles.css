@@ -463,8 +463,18 @@ button.tag { cursor: pointer; font: inherit; }
 .recipe-planning-note span { color:var(--muted);font-size:.65rem;line-height:1.45; }
 .recipe-planning-note--warning { background:var(--warning-soft);border:1px solid color-mix(in srgb,var(--warning) 28%,transparent); }
 .recipe-content>.recipe-planning-note { margin-top:10px; }
-.recipe-basics-card { align-items:flex-start;gap:20px; }
+.recipe-basics-card { align-items:flex-start;display:grid;gap:20px;grid-template-columns:minmax(140px,.6fr) minmax(260px,1fr); }
 .yield-card>.recipe-meal-type-review { align-items:stretch;display:grid;flex:1;gap:8px;max-width:360px; }
+.serving-constraints { border:0;border-top:1px solid var(--border);display:grid;gap:10px;grid-column:1/-1;margin:0;min-width:0;padding:16px 0 0; }
+.serving-constraints legend { color:var(--text);font-size:.76rem;font-weight:800;padding:0 8px 0 0; }
+.serving-constraints legend span { color:var(--muted);font-size:.61rem;font-weight:700;margin-left:5px;text-transform:uppercase; }
+.serving-constraints>small { color:var(--muted);font-size:.68rem;line-height:1.45; }
+.serving-constraints>.field-error { color:var(--danger);font-weight:700; }
+.form-stack>.serving-constraints { width:100%; }
+@media (max-width:1000px) {
+  .review-layout { grid-template-columns:minmax(0,1fr); }
+  .review-summary { position:static; }
+}
 .shopping-exclusion-control { color:var(--text);font-size:.72rem;margin-top:12px; }
 .shopping-exclusion-control small { color:var(--muted);font-size:.65rem;font-weight:400; }
 .ingredient-inline-warning { color:var(--warning)!important;font-size:.68rem!important;font-weight:600;line-height:1.4;margin-top:8px; }
@@ -531,7 +541,7 @@ button.tag { cursor: pointer; font: inherit; }
   .recipe-filter-group--sources legend,.recipe-filter-group--sources>p,.recipe-filter-group--sources .filter-options,.recipe-filter-group--sources>.button { grid-column:1; grid-row:auto; }
   .filter-options { align-items:start; display:grid; gap:12px; }
   .recipe-filter-panel>.button { justify-self:start; }
-  .recipe-basics-card { display:grid; }
+  .recipe-basics-card { grid-template-columns:minmax(0,1fr); }
   .yield-card>.recipe-meal-type-review,.meal-type-picker { max-width:none;width:100%; }
 }
 

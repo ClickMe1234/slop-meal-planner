@@ -112,6 +112,16 @@ describe('App', () => {
     expect(screen.getByText(/6 servings confirmed/i)).toBeInTheDocument()
   })
 
+  it('previews recipe-specific serving increments while reviewing', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/imports/demo/review']}><App/></MemoryRouter></QueryClientProvider>)
+
+    await user.type(screen.getByRole('spinbutton', { name: 'Minimum planned servings' }), '0.75')
+    await user.type(screen.getByRole('spinbutton', { name: 'Serving increment' }), '0.5')
+
+    expect(screen.getByText(/allows 0.75, 1.25, 1.75 servings/i)).toBeInTheDocument()
+  })
+
   it('offers recipe deletion from the edit screen and confirms before leaving', async () => {
     const user = userEvent.setup()
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)

@@ -5,6 +5,71 @@ from sqlalchemy import select
 from app.models import Household, MealBatch, Recipe, RecipeVersion
 
 
+def test_recipe_serving_constraints_are_saved_together(client, owner):
+    headers = {"X-CSRF-Token": owner["csrf_token"]}
+    response = client.post(
+        "/api/v1/recipes",
+        headers=headers,
+        json={
+            "title": "Whole egg omelette",
+            "source_type": "url",
+            "source_url": "https://example.com/whole-egg-omelette",
+            "yield_servings": 2,
+            "minimum_servings": 1,
+            "serving_increment": 0.5,
+            "ingredients": [
+                {
+                    "original_text": "2 eggs",
+                    "quantity": 2,
+                    "unit": "item",
+                    "food_phrase": "eggs",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert Decimal(response.json()["minimum_servings"]) == Decimal("1")
+    assert Decimal(response.json()["serving_increment"]) == Decimal("0.5")
+
+    created = response.json()
+    ingredient = created["ingredients"][0]
+    reviewed = client.put(
+        f"/api/v1/recipes/{created['id']}/review",
+        headers=headers,
+        json={
+            "expected_version": created["version"],
+            "title": created["title"],
+            "yield_servings": 2,
+            "ingredients": [
+                {
+                    "lineage_id": ingredient["lineage_id"],
+                    "original_text": ingredient["original_text"],
+                    "quantity": 2,
+                    "unit": "item",
+                    "food_phrase": "eggs",
+                }
+            ],
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert Decimal(reviewed.json()["minimum_servings"]) == Decimal("1")
+    assert Decimal(reviewed.json()["serving_increment"]) == Decimal("0.5")
+
+    incomplete = client.post(
+        "/api/v1/recipes",
+        headers=headers,
+        json={
+            "title": "Invalid constraints",
+            "yield_servings": 2,
+            "minimum_servings": 1,
+            "ingredients": [],
+        },
+    )
+    assert incomplete.status_code == 422
+    assert "must be supplied together" in incomplete.text
+
+
 def test_existing_import_drafts_are_enriched_with_detected_units(client, owner):
     headers = {"X-CSRF-Token": owner["csrf_token"]}
     recipe = client.post(

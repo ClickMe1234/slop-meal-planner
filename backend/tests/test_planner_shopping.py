@@ -11,6 +11,7 @@ from app.services.planner import (
     RecipeCandidate,
     aggregate_nutrition_violations,
     choose_shared_recipe,
+    recipe_portions,
     rebalance_plan_portions,
 )
 from app.services.shopping import round_purchase
@@ -45,6 +46,28 @@ def test_planner_chooses_recipe_and_quarter_portions():
 
     assert choice.candidate.recipe_id == "filling"
     assert choice.portions == {"a": Decimal("1.0"), "b": Decimal("0.75")}
+
+
+def test_recipe_serving_constraints_replace_quarter_portions():
+    candidate = RecipeCandidate(
+        "egg-heavy",
+        "v1",
+        {"energy_kcal": Decimal("400")},
+        minimum_servings=Decimal("1"),
+        serving_increment=Decimal("0.5"),
+    )
+    participant = ParticipantTarget(
+        "member", "calorie", Decimal("25"), Decimal("2000"), None, None, None
+    )
+
+    choice = choose_shared_recipe(
+        [candidate], [participant], enforce_nutrition_bounds=False
+    )
+
+    assert recipe_portions(
+        PORTIONS, candidate.minimum_servings, candidate.serving_increment
+    ) == (Decimal("1"), Decimal("1.5"), Decimal("2.0"))
+    assert choice.portions == {"member": Decimal("1")}
 
 
 def test_shopping_rounds_purchase_amounts_for_their_unit():

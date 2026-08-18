@@ -18,6 +18,8 @@ export interface Recipe {
   sourceUrl: string
   imageUrl?: string
   yield?: number
+  minimumServings?: number
+  servingIncrement?: number
   nutrition?: Nutrition
   nutritionSource?: 'publisher' | 'calculated'
   nutritionSourceName?: string

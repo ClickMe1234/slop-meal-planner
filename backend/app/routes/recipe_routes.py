@@ -297,6 +297,8 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         image_url=recipe.image_url,
         version=recipe.version,
         yield_servings=version.yield_servings,
+        minimum_servings=version.minimum_servings,
+        serving_increment=version.serving_increment,
         publisher_nutrition=version.publisher_nutrition,
         calculated_nutrition=nutrition_values,
         nutrition_method=nutrition_method,
@@ -523,6 +525,8 @@ def create_recipe(
         version_number=1,
         title=payload.title,
         yield_servings=payload.yield_servings,
+        minimum_servings=payload.minimum_servings,
+        serving_increment=payload.serving_increment,
         custom_instructions=payload.custom_instructions,
         publisher_nutrition=payload.publisher_nutrition,
     )
@@ -640,6 +644,16 @@ def save_recipe_review(
         version_number=previous.version_number + 1,
         title=payload.title,
         yield_servings=payload.yield_servings,
+        minimum_servings=(
+            payload.minimum_servings
+            if "minimum_servings" in payload.model_fields_set
+            else previous.minimum_servings
+        ),
+        serving_increment=(
+            payload.serving_increment
+            if "serving_increment" in payload.model_fields_set
+            else previous.serving_increment
+        ),
         custom_instructions=previous.custom_instructions,
         source_checksum=previous.source_checksum,
         publisher_nutrition=previous.publisher_nutrition,

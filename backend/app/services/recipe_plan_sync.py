@@ -44,6 +44,8 @@ def clone_recipe_version_for_shopping(
         version_number=previous.version_number + 1,
         title=previous.title,
         yield_servings=previous.yield_servings,
+        minimum_servings=previous.minimum_servings,
+        serving_increment=previous.serving_increment,
         custom_instructions=previous.custom_instructions,
         source_checksum=previous.source_checksum,
         publisher_nutrition=previous.publisher_nutrition,
