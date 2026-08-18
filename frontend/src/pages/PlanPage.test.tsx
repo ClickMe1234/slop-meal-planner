@@ -295,6 +295,8 @@ describe('PlanPage wizard', () => {
         component_slot: 0,
         recipe_id: 'oats',
         recipe_title: 'Whole egg oats',
+        minimum_servings: null,
+        serving_increment: null,
         batch_servings: 1,
         portions: [{ member_id: 'demo-you', servings: 1 }],
       }],
@@ -305,6 +307,7 @@ describe('PlanPage wizard', () => {
 
     await user.click(screen.getByRole('button', { name: 'Serving limits' }))
     const dialog = screen.getByRole('dialog', { name: 'Serving limits for Whole egg oats' })
+    expect(within(dialog).getByRole('checkbox', { name: /use recipe-specific serving sizes/i })).not.toBeChecked()
     await user.click(within(dialog).getByRole('checkbox', { name: /use recipe-specific serving sizes/i }))
     expect(within(dialog).getByText('1, 1.5, 2, 2.5, 3, …')).toBeInTheDocument()
     const minimum = within(dialog).getByRole('spinbutton', { name: /minimum servings/i })

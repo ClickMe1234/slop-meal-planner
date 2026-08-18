@@ -783,7 +783,7 @@ function validServingConstraint(value: number): boolean {
 
 export function ServingLimitsDialog({ item, plan, onClose, onPlanChange }: { item: PlannedOccurrence; plan: BackendPlanDetail; onClose: () => void; onPlanChange: (plan: BackendPlanDetail) => void }) {
   const queryClient = useQueryClient()
-  const initiallyEnabled = item.minimum_servings !== undefined && item.serving_increment !== undefined
+  const initiallyEnabled = item.minimum_servings != null && item.serving_increment != null
   const [enabled, setEnabled] = useState(initiallyEnabled)
   const [minimum, setMinimum] = useState(String(item.minimum_servings ?? 1))
   const [increment, setIncrement] = useState(String(item.serving_increment ?? 0.5))
@@ -946,7 +946,7 @@ function GeneratedPlan({ plan, memberNames, onEditSetup, onPlanChange }: { plan:
       const coverage = coveredDates.length > 1 ? `${shortBatchDate(coveredDates[0])}–${shortBatchDate(coveredDates.at(-1) as string)}` : shortBatchDate(coveredDates[0])
       return <div className={`generated-meal${isSide ? ' generated-meal--side' : ''}`} key={item.id}>
         <span>{isSide ? item.meal_type === 'snack' ? 'Snack' : 'Side' : capitalise(item.meal_type)}</span>
-        <div className="generated-meal-copy"><strong>{item.recipe_title}</strong><small>{item.portions.map(portion => `${memberNames[portion.member_id] ?? 'Household member'} ${Number(portion.servings)} serving${Number(portion.servings) === 1 ? '' : 's'}`).join(' · ')}{Number(item.guest_servings ?? 0) > 0 && ` · Guests ${Number(item.guest_servings)} serving${Number(item.guest_servings) === 1 ? '' : 's'}`}</small>{!isSide && <small>Cooking batch · {coverage}</small>}{item.minimum_servings !== undefined && item.serving_increment !== undefined && <small className="generated-serving-rule">Serving rule · starts at {Number(item.minimum_servings)}, steps by {Number(item.serving_increment)}</small>}</div>
+        <div className="generated-meal-copy"><strong>{item.recipe_title}</strong><small>{item.portions.map(portion => `${memberNames[portion.member_id] ?? 'Household member'} ${Number(portion.servings)} serving${Number(portion.servings) === 1 ? '' : 's'}`).join(' · ')}{Number(item.guest_servings ?? 0) > 0 && ` · Guests ${Number(item.guest_servings)} serving${Number(item.guest_servings) === 1 ? '' : 's'}`}</small>{!isSide && <small>Cooking batch · {coverage}</small>}{item.minimum_servings != null && item.serving_increment != null && <small className="generated-serving-rule">Serving rule · starts at {Number(item.minimum_servings)}, steps by {Number(item.serving_increment)}</small>}</div>
         <small>{Math.round(kcal)} kcal</small>
         {editable && <div className="generated-meal-actions">
           {isSide ? <>

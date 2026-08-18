@@ -1159,8 +1159,8 @@ export interface BackendPlanDetail {
     recipe_id: string
     recipe_title: string
     recipe_version?: number
-    minimum_servings?: number
-    serving_increment?: number
+    minimum_servings?: number | null
+    serving_increment?: number | null
     source_url?: string
     image_url?: string
     batch_servings: number
