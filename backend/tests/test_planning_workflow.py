@@ -1,8 +1,21 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models import FoodRecord, MealPlan, PantryLot, PlanStatus, RecipeIngredient, RecipeVersion, ShoppingItem, ShoppingList
+from app.models import (
+    FoodRecord,
+    MealBatch,
+    MealOccurrence,
+    MealPlan,
+    PantryLot,
+    PlanStatus,
+    PortionAllocation,
+    RecipeIngredient,
+    RecipeVersion,
+    ShoppingItem,
+    ShoppingList,
+)
 
 
 PUBLISHER_NUTRITION = {
@@ -354,7 +367,9 @@ def test_shopping_sources_combine_and_recipe_unit_preview(client, owner, session
         assert all(row.shopping_measurement_overridden for row in rows)
 
 
-def test_recipe_review_rebuilds_the_current_plan_shopping_list(client, owner):
+def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list(
+    client, owner, session_factory
+):
     member_id = client.get("/api/v1/auth/me").json()["member_id"]
     _set_dinner_target(client, owner, member_id)
     recipe = _create_recipe(
@@ -380,6 +395,20 @@ def test_recipe_review_rebuilds_the_current_plan_shopping_list(client, owner):
             "participant_member_ids": [member_id],
         }],
     )
+    with session_factory() as db:
+        allocation = db.scalar(
+            select(PortionAllocation)
+            .join(
+                MealOccurrence,
+                MealOccurrence.id == PortionAllocation.meal_occurrence_id,
+            )
+            .join(MealBatch, MealBatch.id == MealOccurrence.batch_id)
+            .where(MealBatch.meal_plan_id == plan["id"])
+        )
+        allocation.servings = Decimal("0.75")
+        batch = db.scalar(select(MealBatch).where(MealBatch.meal_plan_id == plan["id"]))
+        batch.servings = Decimal("0.75")
+        db.commit()
     assert client.post(
         f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
     ).status_code == 200
@@ -393,6 +422,8 @@ def test_recipe_review_rebuilds_the_current_plan_shopping_list(client, owner):
             "expected_version": current["version"],
             "title": current["title"],
             "yield_servings": current["yield_servings"],
+            "minimum_servings": 1,
+            "serving_increment": 1,
             "meal_types": current["meal_types"],
             "ingredients": [{
                 "original_text": ingredient["original_text"],
@@ -410,6 +441,9 @@ def test_recipe_review_rebuilds_the_current_plan_shopping_list(client, owner):
     )
     assert reviewed.status_code == 200, reviewed.text
     assert reviewed.json()["plan_sync"]["shopping_list_rebuilt"] is True
+    detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    assert detail["occurrences"][0]["portions"][0]["servings"] == 1
+    assert detail["occurrences"][0]["batch_servings"] == 1
     active = client.get("/api/v1/shopping-lists/active").json()
     assert active["id"] != previous_list["id"]
     assert active["items"][0]["exact_quantity"] == "200"
