@@ -337,6 +337,11 @@ class RecipeReviewUpdate(VersionedUpdate):
     def validate_meal_types(self):
         if self.meal_types is not None and len(set(self.meal_types)) != len(self.meal_types):
             raise ValueError("recipe meal types must be unique")
+        if (
+            ("minimum_servings" in self.model_fields_set)
+            != ("serving_increment" in self.model_fields_set)
+        ):
+            raise ValueError("minimum servings and serving increment must be supplied together")
         if (self.minimum_servings is None) != (self.serving_increment is None):
             raise ValueError("minimum servings and serving increment must be supplied together")
         return self

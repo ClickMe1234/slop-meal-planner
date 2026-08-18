@@ -56,6 +56,28 @@ def test_recipe_serving_constraints_are_saved_together(client, owner):
     assert Decimal(reviewed.json()["minimum_servings"]) == Decimal("1")
     assert Decimal(reviewed.json()["serving_increment"]) == Decimal("0.5")
 
+    one_sided_clear = client.put(
+        f"/api/v1/recipes/{created['id']}/review",
+        headers=headers,
+        json={
+            "expected_version": reviewed.json()["version"],
+            "title": created["title"],
+            "yield_servings": 2,
+            "minimum_servings": None,
+            "ingredients": [
+                {
+                    "lineage_id": ingredient["lineage_id"],
+                    "original_text": ingredient["original_text"],
+                    "quantity": 2,
+                    "unit": "item",
+                    "food_phrase": "eggs",
+                }
+            ],
+        },
+    )
+    assert one_sided_clear.status_code == 422
+    assert "must be supplied together" in one_sided_clear.text
+
     incomplete = client.post(
         "/api/v1/recipes",
         headers=headers,

@@ -1,7 +1,9 @@
 from decimal import Decimal
 
+from sqlalchemy import select
+
 from app.data_import.models import NormalizedFood, NutrientValue
-from app.models import FoodNutrient, FoodRecord, Household
+from app.models import FoodNutrient, FoodRecord, Household, RecipeVersion
 from app.routes import food_routes
 from app.services.open_food_facts import SearchResult
 
@@ -31,7 +33,9 @@ def test_packaged_food_search_normalizes_surrounding_whitespace(client, owner, m
     assert observed["query"] == "Greek yogurt Milbona"
 
 
-def test_manual_food_can_feed_recipes_planning_and_pantry(client, owner):
+def test_manual_food_can_feed_recipes_planning_and_pantry(
+    client, owner, session_factory
+):
     headers = {"X-CSRF-Token": owner["csrf_token"]}
     created = client.post(
         "/api/v1/saved-foods",
@@ -75,6 +79,34 @@ def test_manual_food_can_feed_recipes_planning_and_pantry(client, owner):
     )
     assert planner_choice["planner_eligible"] is True
     assert planner_choice["calculated_nutrition"]["energy_kcal"] == 180
+
+    with session_factory() as db:
+        latest = db.scalar(
+            select(RecipeVersion)
+            .where(RecipeVersion.recipe_id == planner_choice["id"])
+            .order_by(RecipeVersion.version_number.desc())
+        )
+        latest.minimum_servings = Decimal("1")
+        latest.serving_increment = Decimal("0.5")
+        db.commit()
+
+    regenerated = client.patch(
+        f"/api/v1/saved-foods/{food['id']}",
+        headers=headers,
+        json={
+            "expected_version": planned_saved["version"],
+            "display_name": planned_saved["display_name"],
+            "serving_amount": 160,
+            "serving_unit": "g",
+            "planner_enabled": True,
+            "meal_types": ["breakfast", "snack"],
+        },
+    )
+    assert regenerated.status_code == 200, regenerated.text
+    regenerated_recipe = client.get(f"/api/v1/recipes/{planner_choice['id']}")
+    assert regenerated_recipe.status_code == 200, regenerated_recipe.text
+    assert Decimal(regenerated_recipe.json()["minimum_servings"]) == Decimal("1")
+    assert Decimal(regenerated_recipe.json()["serving_increment"]) == Decimal("0.5")
 
     pantry = client.post(
         "/api/v1/pantry-items",
