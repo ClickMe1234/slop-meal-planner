@@ -253,9 +253,10 @@ function validSplitPosition(text: string, index: number | null) {
   return /[\s,;.!?]/.test(text[index - 1]) || /[\s,;.!?]/.test(text[index])
 }
 
-function manualDocument(text: string): { blocks: BackendMethodSourceBlock[]; method: BackendMethodDocument } {
-  const block: BackendMethodSourceBlock = { id: 'block-1', position: 0, text: text.trim() }
-  const clauses = [...text.matchAll(/[^.!?;\n]+(?:[.!?;]+|$)/g)].filter(match => match[0].trim())
+function manualDocument(text: string, blockId = 'block-1'): { blocks: BackendMethodSourceBlock[]; method: BackendMethodDocument } {
+  const trimmedText = text.trim()
+  const block: BackendMethodSourceBlock = { id: blockId, position: 0, text: trimmedText }
+  const clauses = [...trimmedText.matchAll(/[^.!?;\n]+(?:[.!?;]+|$)/g)].filter(match => match[0].trim())
   const annotations: BackendMethodAnnotation[] = clauses.map((match, index) => ({
     id: `annotation-${index + 1}`,
     block_id: block.id,
@@ -309,6 +310,8 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false })
   const recipe = useQuery({ queryKey: ['recipe', recipeId], queryFn: () => api.getRecipe(recipeId!), enabled: Boolean(recipeId) && !preview && !isDemoMode })
   const [servings, setServings] = useState<number | undefined>()
+  const [servingsDraft, setServingsDraft] = useState<string | null>(null)
+  const servingsInputRef = useRef<HTMLInputElement>(null)
   const methodQueryKey = preview ? ['method-preview', sourceUrl] : ['recipe-method', recipeId, batchId, servings]
   const methodQuery = useQuery({
     queryKey: methodQueryKey,
@@ -331,6 +334,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const [selectedActions, setSelectedActions] = useState<Set<string>>(new Set())
   const [selection, setSelection] = useState<SourceRange | null>(null)
   const [annotationIngredient, setAnnotationIngredient] = useState('')
+  const [sourceEditBlockId, setSourceEditBlockId] = useState<string | null>(null)
   const [activeDrag, setActiveDrag] = useState<{ id: string; type: 'ingredient' | 'action'; label: string } | null>(null)
   const [breakingAction, setBreakingAction] = useState<string | null>(null)
   const [breakingStrength, setBreakingStrength] = useState(0)
@@ -349,6 +353,9 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     setSourceBlocks(structuredClone(methodQuery.data.source_blocks))
     setNotes(methodQuery.data.household_notes ?? '')
     setAnnotationIngredient(methodQuery.data.ingredients[0]?.lineage_id ?? '')
+    if (document.activeElement !== servingsInputRef.current) {
+      setServingsDraft(methodQuery.data.requested_servings == null ? '' : String(methodQuery.data.requested_servings))
+    }
   }, [methodQuery.data, dirty])
 
   const dismissTutorial = async () => {
@@ -449,6 +456,32 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     setMethod(current => current ? updater(current) : current)
     setDirty(true)
   }
+
+  const commitServings = () => {
+    if (servingsDraft == null) return
+    const raw = servingsDraft.trim()
+    if (!raw) {
+      setServings(undefined)
+      setError('Enter a serving count greater than zero, or restore the recipe yield.')
+      return
+    }
+    const next = Number(raw)
+    if (!Number.isFinite(next) || next <= 0) {
+      setError('Enter a serving count greater than zero.')
+      return
+    }
+    setError('')
+    setServings(current => current === next ? current : next)
+  }
+
+  const servingValue = servingsDraft ?? (data?.requested_servings == null ? '' : String(servings ?? data.requested_servings))
+  const currentServingValue = servings ?? data?.requested_servings
+  const servingDraftNumber = servingValue.trim() ? Number(servingValue) : undefined
+  const servingDraftChanged = servingsDraft != null && (
+    servingValue.trim() === ''
+      ? currentServingValue != null
+      : !Number.isFinite(servingDraftNumber) || servingDraftNumber !== currentServingValue
+  )
   const acceptSuggestions = () => updateDocument(current => ({
     ...current,
     annotations: current.annotations.map(item => ({ ...item, accepted: true })),
@@ -529,6 +562,23 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     setAnnotationIngredient(lineageId)
     setError('')
     setMessage(`Linked ${ingredient.name} to “${target.text}”. Save the method to update the written view.`)
+  }
+
+  const finishSourceTextEdit = (blockId: string) => {
+    const block = sourceBlocks.find(item => item.id === blockId)
+    if (!block?.text.trim()) {
+      setError('Write some method text before finishing the wording edit.')
+      return
+    }
+    if (sourceBlocks.length === 1) {
+      const generated = manualDocument(block.text, block.id)
+      setMethod(generated.method)
+      setMessage('Wording updated. Re-link any ingredients whose words changed.')
+    }
+    setSourceEditBlockId(null)
+    setSelection(null)
+    setError('')
+    setDirty(true)
   }
 
   const tagSelection = (kind: MethodSemanticKind) => {
@@ -809,7 +859,11 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     {data.method_status === 'needs_review' && <Notice tone="warning" title="Automatically generated draft">Save when you have finished reviewing. {unreviewed ? `${unreviewed} unaccounted clause${unreviewed === 1 ? '' : 's'} will remain highlighted as a warning.` : 'The highlighted suggestions are optional to accept.'}</Notice>}
     {data.batch_context && <Card className="method-batch-banner"><Flame/><div><strong>Cook the whole batch: {data.batch_context.servings} servings</strong><span>{data.batch_context.occurrences.map(item => `${item.date} ${item.meal_type}`).join(' · ')}</span></div></Card>}
     <div className="method-toolbar">
-      {!data.batch_context && data.scaling_available && <label className="method-serving-control">Servings<input type="number" min=".25" step=".25" value={servings ?? data.requested_servings ?? ''} onChange={event => setServings(Number(event.target.value) || undefined)}/></label>}
+      {!data.batch_context && data.scaling_available && <form className="method-serving-control" onSubmit={event => { event.preventDefault(); commitServings() }}>
+        <label htmlFor="method-servings">Servings</label>
+        <input ref={servingsInputRef} id="method-servings" name="servings" type="number" min=".25" step=".25" value={servingValue} onChange={event => { setServingsDraft(event.target.value); setError('') }} onBlur={commitServings} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitServings() } }} />
+        {servingDraftChanged && <Button type="submit" variant="secondary">Apply</Button>}
+      </form>}
       <button className="method-help-button" type="button" onClick={() => setTutorialStep(0)}><CircleHelp size={17}/>How to edit</button>
     </div>
 
@@ -826,7 +880,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         <section className="method-source-editor">
           <div className="method-section-heading"><div><span className="eyebrow">1 · Mark up the source</span><h2>Original written method</h2></div><Badge>{data.source_kind === 'publisher' ? 'Read-only source' : 'Editable source'}</Badge></div>
           <div className="method-ingredient-linker">
-            <div><strong>Link amounts to exact wording</strong><span>{data.source_kind === 'publisher' ? 'Drag an ingredient onto a word, or select an ingredient then choose the word.' : 'Select wording below, choose its ingredient, then use the Ingredient label.'}</span></div>
+            <div><strong>Link amounts to exact wording</strong><span>Select an ingredient, then tap a word, or drag the ingredient onto it. This works with a mouse, touch, or keyboard.</span></div>
             <div className="method-ingredient-palette">{data.ingredients.map(ingredient => <DraggableIngredient key={ingredient.lineage_id} ingredient={ingredient} selected={selectedIngredients.has(ingredient.lineage_id)} onSelect={() => setSelectedIngredients(current => { const next = new Set(current); next.has(ingredient.lineage_id) ? next.delete(ingredient.lineage_id) : next.add(ingredient.lineage_id); return next })}/>)}</div>
           </div>
           {unreviewed > 0 && <div className="method-unreviewed" role="region" aria-labelledby="method-unreviewed-title">
@@ -839,12 +893,20 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
           </div>}
           {sourceBlocks.map((block, index) => <article className="method-source-block" key={block.id}>
             {block.heading && <h3>{block.heading}</h3>}
-            {data.source_kind === 'publisher' ? <p ref={node => { sourceRefs.current[block.id] = node }} onPointerUp={() => captureSelection(block)}>{annotatedSource(block, method.annotations, linkIngredientId, linkIngredientName, range => linkIngredientToSourceRange(linkIngredientId!, range))}</p> : <textarea value={block.text} rows={5} onChange={event => { const text = event.target.value; setSourceBlocks(items => items.map((item, itemIndex) => itemIndex === index ? { ...item, text } : item)); setDirty(true) }}/>}
+            {data.source_kind === 'publisher' || sourceEditBlockId !== block.id
+              ? <>
+                <p ref={node => { sourceRefs.current[block.id] = node }} onPointerUp={() => captureSelection(block)} onKeyUp={() => captureSelection(block)}>{annotatedSource(block, method.annotations, linkIngredientId, linkIngredientName, range => linkIngredientToSourceRange(linkIngredientId!, range))}</p>
+                {data.source_kind !== 'publisher' && <Button type="button" variant="ghost" className="method-source-edit-button" onClick={() => { setSourceEditBlockId(block.id); setSelection(null); setError('') }}><PencilLine size={15}/>Edit wording</Button>}
+              </>
+              : <div className="method-source-text-edit">
+                <textarea value={block.text} rows={5} autoFocus onChange={event => { const text = event.target.value; setSourceBlocks(items => items.map((item, itemIndex) => itemIndex === index ? { ...item, text } : item)); setSelection(null); setDirty(true) }} />
+                <div><small>Changing the wording rebuilds this block’s step suggestions. Re-link ingredients after saving.</small><Button type="button" variant="secondary" onClick={() => finishSourceTextEdit(block.id)}>Done editing wording</Button></div>
+              </div>}
             <div className="method-source-tags">{method.annotations.filter(item => item.block_id === block.id).map(annotation => <button type="button" className={`semantic-chip semantic-chip--${annotation.kind}`} key={annotation.id} title="Remove this label" onClick={() => removeAnnotation(annotation.id)}><span>{annotation.kind}: {block.text.slice(annotation.start, annotation.end)}</span><X size={12}/></button>)}</div>
           </article>)}
           {selection && <div className="semantic-toolbar" role="toolbar" aria-label="Mark selected recipe text"><div><strong>“{selection.text.slice(0, 56)}{selection.text.length > 56 ? '…' : ''}”</strong><span>What does this text mean?</span></div>{semanticTools.map(tool => { const Icon = tool.icon; return <button type="button" key={tool.kind} onClick={() => tagSelection(tool.kind)}><Icon size={15}/>{tool.label}</button> })}<button type="button" onClick={() => { updateDocument(current => ({ ...current, omissions: [...current.omissions, { id: localId('omission'), block_id: selection.blockId, start: selection.start, end: selection.end, reason: 'Omitted from concise summary', accepted: true }] })); setSelection(null) }}><Trash2 size={15}/>Omit</button>{annotationIngredient && <select aria-label="Ingredient for selected text" value={annotationIngredient} onChange={event => setAnnotationIngredient(event.target.value)}>{data.ingredients.map(item => <option key={item.lineage_id} value={item.lineage_id}>{item.name}</option>)}</select>}</div>}
         </section>
-        <section className="method-editor-save"><label>Household notes<textarea rows={3} value={notes} onChange={event => { setNotes(event.target.value); setDirty(true) }} placeholder="Add adaptations or reminders without changing the publisher wording."/></label><div><Button type="button" disabled={savePending || Boolean(conflictLatest)} onClick={() => void saveMethod()}><Save size={16}/>{savePending ? 'Saving…' : 'Save'}</Button></div></section>
+        <section className="method-editor-save"><label>Household notes<textarea rows={3} value={notes} onChange={event => { setNotes(event.target.value); setDirty(true) }} placeholder="Add adaptations or reminders without changing the publisher wording."/></label><div><Button type="button" disabled={savePending || Boolean(conflictLatest) || Boolean(sourceEditBlockId)} title={sourceEditBlockId ? 'Finish editing the method wording first.' : undefined} onClick={() => void saveMethod()}><Save size={16}/>{savePending ? 'Saving…' : 'Save'}</Button></div></section>
       </div>
       <DragOverlay>{activeDrag && <div className={`method-drag-overlay method-drag-overlay--${activeDrag.type}`}><GripVertical size={15}/>{activeDrag.label}</div>}</DragOverlay>
     </DndContext> : <WrittenMethod data={data}/>}

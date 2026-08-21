@@ -1,4 +1,7 @@
+from datetime import date
 from decimal import Decimal
+
+from sqlalchemy import select
 
 from app.schemas import MethodDocument
 from app.services.recipe_methods import parse_method_document
@@ -157,6 +160,98 @@ def test_custom_method_is_saved_scaled_localised_and_versioned(client, owner, se
             select(func.count(RecipeVersion.id)).where(RecipeVersion.recipe_id == recipe["id"])
         )
     assert version_count == 2
+
+
+def test_custom_method_wording_is_persisted_on_the_recipe_version(client, owner):
+    recipe = _custom_recipe(client, owner, "Fry the zucchini in a pan for 5 minutes.")
+    initial = client.get(f"/api/v1/recipes/{recipe['id']}/method").json()
+    document = MethodDocument.model_validate(initial["method"])
+    updated_text = "Cook the zucchini in a pan for 5 minutes."
+
+    response = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method",
+        headers=_headers(owner),
+        json={
+            "expected_version": initial["recipe_version"],
+            "method": document.model_dump(mode="json"),
+            "mark_reviewed": False,
+            "source_kind": "custom",
+            "source_blocks": [{**initial["source_blocks"][0], "text": updated_text}],
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    recipe_detail = client.get(f"/api/v1/recipes/{recipe['id']}").json()
+    assert recipe_detail["custom_instructions"] == updated_text
+    reloaded = client.get(f"/api/v1/recipes/{recipe['id']}/method").json()
+    assert reloaded["source_blocks"][0]["text"] == updated_text
+
+
+def test_custom_method_without_a_snapshot_is_repaired_from_submitted_instructions(
+    client, owner, session_factory
+):
+    recipe = _custom_recipe(client, owner, "Fry the zucchini until tender.")
+    with session_factory() as db:
+        from app.models import RecipeMethodSnapshot, RecipeVersion
+
+        version = db.scalar(select(RecipeVersion).where(RecipeVersion.recipe_id == recipe["id"]))
+        assert version is not None
+        snapshot = db.scalar(
+            select(RecipeMethodSnapshot).where(RecipeMethodSnapshot.recipe_version_id == version.id)
+        )
+        assert snapshot is not None
+        db.delete(snapshot)
+        db.commit()
+
+    response = client.get(f"/api/v1/recipes/{recipe['id']}/method")
+    assert response.status_code == 200, response.text
+    assert response.json()["source_blocks"][0]["text"] == "Fry the zucchini until tender."
+
+    with session_factory() as db:
+        from app.models import RecipeMethodSnapshot, RecipeVersion
+
+        version = db.scalar(select(RecipeVersion).where(RecipeVersion.recipe_id == recipe["id"]))
+        assert version is not None
+        assert db.scalar(
+            select(RecipeMethodSnapshot).where(RecipeMethodSnapshot.recipe_version_id == version.id)
+        ) is not None
+
+
+def test_batch_method_scales_custom_recipe_ingredients_to_planned_servings(
+    client, owner, session_factory
+):
+    recipe = _custom_recipe(client, owner)
+    with session_factory() as db:
+        from app.models import Household, MealBatch, MealPlan, RecipeVersion
+
+        household = db.scalar(select(Household))
+        version = db.scalar(select(RecipeVersion).where(RecipeVersion.recipe_id == recipe["id"]))
+        assert household is not None
+        assert version is not None
+        plan = MealPlan(
+            household_id=household.id,
+            name="Week",
+            start_date=date(2026, 8, 24),
+            end_date=date(2026, 8, 30),
+        )
+        db.add(plan)
+        db.flush()
+        batch = MealBatch(
+            meal_plan_id=plan.id,
+            recipe_version_id=version.id,
+            servings=8,
+            planned_cook_date=plan.start_date,
+        )
+        db.add(batch)
+        db.commit()
+        batch_id = batch.id
+
+    response = client.get(f"/api/v1/recipes/{recipe['id']}/method?batch_id={batch_id}")
+    assert response.status_code == 200, response.text
+    method = response.json()
+    assert method["batch_context"]["servings"] == 8
+    assert method["requested_servings"] == "8.00"
+    assert method["ingredients"][0]["quantity_text"] == "4"
 
 
 def test_unaccounted_clause_warns_but_does_not_block_review_or_persistence(client, owner):
