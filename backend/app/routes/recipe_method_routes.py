@@ -367,6 +367,39 @@ def _method_view(
     )
 
 
+def _repair_custom_method_snapshot(
+    db: Session,
+    version: RecipeVersion,
+    user_id: str,
+) -> RecipeMethodSnapshot | None:
+    """Recreate the method snapshot for older custom versions if needed."""
+
+    instructions = (version.custom_instructions or "").strip()
+    if not instructions or version.method_snapshot is not None:
+        return version.method_snapshot
+    blocks = [
+        {
+            "id": "block-1",
+            "position": 0,
+            "heading": None,
+            "text": instructions,
+        }
+    ]
+    snapshot = RecipeMethodSnapshot(
+        recipe_version_id=version.id,
+        **snapshot_values(
+            blocks=blocks,
+            ingredients=version.ingredients,
+            source_kind="custom",
+            extractor_version="user-authored",
+            created_by_user_id=user_id,
+        ),
+    )
+    db.add(snapshot)
+    db.flush()
+    return snapshot
+
+
 def _recipe_for_household(db: Session, recipe_id: str, household_id: str) -> Recipe:
     recipe = db.get(Recipe, recipe_id)
     if recipe is None or recipe.household_id != household_id or recipe.archived_at is not None:
@@ -516,6 +549,22 @@ def get_recipe_method(
             raise DomainError("CORRUPT_RECIPE", "The recipe has no version.", 500)
         requested = servings or version.yield_servings
     snapshot = version.method_snapshot
+    if snapshot is None and recipe.source_type == "custom":
+        locked_version = db.scalar(
+            select(RecipeVersion)
+            .where(RecipeVersion.id == version.id)
+            .with_for_update()
+        )
+        if locked_version is not None:
+            db.expire(locked_version, ["method_snapshot"])
+            version = locked_version
+            snapshot = version.method_snapshot
+        if snapshot is None:
+            repaired = _repair_custom_method_snapshot(db, version, context.user.id)
+            if repaired is not None:
+                db.commit()
+                db.expire(version, ["method_snapshot"])
+                snapshot = version.method_snapshot or repaired
     if snapshot is None:
         if batch_id and batch_context and batch_context.get("cooked_at"):
             raise DomainError(
@@ -689,6 +738,8 @@ def update_recipe_method(
         reviewed_by_user_id=context.user.id if payload.mark_reviewed else None,
         reviewed_at=now if payload.mark_reviewed else None,
     )
+    if recipe.source_type == "custom" and source_kind == "custom":
+        next_version.custom_instructions = source_text
     db.add(snapshot)
     recipe.version += 1
     sync_recipe_versions_to_current_plans(

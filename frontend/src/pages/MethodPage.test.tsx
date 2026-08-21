@@ -74,6 +74,12 @@ const onionMethodView: BackendMethodView = {
   }],
 }
 
+const customMethodView: BackendMethodView = {
+  ...onionMethodView,
+  title: 'Custom onion supper',
+  source_kind: 'custom',
+}
+
 function renderMethod() {
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -271,6 +277,97 @@ describe('MethodPage', () => {
       accepted: true,
     })
     expect(binding?.annotation_id).toBe(annotation?.id)
+  })
+
+  it('links an ingredient to custom-method wording without requiring a publisher source', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(customMethodView)
+    const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => ({
+      ...customMethodView,
+      recipe_version: 2,
+      recipe_version_number: 2,
+      method: payload.method,
+    }))
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Custom onion supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    await user.click(screen.getByRole('button', { name: /red onions/i }))
+    await user.click(screen.getByRole('button', { name: 'Link red onions to “onions”' }))
+
+    expect(screen.getByText(/Linked red onions to “onions”/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+
+    const payload = save.mock.calls[0]![1]
+    expect(payload.source_kind).toBe('custom')
+    expect(payload.source_blocks).toEqual([expect.objectContaining({ text: onionSource })])
+    expect(payload.method.annotations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ingredient_lineage_id: 'red-onion-lineage',
+        origin: 'user',
+        accepted: true,
+      }),
+    ]))
+  })
+
+  it('blocks closing and saving while custom wording is being edited', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(customMethodView)
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Custom onion supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    await user.click(screen.getByRole('button', { name: 'Edit wording' }))
+
+    expect(screen.getByRole('button', { name: 'Close editor' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+
+  it('keeps serving edits local until Apply so typing does not refetch or lose focus', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(methodView)
+    const getMethod = vi.mocked(api.getRecipeMethod)
+
+    renderMethod()
+
+    await waitFor(() => expect(getMethod).toHaveBeenCalledTimes(1))
+    const input = await screen.findByRole('spinbutton', { name: 'Servings' })
+    await user.clear(input)
+    await user.type(input, '8')
+
+    expect(input).toHaveValue(8)
+    expect(getMethod).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+    await waitFor(() => expect(getMethod).toHaveBeenLastCalledWith('recipe-1', {
+      batchId: undefined,
+      servings: 8,
+    }))
+  })
+
+  it('keeps a failed serving request retryable and shows the failure', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(methodView)
+    vi.mocked(api.getRecipeMethod).mockImplementation(async (_recipeId, options) => {
+      if (options?.servings === 8) throw new Error('The serving request failed.')
+      return methodView
+    })
+
+    renderMethod()
+
+    const input = await screen.findByRole('spinbutton', { name: 'Servings' })
+    await user.clear(input)
+    await user.type(input, '8')
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+    expect(await screen.findByText('The serving request failed.')).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: 'Servings' })).toHaveValue(8)
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled()
   })
 
   it('does not expose cooking-flow controls that cannot affect the written view', async () => {

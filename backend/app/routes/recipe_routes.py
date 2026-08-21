@@ -522,6 +522,7 @@ def create_recipe(
     db.flush()
     for meal_type in payload.meal_types:
         db.add(RecipeMealType(recipe_id=recipe.id, meal_type=meal_type.value))
+    instruction_text = payload.custom_instructions.strip() if payload.custom_instructions else None
     version = RecipeVersion(
         recipe_id=recipe.id,
         version_number=1,
@@ -529,7 +530,7 @@ def create_recipe(
         yield_servings=payload.yield_servings,
         minimum_servings=payload.minimum_servings,
         serving_increment=payload.serving_increment,
-        custom_instructions=payload.custom_instructions,
+        custom_instructions=instruction_text,
         publisher_nutrition=payload.publisher_nutrition,
     )
     db.add(version)
@@ -540,13 +541,13 @@ def create_recipe(
         db.add(ingredient)
         created_ingredients.append(ingredient)
     db.flush()
-    if payload.custom_instructions and payload.custom_instructions.strip():
+    if instruction_text:
         blocks = [
             {
                 "id": "block-1",
                 "position": 0,
                 "heading": None,
-                "text": payload.custom_instructions.strip(),
+                "text": instruction_text,
             }
         ]
         db.add(
