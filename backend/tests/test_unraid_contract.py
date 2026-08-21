@@ -12,7 +12,7 @@ def test_unraid_template_matches_production_runtime_contract():
     configs = {config.attrib["Target"]: config for config in root.findall("Config")}
 
     assert root.findtext("Name") == "Slop Meal Planner"
-    assert root.findtext("Repository") == "ghcr.io/clickme1234/slop-meal-planner:1.3.3"
+    assert root.findtext("Repository") == "ghcr.io/clickme1234/slop-meal-planner:1.3.4"
     assert root.findtext("Network") == "Bridge"
     assert root.findtext("PostArgs") == ""
     assert root.findtext("WebUI") == "https://[IP]:[PORT:8000]/"

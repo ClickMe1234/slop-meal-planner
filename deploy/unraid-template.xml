@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Slop Meal Planner</Name>
-  <Repository>ghcr.io/clickme1234/slop-meal-planner:1.3.3</Repository>
+  <Repository>ghcr.io/clickme1234/slop-meal-planner:1.3.4</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>Bridge</Network>
   <MyIP></MyIP>

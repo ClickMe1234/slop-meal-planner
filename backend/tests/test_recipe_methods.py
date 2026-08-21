@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -252,6 +252,104 @@ def test_batch_method_scales_custom_recipe_ingredients_to_planned_servings(
     assert method["batch_context"]["servings"] == 8
     assert method["requested_servings"] == "8.00"
     assert method["ingredients"][0]["quantity_text"] == "4"
+
+
+def test_cooked_historical_batch_can_capture_the_current_method(
+    client, owner, session_factory
+):
+    recipe = _custom_recipe(client, owner, "Fry the zucchini in a pan for 5 minutes.")
+    initial = client.get(f"/api/v1/recipes/{recipe['id']}/method").json()
+    updated_text = "Cook the zucchini gently in a pan for 7 minutes."
+    updated = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method",
+        headers=_headers(owner),
+        json={
+            "expected_version": initial["recipe_version"],
+            "method": initial["method"],
+            "mark_reviewed": True,
+            "source_kind": "custom",
+            "source_blocks": [{**initial["source_blocks"][0], "text": updated_text}],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+
+    with session_factory() as db:
+        from app.models import Household, MealBatch, MealPlan, RecipeMethodSnapshot, RecipeVersion
+
+        household = db.scalar(select(Household))
+        versions = db.scalars(
+            select(RecipeVersion)
+            .where(RecipeVersion.recipe_id == recipe["id"])
+            .order_by(RecipeVersion.version_number)
+        ).all()
+        assert len(versions) == 2
+        assert household is not None
+        historical, latest = versions
+        old_snapshot = db.scalar(
+            select(RecipeMethodSnapshot).where(
+                RecipeMethodSnapshot.recipe_version_id == historical.id
+            )
+        )
+        assert old_snapshot is not None
+        historical.custom_instructions = None
+        db.delete(old_snapshot)
+        plan = MealPlan(
+            household_id=household.id,
+            name="Historical recovery",
+            start_date=date(2026, 8, 24),
+            end_date=date(2026, 8, 30),
+        )
+        db.add(plan)
+        db.flush()
+        batch = MealBatch(
+            meal_plan_id=plan.id,
+            recipe_version_id=historical.id,
+            servings=8,
+            planned_cook_date=plan.start_date,
+            cooked_at=datetime.now(timezone.utc),
+        )
+        db.add(batch)
+        db.commit()
+        batch_id = batch.id
+        historical_id = historical.id
+        latest_id = latest.id
+
+    missing = client.get(f"/api/v1/recipes/{recipe['id']}/method?batch_id={batch_id}")
+    assert missing.status_code == 409, missing.text
+    assert missing.json()["code"] == "HISTORICAL_METHOD_NOT_CAPTURED"
+    assert missing.json()["actions"][0] == {
+        "kind": "recover_historical_method",
+        "label": "Use current method for this batch",
+        "recipe_id": recipe["id"],
+        "batch_id": batch_id,
+        "suggestion": (
+            "This copies the current saved method onto the historical batch so it can be "
+            "scaled. The cooked record and batch ingredients stay unchanged."
+        ),
+    }
+
+    recovered = client.post(
+        f"/api/v1/recipes/{recipe['id']}/method/recover-historical?batch_id={batch_id}",
+        headers=_headers(owner),
+    )
+    assert recovered.status_code == 200, recovered.text
+    method = recovered.json()
+    assert method["source_blocks"][0]["text"] == updated_text
+    assert method["requested_servings"] == "8.00"
+    assert method["ingredients"][0]["quantity_text"] == "4"
+
+    with session_factory() as db:
+        from app.models import MealBatch, RecipeMethodSnapshot
+
+        batch = db.get(MealBatch, batch_id)
+        assert batch is not None
+        assert batch.recipe_version_id == historical_id
+        assert batch.recipe_version_id != latest_id
+        assert db.scalar(
+            select(RecipeMethodSnapshot).where(
+                RecipeMethodSnapshot.recipe_version_id == historical_id
+            )
+        ) is not None
 
 
 def test_unaccounted_clause_warns_but_does_not_block_review_or_persistence(client, owner):

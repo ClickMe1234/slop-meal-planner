@@ -1532,6 +1532,9 @@ button.tag { cursor: pointer; font: inherit; }
 /* Recipe methods: an ingredient rail feeding an editable cooking flow. */
 .method-page { --method-line:color-mix(in srgb,var(--primary) 28%,var(--border)); }
 .method-page>.notice { margin-bottom:14px; }
+.method-recovery-action { display:grid;gap:8px;margin-top:10px; }
+.method-recovery-action small { color:var(--muted);font-size:.69rem;line-height:1.45; }
+.method-recovery-action .button { justify-self:start;min-height:39px; }
 .method-status { display:flex;justify-content:flex-end;margin:-12px 0 14px; }
 .method-toolbar { align-items:center;background:color-mix(in srgb,var(--surface) 92%,transparent);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-soft);display:flex;gap:14px;justify-content:space-between;margin-bottom:20px;padding:10px;position:sticky;top:14px;z-index:12; }
 .method-serving-control { align-items:center;color:var(--muted);display:flex;gap:8px;margin-left:auto; }
