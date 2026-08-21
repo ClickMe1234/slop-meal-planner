@@ -312,6 +312,20 @@ describe('MethodPage', () => {
     ]))
   })
 
+  it('blocks closing and saving while custom wording is being edited', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(customMethodView)
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Custom onion supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    await user.click(screen.getByRole('button', { name: 'Edit wording' }))
+
+    expect(screen.getByRole('button', { name: 'Close editor' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+
   it('keeps serving edits local until Apply so typing does not refetch or lose focus', async () => {
     const user = userEvent.setup()
     mockMethodPage(methodView)
@@ -334,6 +348,26 @@ describe('MethodPage', () => {
       batchId: undefined,
       servings: 8,
     }))
+  })
+
+  it('keeps a failed serving request retryable and shows the failure', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(methodView)
+    vi.mocked(api.getRecipeMethod).mockImplementation(async (_recipeId, options) => {
+      if (options?.servings === 8) throw new Error('The serving request failed.')
+      return methodView
+    })
+
+    renderMethod()
+
+    const input = await screen.findByRole('spinbutton', { name: 'Servings' })
+    await user.clear(input)
+    await user.type(input, '8')
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+    expect(await screen.findByText('The serving request failed.')).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: 'Servings' })).toHaveValue(8)
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled()
   })
 
   it('does not expose cooking-flow controls that cannot affect the written view', async () => {

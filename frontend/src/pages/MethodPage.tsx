@@ -312,6 +312,10 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const [servings, setServings] = useState<number | undefined>()
   const [servingsDraft, setServingsDraft] = useState<string | null>(null)
   const servingsInputRef = useRef<HTMLInputElement>(null)
+  const servingRequestRef = useRef<{ previous: number | undefined; requested: number } | null>(null)
+  const preserveServingDraftRef = useRef(false)
+  const [servingPending, setServingPending] = useState(false)
+  const [servingError, setServingError] = useState('')
   const methodQueryKey = preview ? ['method-preview', sourceUrl] : ['recipe-method', recipeId, batchId, servings]
   const methodQuery = useQuery({
     queryKey: methodQueryKey,
@@ -353,10 +357,27 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     setSourceBlocks(structuredClone(methodQuery.data.source_blocks))
     setNotes(methodQuery.data.household_notes ?? '')
     setAnnotationIngredient(methodQuery.data.ingredients[0]?.lineage_id ?? '')
-    if (document.activeElement !== servingsInputRef.current) {
+    const request = servingRequestRef.current
+    const responseServings = methodQuery.data.requested_servings == null ? undefined : Number(methodQuery.data.requested_servings)
+    if (request && responseServings === request.requested) {
+      servingRequestRef.current = null
+      setServingPending(false)
+    }
+    if (!preserveServingDraftRef.current && document.activeElement !== servingsInputRef.current) {
       setServingsDraft(methodQuery.data.requested_servings == null ? '' : String(methodQuery.data.requested_servings))
     }
+    preserveServingDraftRef.current = false
   }, [methodQuery.data, dirty])
+
+  useEffect(() => {
+    const request = servingRequestRef.current
+    if (!request || !methodQuery.error) return
+    servingRequestRef.current = null
+    preserveServingDraftRef.current = true
+    setServings(request.previous)
+    setServingPending(false)
+    setServingError(methodQuery.error instanceof Error ? methodQuery.error.message : 'The serving count could not be loaded. Try again.')
+  }, [methodQuery.error])
 
   const dismissTutorial = async () => {
     setTutorialStep(null)
@@ -457,31 +478,44 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     setDirty(true)
   }
 
-  const commitServings = () => {
-    if (servingsDraft == null) return
-    const raw = servingsDraft.trim()
-    if (!raw) {
-      setServings(undefined)
-      setError('Enter a serving count greater than zero, or restore the recipe yield.')
-      return
-    }
-    const next = Number(raw)
-    if (!Number.isFinite(next) || next <= 0) {
-      setError('Enter a serving count greater than zero.')
-      return
-    }
-    setError('')
-    setServings(current => current === next ? current : next)
-  }
-
   const servingValue = servingsDraft ?? (data?.requested_servings == null ? '' : String(servings ?? data.requested_servings))
-  const currentServingValue = servings ?? data?.requested_servings
+  const currentServingValue = servingPending
+    ? servingRequestRef.current?.previous ?? data?.requested_servings
+    : servings ?? data?.requested_servings
   const servingDraftNumber = servingValue.trim() ? Number(servingValue) : undefined
   const servingDraftChanged = servingsDraft != null && (
     servingValue.trim() === ''
       ? currentServingValue != null
       : !Number.isFinite(servingDraftNumber) || servingDraftNumber !== currentServingValue
   )
+  const requestServings = (next: number) => {
+    if (currentServingValue === next) {
+      setServingError('')
+      return
+    }
+    servingRequestRef.current = { previous: servings, requested: next }
+    setServingError('')
+    setServingPending(true)
+    setServings(next)
+  }
+  const commitServings = () => {
+    if (servingsDraft == null) return
+    const raw = servingsDraft.trim()
+    if (!raw) {
+      if (data?.base_servings == null) {
+        setServingError('Enter a serving count greater than zero.')
+        return
+      }
+      requestServings(Number(data.base_servings))
+      return
+    }
+    const next = Number(raw)
+    if (!Number.isFinite(next) || next <= 0) {
+      setServingError('Enter a serving count greater than zero.')
+      return
+    }
+    requestServings(next)
+  }
   const acceptSuggestions = () => updateDocument(current => ({
     ...current,
     annotations: current.annotations.map(item => ({ ...item, accepted: true })),
@@ -849,10 +883,11 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         <Link className="button button--ghost" to={batchId ? '/week' : '/recipes'}><ArrowLeft size={17}/>Back</Link>
         {safeExternalUrl(data.source_url) && <a className="button button--secondary" href={safeExternalUrl(data.source_url) ?? undefined} target="_blank" rel="noreferrer">Source <ExternalLink size={16}/></a>}
         {!preview && data.source_kind === 'publisher' && <Button variant="secondary" disabled={refreshPreview.isPending} onClick={() => refreshPreview.mutate()}><RefreshCw className={refreshPreview.isPending ? 'spin' : ''} size={16}/>{refreshPreview.isPending ? 'Checking…' : 'Check source'}</Button>}
-        {!preview && !editing && data.method_status === 'needs_review' && <Button type="button" disabled={savePending || Boolean(conflictLatest)} onClick={() => void saveMethod()}><Save size={16}/>{savePending ? 'Saving…' : 'Save'}</Button>}
-        {!preview && <Button variant="secondary" onClick={() => setEditing(value => !value)}><PencilLine size={16}/>{editing ? 'Close editor' : 'Edit method'}</Button>}
+        {!preview && !editing && data.method_status === 'needs_review' && <Button type="button" disabled={savePending || Boolean(conflictLatest) || Boolean(sourceEditBlockId)} title={sourceEditBlockId ? 'Finish editing the method wording first.' : undefined} onClick={() => void saveMethod()}><Save size={16}/>{savePending ? 'Saving…' : 'Save'}</Button>}
+        {!preview && <Button variant="secondary" disabled={Boolean(sourceEditBlockId)} title={sourceEditBlockId ? 'Finish editing the method wording first.' : undefined} onClick={() => setEditing(value => !value)}><PencilLine size={16}/>{editing ? 'Close editor' : 'Edit method'}</Button>}
       </>}
     />
+    {servingError && <Notice tone="warning" title="Serving count not applied">{servingError}</Notice>}
     {error && <Notice tone="warning" title="Method update failed">{error}</Notice>}
     {message && <Notice tone="success" title="Saved">{message}</Notice>}
     <div className="method-status" aria-live="polite"><Badge tone={data.method_status === 'reviewed' ? 'green' : 'warning'}>{data.method_status === 'reviewed' ? 'Reviewed' : 'Needs review'}</Badge></div>
@@ -861,8 +896,8 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     <div className="method-toolbar">
       {!data.batch_context && data.scaling_available && <form className="method-serving-control" onSubmit={event => { event.preventDefault(); commitServings() }}>
         <label htmlFor="method-servings">Servings</label>
-        <input ref={servingsInputRef} id="method-servings" name="servings" type="number" min=".25" step=".25" value={servingValue} onChange={event => { setServingsDraft(event.target.value); setError('') }} onBlur={commitServings} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitServings() } }} />
-        {servingDraftChanged && <Button type="submit" variant="secondary">Apply</Button>}
+        <input ref={servingsInputRef} id="method-servings" name="servings" type="number" min=".25" step=".25" value={servingValue} onChange={event => { setServingsDraft(event.target.value); setError(''); setServingError('') }} onBlur={commitServings} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitServings() } }} />
+        {servingDraftChanged && <Button type="submit" variant="secondary" disabled={servingPending}>{servingPending ? 'Applying…' : 'Apply'}</Button>}
       </form>}
       <button className="method-help-button" type="button" onClick={() => setTutorialStep(0)}><CircleHelp size={17}/>How to edit</button>
     </div>

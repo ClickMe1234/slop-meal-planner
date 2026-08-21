@@ -550,11 +550,21 @@ def get_recipe_method(
         requested = servings or version.yield_servings
     snapshot = version.method_snapshot
     if snapshot is None and recipe.source_type == "custom":
-        repaired = _repair_custom_method_snapshot(db, version, context.user.id)
-        if repaired is not None:
-            db.commit()
-            db.refresh(version)
-            snapshot = version.method_snapshot or repaired
+        locked_version = db.scalar(
+            select(RecipeVersion)
+            .where(RecipeVersion.id == version.id)
+            .with_for_update()
+        )
+        if locked_version is not None:
+            db.expire(locked_version, ["method_snapshot"])
+            version = locked_version
+            snapshot = version.method_snapshot
+        if snapshot is None:
+            repaired = _repair_custom_method_snapshot(db, version, context.user.id)
+            if repaired is not None:
+                db.commit()
+                db.expire(version, ["method_snapshot"])
+                snapshot = version.method_snapshot or repaired
     if snapshot is None:
         if batch_id and batch_context and batch_context.get("cooked_at"):
             raise DomainError(
