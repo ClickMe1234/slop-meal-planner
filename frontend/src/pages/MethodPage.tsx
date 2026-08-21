@@ -337,6 +337,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const [savePending, setSavePending] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState('')
+  const [recoveryError, setRecoveryError] = useState('')
   const [message, setMessage] = useState('')
   const [manualText, setManualText] = useState('')
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
@@ -438,10 +439,15 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
       setNotes(result.household_notes ?? '')
       setDirty(false)
       setServingError('')
+      setRecoveryError('')
       setMessage('The current method was captured for this historical batch. The cooked record and batch ingredients were unchanged.')
       void queryClient.invalidateQueries({ queryKey: ['recipes'] })
     },
-    onError: reason => setServingError(reason instanceof Error ? reason.message : 'The historical method could not be captured.'),
+    onError: reason => {
+      const message = reason instanceof Error ? reason.message : 'The historical method could not be captured.'
+      setServingError(message)
+      setRecoveryError(message)
+    },
   })
 
   const saveMethod = async () => {
@@ -543,7 +549,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const recoveryAction = historicalRecoveryAction(methodQuery.error)
   const recoveryActionView = recoveryAction && batchId ? <div className="method-recovery-action">
     <small>{recoveryAction.suggestion ?? 'Copy the current saved method onto this historical batch to continue.'}</small>
-    <Button type="button" variant="secondary" disabled={recoverHistorical.isPending} onClick={() => recoverHistorical.mutate()}>
+    <Button type="button" variant="secondary" disabled={recoverHistorical.isPending} onClick={() => { setRecoveryError(''); recoverHistorical.mutate() }}>
       {recoverHistorical.isPending ? 'Capturing…' : recoveryAction.label ?? 'Use current method for this batch'}
     </Button>
   </div> : null
@@ -887,6 +893,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     return <div className="page page--narrow">
       <PageHeader eyebrow="Cooking method" title={recipe.data?.title ?? 'Create a method'} description="Fetch the source on demand, or write the method yourself."/>
       {error && <Notice tone="warning" title="Method unavailable">{error}</Notice>}
+      {recoveryError && <Notice tone="warning" title="Historical method recovery failed">{recoveryError}</Notice>}
       {methodQuery.error && !unavailable && <Notice tone="warning" title="Method unavailable">
         <span>{methodQuery.error instanceof Error ? methodQuery.error.message : 'The method could not be loaded.'}</span>
         {recoveryActionView}

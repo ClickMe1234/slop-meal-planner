@@ -411,6 +411,26 @@ describe('MethodPage', () => {
     expect(screen.getByText('Custom onion supper')).toBeInTheDocument()
   })
 
+  it('shows a recovery failure while the historical method is still unavailable', async () => {
+    const user = userEvent.setup()
+    mockMethodPage()
+    const historicalError = new ApiError(
+      409,
+      'This cooked batch predates method capture.',
+      'HISTORICAL_METHOD_NOT_CAPTURED',
+      [{ kind: 'recover_historical_method', label: 'Use current method for this batch', batch_id: 'batch-1' }],
+    )
+    vi.mocked(api.getRecipeMethod).mockRejectedValue(historicalError)
+    vi.spyOn(api, 'recoverHistoricalRecipeMethod').mockRejectedValue(new Error('Save the current recipe method first.'))
+
+    renderMethod('/recipes/recipe-1/method?batch=batch-1')
+
+    await user.click(await screen.findByRole('button', { name: 'Use current method for this batch' }))
+
+    expect(await screen.findByText('Historical method recovery failed')).toBeInTheDocument()
+    expect(screen.getByText('Save the current recipe method first.')).toBeInTheDocument()
+  })
+
   it('does not expose cooking-flow controls that cannot affect the written view', async () => {
     const user = userEvent.setup()
     mockMethodPage(onionMethodView)
