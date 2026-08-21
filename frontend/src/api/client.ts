@@ -296,6 +296,7 @@ export const api = {
   },
   extractRecipeMethod: (recipeId: string, expectedVersion?: number) => request<BackendMethodView>(`/recipes/${recipeId}/method/extract`, { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) }),
   saveRecipeMethod: (recipeId: string, payload: BackendMethodUpdate) => request<BackendMethodView>(`/recipes/${recipeId}/method`, { method: 'PUT', body: JSON.stringify(payload) }),
+  recoverHistoricalRecipeMethod: (recipeId: string, batchId: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/recover-historical?batch_id=${encodeURIComponent(batchId)}`, { method: 'POST' }),
   previewMethodRefresh: (recipeId: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/refresh-preview`, { method: 'POST' }),
   applyMethodRefresh: (recipeId: string, expectedVersion: number, previewToken: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/refresh`, { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion, preview_token: previewToken }) }),
   startImport: (url: string) =>

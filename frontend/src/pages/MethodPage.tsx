@@ -50,6 +50,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   api,
   ApiError,
+  type ApiAction,
   isDemoMode,
   type BackendMethodAction,
   type BackendMethodAnnotation,
@@ -83,6 +84,11 @@ type SourceRange = {
   start: number
   end: number
   text: string
+}
+
+function historicalRecoveryAction(error: unknown): ApiAction | undefined {
+  if (!(error instanceof ApiError) || error.code !== 'HISTORICAL_METHOD_NOT_CAPTURED') return undefined
+  return error.actions.find(action => action.kind === 'recover_historical_method')
 }
 
 function isUnreviewedClause(annotation: BackendMethodAnnotation) {
@@ -419,6 +425,24 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     },
     onError: reason => setError(reason instanceof Error ? reason.message : 'The refreshed method could not be applied.'),
   })
+  const recoverHistorical = useMutation({
+    mutationFn: () => {
+      if (!recipeId || !batchId) throw new Error('This recovery action needs a meal batch.')
+      return api.recoverHistoricalRecipeMethod(recipeId, batchId)
+    },
+    onSuccess: result => {
+      queryClient.setQueryData(methodQueryKey, result)
+      setData(result)
+      setMethod(structuredClone(result.method))
+      setSourceBlocks(structuredClone(result.source_blocks))
+      setNotes(result.household_notes ?? '')
+      setDirty(false)
+      setServingError('')
+      setMessage('The current method was captured for this historical batch. The cooked record and batch ingredients were unchanged.')
+      void queryClient.invalidateQueries({ queryKey: ['recipes'] })
+    },
+    onError: reason => setServingError(reason instanceof Error ? reason.message : 'The historical method could not be captured.'),
+  })
 
   const saveMethod = async () => {
     if (!recipeId || preview || !method || !data?.recipe_version || savePending) return
@@ -516,6 +540,13 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     }
     requestServings(next)
   }
+  const recoveryAction = historicalRecoveryAction(methodQuery.error)
+  const recoveryActionView = recoveryAction && batchId ? <div className="method-recovery-action">
+    <small>{recoveryAction.suggestion ?? 'Copy the current saved method onto this historical batch to continue.'}</small>
+    <Button type="button" variant="secondary" disabled={recoverHistorical.isPending} onClick={() => recoverHistorical.mutate()}>
+      {recoverHistorical.isPending ? 'Capturing…' : recoveryAction.label ?? 'Use current method for this batch'}
+    </Button>
+  </div> : null
   const acceptSuggestions = () => updateDocument(current => ({
     ...current,
     annotations: current.annotations.map(item => ({ ...item, accepted: true })),
@@ -856,7 +887,10 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     return <div className="page page--narrow">
       <PageHeader eyebrow="Cooking method" title={recipe.data?.title ?? 'Create a method'} description="Fetch the source on demand, or write the method yourself."/>
       {error && <Notice tone="warning" title="Method unavailable">{error}</Notice>}
-      {methodQuery.error && !unavailable && <Notice tone="warning" title="Method unavailable">{methodQuery.error instanceof Error ? methodQuery.error.message : 'The method could not be loaded.'}</Notice>}
+      {methodQuery.error && !unavailable && <Notice tone="warning" title="Method unavailable">
+        <span>{methodQuery.error instanceof Error ? methodQuery.error.message : 'The method could not be loaded.'}</span>
+        {recoveryActionView}
+      </Notice>}
       <Card className="method-empty-state">
         {recipe.data?.source_url && <Button disabled={extract.isPending} onClick={() => extract.mutate()}><Sparkles size={17}/>{extract.isPending ? 'Reading source…' : 'Create draft from source'}</Button>}
         <div className="method-empty-divider"><span>or</span></div>
@@ -887,7 +921,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         {!preview && <Button variant="secondary" disabled={Boolean(sourceEditBlockId)} title={sourceEditBlockId ? 'Finish editing the method wording first.' : undefined} onClick={() => setEditing(value => !value)}><PencilLine size={16}/>{editing ? 'Close editor' : 'Edit method'}</Button>}
       </>}
     />
-    {servingError && <Notice tone="warning" title="Serving count not applied">{servingError}</Notice>}
+    {servingError && <Notice tone="warning" title="Serving count not applied"><span>{servingError}</span>{recoveryActionView}</Notice>}
     {error && <Notice tone="warning" title="Method update failed">{error}</Notice>}
     {message && <Notice tone="success" title="Saved">{message}</Notice>}
     <div className="method-status" aria-live="polite"><Badge tone={data.method_status === 'reviewed' ? 'green' : 'warning'}>{data.method_status === 'reviewed' ? 'Reviewed' : 'Needs review'}</Badge></div>

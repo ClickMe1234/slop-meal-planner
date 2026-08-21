@@ -407,6 +407,44 @@ def _recipe_for_household(db: Session, recipe_id: str, household_id: str) -> Rec
     return recipe
 
 
+def _batch_context(db: Session, batch: MealBatch) -> dict[str, Any]:
+    occurrences = db.scalars(
+        select(MealOccurrence)
+        .where(MealOccurrence.batch_id == batch.id)
+        .order_by(MealOccurrence.meal_date, MealOccurrence.meal_type)
+    ).all()
+    return {
+        "batch_id": batch.id,
+        "servings": float(batch.servings),
+        "planned_cook_date": batch.planned_cook_date.isoformat(),
+        "cooked_at": batch.cooked_at.isoformat() if batch.cooked_at else None,
+        "occurrences": [
+            {"date": item.meal_date.isoformat(), "meal_type": item.meal_type}
+            for item in occurrences
+        ],
+    }
+
+
+def _historical_method_recovery_actions(recipe_id: str, batch_id: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": "recover_historical_method",
+            "label": "Use current method for this batch",
+            "recipe_id": recipe_id,
+            "batch_id": batch_id,
+            "suggestion": (
+                "This copies the current saved method onto the historical batch so it can be "
+                "scaled. The cooked record and batch ingredients stay unchanged."
+            ),
+        },
+        {
+            "kind": "current_method",
+            "label": "Open current recipe method",
+            "href": f"/recipes/{recipe_id}/method",
+        },
+    ]
+
+
 @router.post("/recipe-discovery/method-previews", response_model=MethodViewOut)
 async def create_method_preview(
     payload: MethodPreviewCreate,
@@ -528,21 +566,7 @@ def get_recipe_method(
         if version is None or version.recipe_id != recipe.id:
             raise DomainError("BATCH_RECIPE_MISMATCH", "That batch does not use this recipe.", 422)
         requested = Decimal(batch.servings)
-        occurrences = db.scalars(
-            select(MealOccurrence)
-            .where(MealOccurrence.batch_id == batch.id)
-            .order_by(MealOccurrence.meal_date, MealOccurrence.meal_type)
-        ).all()
-        batch_context = {
-            "batch_id": batch.id,
-            "servings": float(batch.servings),
-            "planned_cook_date": batch.planned_cook_date.isoformat(),
-            "cooked_at": batch.cooked_at.isoformat() if batch.cooked_at else None,
-            "occurrences": [
-                {"date": item.meal_date.isoformat(), "meal_type": item.meal_type}
-                for item in occurrences
-            ],
-        }
+        batch_context = _batch_context(db, batch)
     else:
         version = _latest_version(db, recipe.id)
         if version is None:
@@ -569,15 +593,9 @@ def get_recipe_method(
         if batch_id and batch_context and batch_context.get("cooked_at"):
             raise DomainError(
                 "HISTORICAL_METHOD_NOT_CAPTURED",
-                "This cooked batch predates method capture. Its historical recipe version will not be changed.",
+                "This cooked batch predates method capture. You can copy the current method onto this batch; its cooked record and batch ingredients will stay unchanged.",
                 409,
-                actions=[
-                    {
-                        "kind": "current_method",
-                        "label": "Open current recipe method",
-                        "href": f"/recipes/{recipe.id}/method",
-                    }
-                ],
+                actions=_historical_method_recovery_actions(recipe.id, batch_id),
             )
         raise DomainError(
             "METHOD_NOT_AVAILABLE",
@@ -592,6 +610,144 @@ def get_recipe_method(
         snapshot,
         context,
         requested_servings=requested,
+        batch_context=batch_context,
+    )
+
+
+@router.post(
+    "/recipes/{recipe_id}/method/recover-historical",
+    response_model=MethodViewOut,
+)
+def recover_historical_method(
+    recipe_id: str,
+    batch_id: str = Query(...),
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    """Explicitly capture the current method for a cooked batch's old version."""
+
+    recipe = db.scalar(
+        select(Recipe)
+        .where(Recipe.id == recipe_id)
+        .with_for_update()
+    )
+    if (
+        recipe is None
+        or recipe.household_id != context.user.household_id
+        or recipe.archived_at is not None
+    ):
+        raise NotFoundError("Recipe")
+    batch = db.scalar(
+        select(MealBatch)
+        .join(MealPlan, MealPlan.id == MealBatch.meal_plan_id)
+        .where(MealBatch.id == batch_id, MealPlan.household_id == context.user.household_id)
+        .with_for_update()
+    )
+    if batch is None:
+        raise NotFoundError("Meal batch")
+    version = db.scalar(
+        select(RecipeVersion)
+        .where(RecipeVersion.id == batch.recipe_version_id)
+        .with_for_update()
+    )
+    if version is None or version.recipe_id != recipe.id:
+        raise DomainError("BATCH_RECIPE_MISMATCH", "That batch does not use this recipe.", 422)
+    if not batch.cooked_at:
+        raise DomainError(
+            "HISTORICAL_METHOD_RECOVERY_NOT_REQUIRED",
+            "This batch is not cooked, so its method can be captured normally.",
+            409,
+        )
+
+    batch_context = _batch_context(db, batch)
+    snapshot = version.method_snapshot
+    if snapshot is not None:
+        return _method_view(
+            db,
+            recipe,
+            version,
+            snapshot,
+            context,
+            requested_servings=Decimal(batch.servings),
+            batch_context=batch_context,
+        )
+
+    latest = _latest_version(db, recipe.id)
+    if latest is None:
+        raise DomainError("CORRUPT_RECIPE", "The recipe has no version.", 500)
+    current_snapshot = latest.method_snapshot
+    if current_snapshot is None and recipe.source_type == "custom":
+        locked_latest = db.scalar(
+            select(RecipeVersion)
+            .where(RecipeVersion.id == latest.id)
+            .with_for_update()
+        )
+        if locked_latest is not None:
+            db.expire(locked_latest, ["method_snapshot"])
+            latest = locked_latest
+            current_snapshot = latest.method_snapshot
+        if current_snapshot is None:
+            current_snapshot = _repair_custom_method_snapshot(
+                db,
+                latest,
+                context.user.id,
+            )
+    if current_snapshot is None:
+        raise DomainError(
+            "METHOD_NOT_AVAILABLE",
+            "Save the current recipe method before recovering this historical batch.",
+            409,
+            actions=[
+                {
+                    "kind": "current_method",
+                    "label": "Open current recipe method",
+                    "href": f"/recipes/{recipe.id}/method",
+                }
+            ],
+        )
+
+    if latest.id == version.id:
+        snapshot = current_snapshot
+    else:
+        blocks = [dict(block) for block in (current_snapshot.source_blocks or [])]
+        if not blocks and current_snapshot.source_text.strip():
+            blocks = [
+                {
+                    "id": "block-1",
+                    "position": 0,
+                    "heading": None,
+                    "text": current_snapshot.source_text,
+                }
+            ]
+        if not blocks:
+            raise DomainError(
+                "METHOD_NOT_AVAILABLE",
+                "The current recipe method has no written text to capture.",
+                409,
+            )
+        snapshot = RecipeMethodSnapshot(
+            recipe_version_id=version.id,
+            **snapshot_values(
+                blocks=blocks,
+                ingredients=version.ingredients,
+                source_kind=current_snapshot.source_kind,
+                extractor_version="current-method-recovery",
+                created_by_user_id=context.user.id,
+                household_notes=current_snapshot.household_notes,
+            ),
+        )
+        db.add(snapshot)
+        db.flush()
+    db.commit()
+    db.expire(version, ["method_snapshot"])
+    snapshot = version.method_snapshot or snapshot
+    return _method_view(
+        db,
+        recipe,
+        version,
+        snapshot,
+        context,
+        requested_servings=Decimal(batch.servings),
         batch_context=batch_context,
     )
 

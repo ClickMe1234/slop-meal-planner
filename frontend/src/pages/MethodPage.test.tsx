@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { api, type BackendMethodView } from '../api/client'
+import { api, ApiError, type BackendMethodView } from '../api/client'
 import { MethodPage } from './MethodPage'
 
 vi.mock('../api/client', async (importOriginal) => {
@@ -80,10 +80,10 @@ const customMethodView: BackendMethodView = {
   source_kind: 'custom',
 }
 
-function renderMethod() {
+function renderMethod(initialEntry = '/recipes/recipe-1/method') {
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryRouter initialEntries={['/recipes/recipe-1/method']}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/recipes/:recipeId/method" element={<MethodPage />} />
         </Routes>
@@ -368,6 +368,47 @@ describe('MethodPage', () => {
     expect(await screen.findByText('The serving request failed.')).toBeInTheDocument()
     expect(screen.getByRole('spinbutton', { name: 'Servings' })).toHaveValue(8)
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled()
+  })
+
+  it('offers to capture the current method for a cooked batch with no historical snapshot', async () => {
+    const user = userEvent.setup()
+    mockMethodPage()
+    const recoveredView: BackendMethodView = {
+      ...customMethodView,
+      requested_servings: 4,
+      batch_context: {
+        batch_id: 'batch-1',
+        servings: 4,
+        planned_cook_date: '2026-08-20',
+        cooked_at: '2026-08-20T18:00:00Z',
+        occurrences: [{ date: '2026-08-20', meal_type: 'dinner' }],
+      },
+    }
+    const capture = vi.spyOn(api, 'recoverHistoricalRecipeMethod').mockResolvedValue(recoveredView)
+    vi.mocked(api.getRecipeMethod).mockRejectedValue(new ApiError(
+      409,
+      'This cooked batch predates method capture. You can copy the current method onto this batch; its cooked record and batch ingredients will stay unchanged.',
+      'HISTORICAL_METHOD_NOT_CAPTURED',
+      [{
+        kind: 'recover_historical_method',
+        label: 'Use current method for this batch',
+        recipe_id: 'recipe-1',
+        batch_id: 'batch-1',
+        suggestion: 'Copy the current method onto this historical batch.',
+      }],
+    ))
+
+    renderMethod('/recipes/recipe-1/method?batch=batch-1')
+
+    expect(await screen.findByText(/predates method capture/)).toBeInTheDocument()
+    const recovery = screen.getByRole('button', { name: 'Use current method for this batch' })
+    expect(recovery).toBeEnabled()
+
+    await user.click(recovery)
+
+    await waitFor(() => expect(capture).toHaveBeenCalledWith('recipe-1', 'batch-1'))
+    expect(await screen.findByText(/current method was captured for this historical batch/)).toBeInTheDocument()
+    expect(screen.getByText('Custom onion supper')).toBeInTheDocument()
   })
 
   it('does not expose cooking-flow controls that cannot affect the written view', async () => {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.4 - 2026-08-21
+
+- Add an explicit recovery action for cooked batches whose historical method
+  snapshot was never captured, copying the current method without changing the
+  cooked record or batch ingredients.
+
 ## 1.3.3 - 2026-08-21
 
 - Persist submitted custom-recipe methods and repair older custom recipes whose
