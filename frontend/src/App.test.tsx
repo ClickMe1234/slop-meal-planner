@@ -52,6 +52,14 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'Sign in to your household' })).toBeInTheDocument()
   })
 
+  it('explains that settings need a live household in demo mode', () => {
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/settings/targets']}><App/></MemoryRouter></QueryClientProvider>)
+
+    expect(screen.getByText('Settings need a live household')).toBeInTheDocument()
+    expect(screen.getByText(/theme changes remain available from the app menu/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '+ Add person' })).not.toBeInTheDocument()
+  })
+
   it('filters by categories without a text query and enforces the three-category limit', async () => {
     const user = userEvent.setup()
     render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes']}><App/></MemoryRouter></QueryClientProvider>)
@@ -88,7 +96,30 @@ describe('App', () => {
     render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/imports/demo/review']}><App/></MemoryRouter></QueryClientProvider>)
     expect(screen.getByRole('heading', { name: /harissa chicken with chickpeas/i })).toBeInTheDocument()
     expect(screen.getAllByText(/nutrition from good food/i).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Original recipe' })).not.toBeInTheDocument()
     expect(screen.queryByText(/food-data match|match foods|fallback calculation/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps demo import servings connected to the review summary', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/imports/demo/review']}><App/></MemoryRouter></QueryClientProvider>)
+
+    const servings = screen.getByRole('spinbutton', { name: 'Confirmed servings' })
+    await user.clear(servings)
+    await user.type(servings, '6')
+
+    expect(servings).toHaveValue(6)
+    expect(screen.getByText(/6 servings confirmed/i)).toBeInTheDocument()
+  })
+
+  it('previews recipe-specific serving increments while reviewing', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/imports/demo/review']}><App/></MemoryRouter></QueryClientProvider>)
+
+    await user.type(screen.getByRole('spinbutton', { name: 'Minimum planned servings' }), '0.75')
+    await user.type(screen.getByRole('spinbutton', { name: 'Serving increment' }), '0.5')
+
+    expect(screen.getByText(/allows 0.75, 1.25, 1.75 servings/i)).toBeInTheDocument()
   })
 
   it('offers recipe deletion from the edit screen and confirms before leaving', async () => {
@@ -165,7 +196,7 @@ describe('App', () => {
 
     expect(screen.getByRole('heading', { name: /find it once/i })).toBeInTheDocument()
     expect(screen.getByPlaceholderText(/barcode number/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /add manually/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add manually/i })).toBeDisabled()
     expect(screen.getByRole('checkbox', { name: /general usda/i })).toBeChecked()
     expect(screen.getByRole('checkbox', { name: /packaged open food facts/i })).toBeChecked()
     expect(screen.getByRole('button', { name: /^search$/i })).toBeInTheDocument()

@@ -402,11 +402,65 @@ const emptyIngredient = (): EditableIngredientRow => ({
   shopping_excluded: false,
 })
 
+function servingConstraintError(minimumServings: string, servingIncrement: string): string {
+  if (Boolean(minimumServings) !== Boolean(servingIncrement)) {
+    return 'Set both the minimum planned servings and serving increment, or leave both blank.'
+  }
+  if (minimumServings && servingIncrement) {
+    const values = [Number(minimumServings), Number(servingIncrement)]
+    if (values.some((value) => !Number.isFinite(value) || value < 0.25 || value > 2 || !Number.isInteger(value * 4))) {
+      return 'Use quarter-serving values from 0.25 to 2 for both planner limits.'
+    }
+  }
+  return ''
+}
+
+function ServingConstraintFields({
+  minimumServings,
+  servingIncrement,
+  onMinimumServingsChange,
+  onServingIncrementChange,
+}: {
+  minimumServings: string
+  servingIncrement: string
+  onMinimumServingsChange: (value: string) => void
+  onServingIncrementChange: (value: string) => void
+}) {
+  const error = servingConstraintError(minimumServings, servingIncrement)
+  const preview: number[] = []
+  if (!error && minimumServings && servingIncrement) {
+    const minimum = Number(minimumServings)
+    const increment = Number(servingIncrement)
+    for (let value = minimum; value <= 2 && preview.length < 5; value += increment) {
+      preview.push(Number(value.toFixed(2)))
+    }
+  }
+  return (
+    <fieldset className="serving-constraints" aria-describedby="serving-constraints-help">
+      <legend>Planner serving limits <span>Optional</span></legend>
+      <div className="form-grid">
+        <label>
+          Minimum planned servings
+          <input type="number" min="0.25" max="2" step="0.25" value={minimumServings} onChange={(event) => onMinimumServingsChange(event.target.value)} />
+        </label>
+        <label>
+          Serving increment
+          <input type="number" min="0.25" max="2" step="0.25" value={servingIncrement} onChange={(event) => onServingIncrementChange(event.target.value)} />
+        </label>
+      </div>
+      <small id="serving-constraints-help">Set both to limit planner portions. For example, 1 minimum with a 0.5 increment allows {preview.length ? preview.join(', ') : '1, 1.5, 2'} servings.</small>
+      {error && <small className="field-error" role="alert">{error}</small>}
+    </fieldset>
+  )
+}
+
 export function CustomRecipePage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [title, setTitle] = useState('')
   const [yieldServings, setYieldServings] = useState('4')
+  const [minimumServings, setMinimumServings] = useState('')
+  const [servingIncrement, setServingIncrement] = useState('')
   const [instructions, setInstructions] = useState('')
   const [rows, setRows] = useState<EditableIngredientRow[]>([emptyIngredient()])
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
@@ -422,6 +476,11 @@ export function CustomRecipePage() {
       setError('Add an amount and unit for each ingredient, or leave it off the shopping list.')
       return
     }
+    const servingError = servingConstraintError(minimumServings, servingIncrement)
+    if (servingError) {
+      setError(servingError)
+      return
+    }
     setSaving(true)
     try {
       if (isDemoMode) {
@@ -432,6 +491,8 @@ export function CustomRecipePage() {
       const saved = await api.createRecipe({
         title,
         yield_servings: Number(yieldServings),
+        minimum_servings: minimumServings ? Number(minimumServings) : null,
+        serving_increment: servingIncrement ? Number(servingIncrement) : null,
         source_type: 'custom',
         custom_instructions: instructions || null,
         meal_types: mealTypes,
@@ -475,6 +536,7 @@ export function CustomRecipePage() {
               Servings
               <input required type="number" min="0.25" step="0.25" value={yieldServings} onChange={(event) => setYieldServings(event.target.value)} />
             </label>
+            <ServingConstraintFields minimumServings={minimumServings} servingIncrement={servingIncrement} onMinimumServingsChange={setMinimumServings} onServingIncrementChange={setServingIncrement} />
             <MealTypePicker value={mealTypes} onChange={setMealTypes} />
             {!mealTypes.length && <MealTypePlanningWarning />}
             <label>
@@ -657,6 +719,10 @@ function ImportReviewDrawerFrame({ children, saving, onDismiss }: { children: Re
 function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoTitle = 'Harissa chicken with chickpeas' }: ImportReviewPresentationProps = {}) {
   const navigate = useNavigate()
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
+  const [yieldServings, setYieldServings] = useState('4')
+  const [minimumServings, setMinimumServings] = useState('')
+  const [servingIncrement, setServingIncrement] = useState('')
+  const servingError = servingConstraintError(minimumServings, servingIncrement)
   const demoIngredients = ['600g boneless skinless chicken thighs', '2 x 400g cans chickpeas, drained', '2 tbsp rose harissa', 'a splash of olive oil', '1 lemon, zest and juice']
   const deleteRecipe = () => {
     if (!window.confirm(`Delete “${demoTitle}”? This removes it from your recipes. Existing meal plans keep their history.`)) return
@@ -672,21 +738,16 @@ function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoT
       <PageHeader
         eyebrow="Import review"
         title={demoTitle}
-        description="Nutrition is reported by Good Food and will be used for planning."
-        actions={
-          <Button variant="secondary">
-            <ExternalLink size={17} />
-            Original recipe
-          </Button>
-        }
+        description="Nutrition is reported by Good Food and will be used for planning. The original source link is unavailable in demo mode."
       />
       <div className="review-layout">
         <section>
           <Card className="yield-card recipe-basics-card">
             <label>
               Confirmed servings
-              <input type="number" min="0.25" step="0.25" defaultValue="4" />
+              <input aria-label="Confirmed servings" type="number" min="0.25" step="0.25" value={yieldServings} onChange={(event) => setYieldServings(event.target.value)} />
             </label>
+            <ServingConstraintFields minimumServings={minimumServings} servingIncrement={servingIncrement} onMinimumServingsChange={setMinimumServings} onServingIncrementChange={setServingIncrement} />
             <div className="recipe-meal-type-review">
               <MealTypePicker value={mealTypes} onChange={setMealTypes} />
               {!mealTypes.length && <MealTypePlanningWarning />}
@@ -716,8 +777,8 @@ function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoT
                 basis: 'per_serving',
               }}
             />
-            <p>Per serving · reported by Good Food · used for planning</p>
-            <Button onClick={() => onSaved ? onSaved() : navigate('/recipes')}>Save recipe</Button>
+            <p>Per serving · reported by Good Food · used for planning · {yieldServings} servings confirmed</p>
+            <Button disabled={Boolean(servingError)} onClick={() => onSaved ? onSaved() : navigate('/recipes')}>Save recipe</Button>
             <div className="recipe-delete-action">
               <p>Remove this recipe from your collection.</p>
               <Button type="button" variant="danger" onClick={deleteRecipe}><Trash2 />Delete recipe</Button>
@@ -754,6 +815,8 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
   const [searchParams] = useSearchParams()
   const [rows, setRows] = useState<ImportedIngredientRow[]>([])
   const [yieldServings, setYieldServings] = useState('')
+  const [minimumServings, setMinimumServings] = useState('')
+  const [servingIncrement, setServingIncrement] = useState('')
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const [error, setError] = useState('')
   const [deleteError, setDeleteError] = useState('')
@@ -786,6 +849,8 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
   useEffect(() => {
     if (!recipe.data) return
     setYieldServings(String(recipe.data.yield_servings ?? ''))
+    setMinimumServings(String(recipe.data.minimum_servings ?? ''))
+    setServingIncrement(String(recipe.data.serving_increment ?? ''))
     const savedMealTypes = recipeMealTypes(recipe.data)
     setMealTypes(savedMealTypes.length ? savedMealTypes : suggestedMealTypes)
     setRows(
@@ -845,6 +910,11 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
       setError('Confirm how many servings the recipe makes.')
       return
     }
+    const servingError = servingConstraintError(minimumServings, servingIncrement)
+    if (servingError) {
+      setError(servingError)
+      return
+    }
     if (rows.some((row) => row.included && !row.shopping_excluded && (!row.amount || !row.unit))) {
       setError('Add an amount and unit for every included ingredient, or leave it off the shopping list.')
       return
@@ -858,6 +928,8 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
         expected_version: recipe.data.version,
         title: recipe.data.title,
         yield_servings: Number(yieldServings),
+        minimum_servings: minimumServings ? Number(minimumServings) : null,
+        serving_increment: servingIncrement ? Number(servingIncrement) : null,
         meal_types: mealTypes,
         ingredients: rows.map((row) => {
           const quantityGrams = row.quantity_grams || gramsFor(row.amount, row.unit)
@@ -945,6 +1017,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
               Confirmed servings
               <input type="number" min="0.25" step="0.25" value={yieldServings} onChange={(event) => setYieldServings(event.target.value)} />
             </label>
+            <ServingConstraintFields minimumServings={minimumServings} servingIncrement={servingIncrement} onMinimumServingsChange={setMinimumServings} onServingIncrementChange={setServingIncrement} />
             <div className="recipe-meal-type-review">
               <MealTypePicker value={mealTypes} onChange={setMealTypes} />
               {!mealTypes.length && <MealTypePlanningWarning />}

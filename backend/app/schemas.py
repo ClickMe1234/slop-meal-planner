@@ -285,6 +285,12 @@ class RecipeIngredientIn(APIModel):
 class RecipeCreate(APIModel):
     title: str = Field(min_length=1, max_length=300)
     yield_servings: Decimal | None = Field(default=None, gt=0)
+    minimum_servings: Decimal | None = Field(
+        default=None, ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
+    serving_increment: Decimal | None = Field(
+        default=None, ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
     source_type: Literal["custom", "url"] = "custom"
     source_url: str | None = Field(default=None, max_length=4096)
     publisher: str | None = Field(default=None, max_length=300)
@@ -310,12 +316,20 @@ class RecipeCreate(APIModel):
             raise ValueError("source_url is required for URL recipes")
         if len(set(self.meal_types)) != len(self.meal_types):
             raise ValueError("recipe meal types must be unique")
+        if (self.minimum_servings is None) != (self.serving_increment is None):
+            raise ValueError("minimum servings and serving increment must be supplied together")
         return self
 
 
 class RecipeReviewUpdate(VersionedUpdate):
     title: str = Field(min_length=1, max_length=300)
     yield_servings: Decimal = Field(gt=0)
+    minimum_servings: Decimal | None = Field(
+        default=None, ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
+    serving_increment: Decimal | None = Field(
+        default=None, ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
     meal_types: list[RecipeTag] | None = Field(default=None, max_length=20)
     ingredients: list[RecipeIngredientIn] = Field(min_length=1, max_length=500)
 
@@ -323,6 +337,28 @@ class RecipeReviewUpdate(VersionedUpdate):
     def validate_meal_types(self):
         if self.meal_types is not None and len(set(self.meal_types)) != len(self.meal_types):
             raise ValueError("recipe meal types must be unique")
+        if (
+            ("minimum_servings" in self.model_fields_set)
+            != ("serving_increment" in self.model_fields_set)
+        ):
+            raise ValueError("minimum servings and serving increment must be supplied together")
+        if (self.minimum_servings is None) != (self.serving_increment is None):
+            raise ValueError("minimum servings and serving increment must be supplied together")
+        return self
+
+
+class RecipeServingConstraintsUpdate(VersionedUpdate):
+    minimum_servings: Decimal | None = Field(
+        ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
+    serving_increment: Decimal | None = Field(
+        ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
+
+    @model_validator(mode="after")
+    def validate_pair(self):
+        if (self.minimum_servings is None) != (self.serving_increment is None):
+            raise ValueError("minimum servings and serving increment must be supplied together")
         return self
 
 
@@ -341,6 +377,8 @@ class RecipeSummary(APIModel):
     image_url: str | None
     version: int
     yield_servings: Decimal | None = None
+    minimum_servings: Decimal | None = None
+    serving_increment: Decimal | None = None
     publisher_nutrition: dict[str, Any] | None = None
     calculated_nutrition: dict[str, Any] | None = None
     nutrition_method: str | None = None

@@ -7,6 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/client";
 import { DataSettings, TargetSettings } from "./SettingsPage";
 
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return { ...actual, isDemoMode: false };
+});
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("TargetSettings", () => {

@@ -308,12 +308,22 @@ class RecipePublisherTag(IdMixin, Base):
 
 class RecipeVersion(IdMixin, Base):
     __tablename__ = "recipe_version"
-    __table_args__ = (UniqueConstraint("recipe_id", "version_number"),)
+    __table_args__ = (
+        UniqueConstraint("recipe_id", "version_number"),
+        CheckConstraint(
+            "(minimum_servings IS NULL AND serving_increment IS NULL) OR "
+            "(minimum_servings IS NOT NULL AND serving_increment IS NOT NULL AND "
+            "minimum_servings BETWEEN 0.25 AND 2 AND serving_increment BETWEEN 0.25 AND 2)",
+            name="ck_recipe_version_serving_constraints",
+        ),
+    )
 
     recipe_id: Mapped[str] = mapped_column(ForeignKey("recipe.id", ondelete="CASCADE"), index=True)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     yield_servings: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    minimum_servings: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    serving_increment: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
     custom_instructions: Mapped[str | None] = mapped_column(Text)
     source_checksum: Mapped[str | None] = mapped_column(String(64))
     publisher_nutrition: Mapped[dict | None] = mapped_column(JSON)

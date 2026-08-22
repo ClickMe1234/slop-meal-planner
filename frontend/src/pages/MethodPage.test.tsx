@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { api, type BackendMethodView } from '../api/client'
+import { api, ApiError, type BackendMethodView } from '../api/client'
 import { MethodPage } from './MethodPage'
 
 vi.mock('../api/client', async (importOriginal) => {
@@ -74,10 +74,16 @@ const onionMethodView: BackendMethodView = {
   }],
 }
 
-function renderMethod() {
+const customMethodView: BackendMethodView = {
+  ...onionMethodView,
+  title: 'Custom onion supper',
+  source_kind: 'custom',
+}
+
+function renderMethod(initialEntry = '/recipes/recipe-1/method') {
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryRouter initialEntries={['/recipes/recipe-1/method']}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/recipes/:recipeId/method" element={<MethodPage />} />
         </Routes>
@@ -123,10 +129,9 @@ const unreviewedMethodView: BackendMethodView = {
 }
 
 describe('MethodPage', () => {
-  it('opens in the user default, shows scaled ingredient labels, and remembers a toggle', async () => {
-    const user = userEvent.setup()
+  it('shows only the written method when the saved view preference is summary', async () => {
     mockMethodPage()
-    const updateMe = vi.spyOn(api, 'updateMe').mockResolvedValue({
+    vi.mocked(api.me).mockResolvedValue({
       id: 'user-1', username: 'owner', role: 'owner', must_change_password: false,
       ingredient_locale: 'uk', method_view_preference: 'summary', measurement_system: 'source',
       method_tutorial_version_seen: 2,
@@ -137,11 +142,8 @@ describe('MethodPage', () => {
     expect(await screen.findByRole('heading', { name: 'Tomato supper' })).toBeInTheDocument()
     expect(screen.getByText('4 item tomatoes')).toBeInTheDocument()
     expect(screen.getByText(/for 5 minutes/)).toBeInTheDocument()
-    await user.click(screen.getByRole('radio', { name: 'Summary' }))
-    await waitFor(() => expect(updateMe).toHaveBeenCalledWith({ method_view_preference: 'summary' }))
-    expect(screen.getByRole('heading', { name: 'Cook' })).toBeInTheDocument()
-    expect(screen.getAllByText((_, element) => element?.textContent === '2 item tomatoes')).not.toHaveLength(0)
-    expect(screen.getByText('Fry the tomatoes')).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Summary' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Cook' })).not.toBeInTheDocument()
   })
 
   it('saves a complete needs-review method as reviewed without opening the editor', async () => {
@@ -198,7 +200,7 @@ describe('MethodPage', () => {
     expect(sourceSpan).toHaveFocus()
   })
 
-  it('persists editor changes when reviewing with an unaccounted clause', async () => {
+  it('persists written-method notes when reviewing with an unaccounted clause', async () => {
     const user = userEvent.setup()
     let currentView = unreviewedMethodView
     mockMethodPage(currentView)
@@ -224,22 +226,16 @@ describe('MethodPage', () => {
 
     await screen.findByRole('heading', { name: 'Tomato supper' })
     await user.click(screen.getByRole('button', { name: 'Edit method' }))
-    const actionText = screen.getAllByRole('textbox', { name: 'Action text' })[0]
-    await user.clear(actionText)
-    await user.type(actionText, 'Gently fry the tomatoes')
     await user.type(screen.getByRole('textbox', { name: 'Household notes' }), 'Use the heavy pan.')
     await user.click(screen.getAllByRole('button', { name: 'Save' }).at(-1)!)
 
     await waitFor(() => expect(save).toHaveBeenCalledWith('recipe-1', expect.objectContaining({
       mark_reviewed: true,
       household_notes: 'Use the heavy pan.',
-      method: expect.objectContaining({
-        actions: expect.arrayContaining([expect.objectContaining({ text: 'Gently fry the tomatoes' })]),
-      }),
+      method: expect.objectContaining({ actions: unreviewedMethodView.method.actions }),
     })))
     expect(await screen.findByText('Method saved and reviewed.')).toBeInTheDocument()
-    await user.click(screen.getByRole('radio', { name: 'Summary' }))
-    expect(screen.getByText('Gently fry the tomatoes')).toBeInTheDocument()
+    expect(screen.getByText('Use the heavy pan.')).toBeInTheDocument()
   })
 
   it('links a mismatched ingredient to the exact source word and saves its amount binding', async () => {
@@ -283,11 +279,11 @@ describe('MethodPage', () => {
     expect(binding?.annotation_id).toBe(annotation?.id)
   })
 
-  it('splits an action at the text cursor and preserves the cooking sequence', async () => {
+  it('links an ingredient to custom-method wording without requiring a publisher source', async () => {
     const user = userEvent.setup()
-    mockMethodPage(onionMethodView)
+    mockMethodPage(customMethodView)
     const save = vi.spyOn(api, 'saveRecipeMethod').mockImplementation(async (_recipeId, payload) => ({
-      ...onionMethodView,
+      ...customMethodView,
       recipe_version: 2,
       recipe_version_number: 2,
       method: payload.method,
@@ -295,32 +291,157 @@ describe('MethodPage', () => {
 
     renderMethod()
 
-    await screen.findByRole('heading', { name: 'Onion supper' })
+    await screen.findByRole('heading', { name: 'Custom onion supper' })
     await user.click(screen.getByRole('button', { name: 'Edit method' }))
-    const actionText = screen.getByRole('textbox', { name: 'Action text' }) as HTMLTextAreaElement
-    const splitAt = onionActionText.indexOf('then')
-    actionText.focus()
-    actionText.setSelectionRange(splitAt, splitAt)
-    fireEvent.select(actionText)
+    await user.click(screen.getByRole('button', { name: /red onions/i }))
+    await user.click(screen.getByRole('button', { name: 'Link red onions to “onions”' }))
 
-    const splitButton = screen.getByRole('button', { name: 'Split step at cursor' })
-    expect(splitButton).toBeEnabled()
-    await user.click(splitButton)
-
-    const splitActions = screen.getAllByRole('textbox', { name: 'Action text' })
-    expect(splitActions).toHaveLength(2)
-    expect(splitActions[0]).toHaveValue('Fry the onions until soft,')
-    expect(splitActions[1]).toHaveValue('then add the stock')
-
+    expect(screen.getByText(/Linked red onions to “onions”/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(save).toHaveBeenCalled())
+
     const payload = save.mock.calls[0]![1]
-    const newAction = payload.method.actions.find(item => item.id !== 'action-1')
-    expect(newAction).toMatchObject({ stage_id: 'stage-1', position: 1, text: 'then add the stock' })
-    expect(payload.method.edges).toContainEqual(expect.objectContaining({
-      from_action_id: 'action-1',
-      to_action_id: newAction?.id,
-      kind: 'sequence',
+    expect(payload.source_kind).toBe('custom')
+    expect(payload.source_blocks).toEqual([expect.objectContaining({ text: onionSource })])
+    expect(payload.method.annotations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ingredient_lineage_id: 'red-onion-lineage',
+        origin: 'user',
+        accepted: true,
+      }),
+    ]))
+  })
+
+  it('blocks closing and saving while custom wording is being edited', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(customMethodView)
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Custom onion supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    await user.click(screen.getByRole('button', { name: 'Edit wording' }))
+
+    expect(screen.getByRole('button', { name: 'Close editor' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+
+  it('keeps serving edits local until Apply so typing does not refetch or lose focus', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(methodView)
+    const getMethod = vi.mocked(api.getRecipeMethod)
+
+    renderMethod()
+
+    await waitFor(() => expect(getMethod).toHaveBeenCalledTimes(1))
+    const input = await screen.findByRole('spinbutton', { name: 'Servings' })
+    await user.clear(input)
+    await user.type(input, '8')
+
+    expect(input).toHaveValue(8)
+    expect(getMethod).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+    await waitFor(() => expect(getMethod).toHaveBeenLastCalledWith('recipe-1', {
+      batchId: undefined,
+      servings: 8,
     }))
+  })
+
+  it('keeps a failed serving request retryable and shows the failure', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(methodView)
+    vi.mocked(api.getRecipeMethod).mockImplementation(async (_recipeId, options) => {
+      if (options?.servings === 8) throw new Error('The serving request failed.')
+      return methodView
+    })
+
+    renderMethod()
+
+    const input = await screen.findByRole('spinbutton', { name: 'Servings' })
+    await user.clear(input)
+    await user.type(input, '8')
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+
+    expect(await screen.findByText('The serving request failed.')).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: 'Servings' })).toHaveValue(8)
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled()
+  })
+
+  it('offers to capture the current method for a cooked batch with no historical snapshot', async () => {
+    const user = userEvent.setup()
+    mockMethodPage()
+    const recoveredView: BackendMethodView = {
+      ...customMethodView,
+      requested_servings: 4,
+      batch_context: {
+        batch_id: 'batch-1',
+        servings: 4,
+        planned_cook_date: '2026-08-20',
+        cooked_at: '2026-08-20T18:00:00Z',
+        occurrences: [{ date: '2026-08-20', meal_type: 'dinner' }],
+      },
+    }
+    const capture = vi.spyOn(api, 'recoverHistoricalRecipeMethod').mockResolvedValue(recoveredView)
+    vi.mocked(api.getRecipeMethod).mockRejectedValue(new ApiError(
+      409,
+      'This cooked batch predates method capture. You can copy the current method onto this batch; its cooked record and batch ingredients will stay unchanged.',
+      'HISTORICAL_METHOD_NOT_CAPTURED',
+      [{
+        kind: 'recover_historical_method',
+        label: 'Use current method for this batch',
+        recipe_id: 'recipe-1',
+        batch_id: 'batch-1',
+        suggestion: 'Copy the current method onto this historical batch.',
+      }],
+    ))
+
+    renderMethod('/recipes/recipe-1/method?batch=batch-1')
+
+    expect(await screen.findByText(/predates method capture/)).toBeInTheDocument()
+    const recovery = screen.getByRole('button', { name: 'Use current method for this batch' })
+    expect(recovery).toBeEnabled()
+
+    await user.click(recovery)
+
+    await waitFor(() => expect(capture).toHaveBeenCalledWith('recipe-1', 'batch-1'))
+    expect(await screen.findByText(/current method was captured for this historical batch/)).toBeInTheDocument()
+    expect(screen.getByText('Custom onion supper')).toBeInTheDocument()
+  })
+
+  it('shows a recovery failure while the historical method is still unavailable', async () => {
+    const user = userEvent.setup()
+    mockMethodPage()
+    const historicalError = new ApiError(
+      409,
+      'This cooked batch predates method capture.',
+      'HISTORICAL_METHOD_NOT_CAPTURED',
+      [{ kind: 'recover_historical_method', label: 'Use current method for this batch', batch_id: 'batch-1' }],
+    )
+    vi.mocked(api.getRecipeMethod).mockRejectedValue(historicalError)
+    vi.spyOn(api, 'recoverHistoricalRecipeMethod').mockRejectedValue(new Error('Save the current recipe method first.'))
+
+    renderMethod('/recipes/recipe-1/method?batch=batch-1')
+
+    await user.click(await screen.findByRole('button', { name: 'Use current method for this batch' }))
+
+    expect(await screen.findByText('Historical method recovery failed')).toBeInTheDocument()
+    expect(screen.getByText('Save the current recipe method first.')).toBeInTheDocument()
+  })
+
+  it('does not expose cooking-flow controls that cannot affect the written view', async () => {
+    const user = userEvent.setup()
+    mockMethodPage(onionMethodView)
+
+    renderMethod()
+
+    await screen.findByRole('heading', { name: 'Onion supper' })
+    await user.click(screen.getByRole('button', { name: 'Edit method' }))
+    expect(screen.queryByRole('textbox', { name: 'Action text' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Split step at cursor' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Stage name' })).not.toBeInTheDocument()
+    expect(screen.getByText((_, element) => element?.tagName === 'P' && element.textContent === onionSource)).toBeInTheDocument()
   })
 })

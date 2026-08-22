@@ -22,6 +22,7 @@ from ..models import (
     FoodRecord,
     Job,
     JobStatus,
+    NutritionCalculation,
     RecipeTag,
     Recipe,
     RecipeEligibility,
@@ -43,6 +44,7 @@ from ..schemas import (
     RecipeIngredientIn,
     RecipePlanSyncOut,
     RecipeReviewUpdate,
+    RecipeServingConstraintsUpdate,
     RecipeSummary,
 )
 from ..services.food_search import (
@@ -297,6 +299,8 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         image_url=recipe.image_url,
         version=recipe.version,
         yield_servings=version.yield_servings,
+        minimum_servings=version.minimum_servings,
+        serving_increment=version.serving_increment,
         publisher_nutrition=version.publisher_nutrition,
         calculated_nutrition=nutrition_values,
         nutrition_method=nutrition_method,
@@ -518,12 +522,15 @@ def create_recipe(
     db.flush()
     for meal_type in payload.meal_types:
         db.add(RecipeMealType(recipe_id=recipe.id, meal_type=meal_type.value))
+    instruction_text = payload.custom_instructions.strip() if payload.custom_instructions else None
     version = RecipeVersion(
         recipe_id=recipe.id,
         version_number=1,
         title=payload.title,
         yield_servings=payload.yield_servings,
-        custom_instructions=payload.custom_instructions,
+        minimum_servings=payload.minimum_servings,
+        serving_increment=payload.serving_increment,
+        custom_instructions=instruction_text,
         publisher_nutrition=payload.publisher_nutrition,
     )
     db.add(version)
@@ -534,13 +541,13 @@ def create_recipe(
         db.add(ingredient)
         created_ingredients.append(ingredient)
     db.flush()
-    if payload.custom_instructions and payload.custom_instructions.strip():
+    if instruction_text:
         blocks = [
             {
                 "id": "block-1",
                 "position": 0,
                 "heading": None,
-                "text": payload.custom_instructions.strip(),
+                "text": instruction_text,
             }
         ]
         db.add(
@@ -640,6 +647,16 @@ def save_recipe_review(
         version_number=previous.version_number + 1,
         title=payload.title,
         yield_servings=payload.yield_servings,
+        minimum_servings=(
+            payload.minimum_servings
+            if "minimum_servings" in payload.model_fields_set
+            else previous.minimum_servings
+        ),
+        serving_increment=(
+            payload.serving_increment
+            if "serving_increment" in payload.model_fields_set
+            else previous.serving_increment
+        ),
         custom_instructions=previous.custom_instructions,
         source_checksum=previous.source_checksum,
         publisher_nutrition=previous.publisher_nutrition,
@@ -697,6 +714,96 @@ def save_recipe_review(
                 raise
     elif publisher_values(next_version) is not None:
         recipe.eligibility = RecipeEligibility.PLANNER_READY.value
+    recipe.version += 1
+    sync = sync_recipe_versions_to_current_plans(
+        db,
+        context.user.household_id,
+        {previous.id: next_version.id},
+    )
+    db.commit()
+    db.refresh(recipe)
+    detail = _recipe_detail(db, recipe, context.user.ingredient_locale)
+    return detail.model_copy(
+        update={
+            "plan_sync": RecipePlanSyncOut(
+                plans_updated=sync.plans_updated,
+                shopping_list_rebuilt=sync.shopping_list_rebuilt,
+                shopping_list_id=sync.shopping_list_id,
+                cooked_batches_unchanged=sync.cooked_batches_unchanged,
+            )
+        }
+    )
+
+
+@router.put("/recipes/{recipe_id}/serving-constraints", response_model=RecipeDetail)
+def save_recipe_serving_constraints(
+    recipe_id: str,
+    payload: RecipeServingConstraintsUpdate,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    """Update only planner serving constraints as a new immutable version."""
+
+    recipe = db.scalar(
+        select(Recipe).where(Recipe.id == recipe_id).with_for_update()
+    )
+    if (
+        recipe is None
+        or recipe.household_id != context.user.household_id
+        or recipe.archived_at is not None
+    ):
+        raise NotFoundError("Recipe")
+    if recipe.version != payload.expected_version:
+        raise DomainError(
+            "VERSION_CONFLICT",
+            "This recipe changed while you were editing its serving limits. Reload before saving.",
+            409,
+        )
+    previous = _latest_version(db, recipe.id)
+    if previous is None:
+        raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+
+    next_version = RecipeVersion(
+        recipe_id=recipe.id,
+        version_number=previous.version_number + 1,
+        title=previous.title,
+        yield_servings=previous.yield_servings,
+        minimum_servings=payload.minimum_servings,
+        serving_increment=payload.serving_increment,
+        custom_instructions=previous.custom_instructions,
+        source_checksum=previous.source_checksum,
+        publisher_nutrition=previous.publisher_nutrition,
+    )
+    db.add(next_version)
+    db.flush()
+    for ingredient in previous.ingredients:
+        values = {
+            column.name: getattr(ingredient, column.name)
+            for column in ingredient.__table__.columns
+            if column.name not in {"id", "recipe_version_id"}
+        }
+        db.add(RecipeIngredient(recipe_version_id=next_version.id, **values))
+    if previous.method_snapshot is not None:
+        db.add(
+            clone_method_snapshot(
+                previous.method_snapshot,
+                recipe_version_id=next_version.id,
+                created_by_user_id=context.user.id,
+            )
+        )
+    previous_calculation = latest_calculation(db, previous.id)
+    if previous_calculation is not None:
+        db.add(
+            NutritionCalculation(
+                recipe_version_id=next_version.id,
+                status=previous_calculation.status,
+                total_values=dict(previous_calculation.total_values or {}),
+                per_serving_values=dict(previous_calculation.per_serving_values or {}),
+                contributions=list(previous_calculation.contributions or []),
+                assumptions=list(previous_calculation.assumptions or []),
+                dataset_snapshot=dict(previous_calculation.dataset_snapshot or {}),
+            )
+        )
     recipe.version += 1
     sync = sync_recipe_versions_to_current_plans(
         db,

@@ -653,7 +653,7 @@ export function IngredientsPage() {
         title="Find it once. Keep it useful."
         description="Scan packaged foods, search trusted nutrition records, or enter a label yourself—then reuse the ingredient in recipes, planning and pantry stock."
         actions={
-          <Button onClick={() => setManualOpen(true)}>
+          <Button disabled={isDemoMode} title={isDemoMode ? 'Sign in to a live household to add ingredients manually.' : undefined} onClick={() => setManualOpen(true)}>
             <Plus size={18} />
             Add manually
           </Button>
@@ -865,7 +865,7 @@ export function IngredientsPage() {
         ) : normalisedQuery && library.data?.total ? (
           <EmptyState icon={<Search />} title="No saved ingredients match" description="Try a shorter search, or save one of the nutrition matches above." />
         ) : (
-          <EmptyState icon={<Wheat />} title="Your ingredient shelf is empty" description="Scan a barcode, choose a search result, or add the first nutrition label manually." action={<Button onClick={() => setManualOpen(true)}>Add an ingredient</Button>} />
+          <EmptyState icon={<Wheat />} title="Your ingredient shelf is empty" description="Scan a barcode, choose a search result, or add the first nutrition label manually." action={!isDemoMode ? <Button onClick={() => setManualOpen(true)}>Add an ingredient</Button> : undefined} />
         )}
       </section>
 

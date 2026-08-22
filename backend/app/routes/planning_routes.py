@@ -53,6 +53,7 @@ from ..services.planner import (
     SIDE_PORTIONS,
     aggregate_nutrition_issues,
     choose_shared_recipe,
+    recipe_portions,
     rebalance_plan_portions,
 )
 from ..services.regional_ingredients import equivalent_terms
@@ -148,6 +149,8 @@ def _candidate_from_version(
         recipe_id=recipe.id,
         recipe_version_id=version.id,
         nutrition=nutrition,
+        minimum_servings=version.minimum_servings,
+        serving_increment=version.serving_increment,
         food_record_ids=frozenset(
             item.food_record_id
             for item in included_ingredients
@@ -590,6 +593,16 @@ def _rebalance_plan(
                         participant_target
                     )
                 key = f"{occurrence.id}:{allocation.member_id}"
+                standard_portions = (
+                    SIDE_PORTIONS
+                    if batch.parent_batch_id is not None
+                    else BOOST_PORTIONS
+                    if daily_calorie_boosts.get(
+                        (date_text, allocation.member_id), Decimal("0")
+                    ) > 0
+                    or explicit_meal_boost > 0
+                    else PORTIONS
+                )
                 variables.append(
                     PlanPortionVariable(
                         key=key,
@@ -600,15 +613,11 @@ def _rebalance_plan(
                         allowed=(
                             (Decimal(allocation.servings),)
                             if batch.cooked_at is not None
-                            else
-                            SIDE_PORTIONS
-                            if batch.parent_batch_id is not None
-                            else BOOST_PORTIONS
-                            if daily_calorie_boosts.get(
-                                (date_text, allocation.member_id), Decimal("0")
-                            ) > 0
-                            or explicit_meal_boost > 0
-                            else PORTIONS
+                            else recipe_portions(
+                                standard_portions,
+                                version.minimum_servings,
+                                version.serving_increment,
+                            )
                         ),
                         meal_type=occurrence.meal_type,
                         component_slot=batch.component_slot,
@@ -1524,6 +1533,9 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
                 "guest_servings": occurrence.guest_servings,
                 "recipe_id": recipe.id,
                 "recipe_title": recipe.title,
+                "recipe_version": recipe.version,
+                "minimum_servings": version.minimum_servings,
+                "serving_increment": version.serving_increment,
                 "source_url": recipe.source_url,
                 "image_url": recipe.image_url,
                 "batch_servings": batch.servings,

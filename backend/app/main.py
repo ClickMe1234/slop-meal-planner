@@ -37,7 +37,7 @@ def create_app() -> FastAPI:
     reset_login_security_state()
     app = FastAPI(
         title="Meal Planner API",
-        version=os.getenv("APP_VERSION", "1.3.2"),
+        version=os.getenv("APP_VERSION", "1.3.4"),
         docs_url="/api/docs" if settings.public_api_docs else None,
         openapi_url="/api/openapi.json" if settings.public_api_docs else None,
         lifespan=lifespan,

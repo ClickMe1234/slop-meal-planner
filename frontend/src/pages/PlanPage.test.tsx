@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import { ApiError, type BackendPlanDetail } from '../api/client'
-import { buildRecipeImpactDecks, PlanGenerationError, PlanPage, sortPlannerPeople } from './PlanPage'
-import { storeDemoPlan } from './planner'
+import { buildRecipeImpactDecks, CookDaysStep, MealGroupsStep, PlanGenerationError, PlanPage, sortPlannerPeople } from './PlanPage'
+import { buildPlanSlots, cookStartKey, plannerDates, storeDemoPlan, type MealGroupOverrides } from './planner'
 
 function renderPlanner() {
   return render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan']}><PlanPage/></MemoryRouter></QueryClientProvider>)
@@ -72,6 +73,65 @@ describe('PlanPage wizard', () => {
 
     expect(screen.getByRole('heading', { name: 'Who needs each meal?' })).toBeInTheDocument()
     expect(screen.getAllByRole('checkbox', { name: /you needs breakfast/i })).toHaveLength(7)
+  })
+
+  it('assigns people to recipe boxes in the weekly grid', async () => {
+    const user = userEvent.setup()
+    const dates = plannerDates('2026-07-13', 1)
+    const members = [
+      { id: 'alex', name: 'Alex', active: true, version: 1 },
+      { id: 'sam', name: 'Sam', active: true, version: 1 },
+    ]
+    const defaults = Object.fromEntries(['breakfast', 'lunch', 'dinner', 'snack'].map(mealType => [mealType, [{ group_key: 'shared', member_ids: ['alex', 'sam'] }]])) as Parameters<typeof MealGroupsStep>[0]['defaults']
+    function RecipeAssignmentHarness() {
+      const [overrides, setOverrides] = useState<MealGroupOverrides>({})
+      return <MealGroupsStep dates={dates} members={members} selectedMemberIds={['alex', 'sam']} attendance={{}} defaults={defaults} overrides={overrides} onChange={(date, mealType, groups) => setOverrides(current => ({ ...current, [`${date}:${mealType}`]: groups }))}/>
+    }
+    render(<RecipeAssignmentHarness/>)
+
+    const count = screen.getByRole('combobox', { name: /Number of breakfast recipes on (13 Jul|Jul 13)/ })
+    expect(count).toHaveValue('1')
+    await user.selectOptions(count, '2')
+    const cell = count.closest('td') as HTMLElement
+    expect(within(cell).getByText('Drop a name here')).toBeInTheDocument()
+
+    await user.click(within(cell).getByRole('button', { name: /Sam assigned to recipe 1.*move to recipe 2/i }))
+    const recipeTwo = within(cell).getByText('Recipe 2').closest('.recipe-assignment-box') as HTMLElement
+    expect(within(recipeTwo).getByRole('button', { name: /Sam assigned to recipe 2/i })).toBeInTheDocument()
+    expect(within(recipeTwo).getByText('1 person')).toBeInTheDocument()
+  })
+
+  it('shows one cook row per recipe lane and forces a new cook after a break', () => {
+    const dates = plannerDates('2026-07-13', 7)
+    const split = [{ group_key: 'shared', member_ids: ['alex'] }, { group_key: 'recipe-2', member_ids: ['sam'] }]
+    const mealGroupOverrides = Object.fromEntries([
+      ...dates.slice(0, 3).map(date => [`${date.iso}:breakfast`, split]),
+      ...dates.slice(5).map(date => [`${date.iso}:breakfast`, split]),
+    ])
+    const allSlots = buildPlanSlots({
+      dates,
+      selectedMemberIds: ['alex', 'sam'],
+      attendance: {},
+      cookStarts: {
+        [cookStartKey(dates[3].iso, 'breakfast', 'shared')]: true,
+        [cookStartKey(dates[5].iso, 'breakfast', 'shared')]: true,
+      },
+      foodSafetyAcknowledged: false,
+      mealGroupOverrides,
+    })
+    const slots = allSlots.filter(slot => slot.meal_type === 'breakfast')
+    render(<CookDaysStep dates={dates} slots={slots} members={[{ id: 'alex', name: 'Alex', active: true, version: 1 }, { id: 'sam', name: 'Sam', active: true, version: 1 }]} cookStarts={{ [cookStartKey(dates[3].iso, 'breakfast', 'shared')]: true, [cookStartKey(dates[5].iso, 'breakfast', 'shared')]: true }} foodSafetyAcknowledged={false} onToggle={() => undefined} onAcknowledge={() => undefined}/>)
+
+    expect(screen.getAllByRole('row')).toHaveLength(3)
+    const recipeTwoRow = screen.getByRole('rowheader', { name: /Breakfast · Recipe 2.*Sam/i }).closest('tr') as HTMLElement
+    const choices = within(recipeTwoRow).getAllByRole('checkbox')
+    expect(choices[0]).toBeChecked()
+    expect(choices[0]).toBeDisabled()
+    expect(choices[3]).toBeDisabled()
+    expect(choices[4]).toBeDisabled()
+    expect(choices[5]).toBeChecked()
+    expect(choices[5]).toBeDisabled()
+    expect(choices[6]).not.toBeDisabled()
   })
 
   it('collects exercise calories and guest places on special days', async () => {
@@ -214,6 +274,56 @@ describe('PlanPage wizard', () => {
     await user.click(collapse)
     expect(screen.getByRole('button', { name: 'Expand 2026-07-13' })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByText('Oats')).not.toBeVisible()
+  })
+
+  it('sets and clears recipe serving limits from the generated plan', async () => {
+    const plan: BackendPlanDetail = {
+      plan: {
+        id: 'demo',
+        name: 'Serving limits plan',
+        start_date: '2026-07-13',
+        end_date: '2026-07-13',
+        status: 'ready',
+        diagnostics: [],
+        version: 1,
+      },
+      occurrences: [{
+        id: 'breakfast',
+        meal_date: '2026-07-13',
+        meal_type: 'breakfast',
+        batch_id: 'breakfast-batch',
+        component_slot: 0,
+        recipe_id: 'oats',
+        recipe_title: 'Whole egg oats',
+        minimum_servings: null,
+        serving_increment: null,
+        batch_servings: 1,
+        portions: [{ member_id: 'demo-you', servings: 1 }],
+      }],
+    }
+    storeDemoPlan(plan)
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/plan?plan=demo']}><PlanPage/></MemoryRouter></QueryClientProvider>)
+
+    await user.click(screen.getByRole('button', { name: 'Serving limits' }))
+    const dialog = screen.getByRole('dialog', { name: 'Serving limits for Whole egg oats' })
+    expect(within(dialog).getByRole('checkbox', { name: /use recipe-specific serving sizes/i })).not.toBeChecked()
+    await user.click(within(dialog).getByRole('checkbox', { name: /use recipe-specific serving sizes/i }))
+    expect(within(dialog).getByText('1, 1.5, 2, 2.5, 3, …')).toBeInTheDocument()
+    const minimum = within(dialog).getByRole('spinbutton', { name: /minimum servings/i })
+    await user.clear(minimum)
+    await user.type(minimum, '0.3')
+    expect(within(dialog).getByRole('button', { name: 'Save serving limits' })).toBeDisabled()
+    await user.clear(minimum)
+    await user.type(minimum, '1')
+    await user.click(within(dialog).getByRole('button', { name: 'Save serving limits' }))
+
+    expect(screen.getByText('Serving rule · starts at 1, steps by 0.5')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Serving limits' }))
+    const reopened = screen.getByRole('dialog', { name: 'Serving limits for Whole egg oats' })
+    await user.click(within(reopened).getByRole('checkbox', { name: /use recipe-specific serving sizes/i }))
+    await user.click(within(reopened).getByRole('button', { name: 'Save serving limits' }))
+    expect(screen.queryByText(/Serving rule ·/)).not.toBeInTheDocument()
   })
 
   it('shows meals in breakfast, lunch, dinner, snack order', () => {

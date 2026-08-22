@@ -259,11 +259,25 @@ export const api = {
       expected_version: number
       title: string
       yield_servings: number
+      minimum_servings?: number | null
+      serving_increment?: number | null
       meal_types?: BackendMealType[]
       ingredients: Array<Record<string, unknown>>
     },
   ) =>
     request<BackendRecipeDetail>(`/recipes/${id}/review`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  saveRecipeServingConstraints: (
+    id: string,
+    payload: {
+      expected_version: number
+      minimum_servings: number | null
+      serving_increment: number | null
+    },
+  ) =>
+    request<BackendRecipeDetail>(`/recipes/${id}/serving-constraints`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),
@@ -282,6 +296,7 @@ export const api = {
   },
   extractRecipeMethod: (recipeId: string, expectedVersion?: number) => request<BackendMethodView>(`/recipes/${recipeId}/method/extract`, { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion }) }),
   saveRecipeMethod: (recipeId: string, payload: BackendMethodUpdate) => request<BackendMethodView>(`/recipes/${recipeId}/method`, { method: 'PUT', body: JSON.stringify(payload) }),
+  recoverHistoricalRecipeMethod: (recipeId: string, batchId: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/recover-historical?batch_id=${encodeURIComponent(batchId)}`, { method: 'POST' }),
   previewMethodRefresh: (recipeId: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/refresh-preview`, { method: 'POST' }),
   applyMethodRefresh: (recipeId: string, expectedVersion: number, previewToken: string) => request<BackendMethodView>(`/recipes/${recipeId}/method/refresh`, { method: 'POST', body: JSON.stringify({ expected_version: expectedVersion, preview_token: previewToken }) }),
   startImport: (url: string) =>
@@ -540,6 +555,8 @@ export interface BackendRecipe {
   image_url?: string
   version: number
   yield_servings?: number
+  minimum_servings?: number
+  serving_increment?: number
   publisher_nutrition?: {
     basis?: string
     energy_kcal?: number
@@ -1142,6 +1159,9 @@ export interface BackendPlanDetail {
     guest_servings?: number
     recipe_id: string
     recipe_title: string
+    recipe_version?: number
+    minimum_servings?: number | null
+    serving_increment?: number | null
     source_url?: string
     image_url?: string
     batch_servings: number

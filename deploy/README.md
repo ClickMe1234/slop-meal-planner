@@ -33,15 +33,15 @@ In **Apps → Add Container**, use these main fields:
 | Field | Value |
 | --- | --- |
 | Name | `Slop Meal Planner` |
-| Repository | `ghcr.io/clickme1234/slop-meal-planner:1.3.2` |
+| Repository | `ghcr.io/clickme1234/slop-meal-planner:1.3.4` |
 | Network Type | `Bridge` |
 
 The Repository field is a Docker image reference, not the GitHub source URL.
 No Label or Device entries are required. The GHCR package must be public so
 Unraid can pull it anonymously.
 
-For the `v1.3.2` release, verify once that
-`ghcr.io/clickme1234/slop-meal-planner:1.3.2` is public and that an
+For the `v1.3.4` release, verify once that
+`ghcr.io/clickme1234/slop-meal-planner:1.3.4` is public and that an
 unauthenticated `docker pull` succeeds. Later releases are not complete until
 the same anonymous-pull check passes for their immutable tag.
 

@@ -63,6 +63,8 @@ function reviewPayload(recipe: BackendRecipeDetail, mealTypes: RecipeMealType[])
     expected_version: recipe.version,
     title: recipe.title,
     yield_servings: Number(recipe.yield_servings),
+    minimum_servings: recipe.minimum_servings ?? null,
+    serving_increment: recipe.serving_increment ?? null,
     meal_types: mealTypes,
     ingredients: recipe.ingredients.map(ingredient => ({
       lineage_id: ingredient.lineage_id,
@@ -350,6 +352,8 @@ export function mapSavedRecipe(recipe: BackendRecipe, categoryLabels: Map<string
     sourceUrl: recipe.source_url ?? '',
     imageUrl: recipe.image_url,
     yield: recipe.yield_servings,
+    minimumServings: recipe.minimum_servings,
+    servingIncrement: recipe.serving_increment,
     nutrition,
     nutritionSource,
     nutritionSourceName: sourceName(recipe),

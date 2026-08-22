@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.4 - 2026-08-21
+
+- Add an explicit recovery action for cooked batches whose historical method
+  snapshot was never captured, copying the current method without changing the
+  cooked record or batch ingredients.
+
+## 1.3.3 - 2026-08-21
+
+- Persist submitted custom-recipe methods and repair older custom recipes whose
+  saved method snapshot is missing.
+- Link custom-method ingredients to exact wording by selecting and tapping a
+  word on touch devices, or dragging an ingredient onto it on desktop.
+- Scale methods opened from a planned batch correctly and apply custom serving
+  counts only after editing is complete, keeping the input responsive.
+
 ## 1.3.2 - 2026-08-14
 
 - Restore live Allrecipes method fetching by matching Python's standard HTTPS

@@ -9,10 +9,12 @@ from sqlalchemy.orm import Session
 from ..errors import DomainError
 from ..models import (
     MealBatch,
+    MealOccurrence,
     MealPlan,
     NutritionCalculation,
     PantryReservation,
     PlanStatus,
+    PortionAllocation,
     Recipe,
     RecipeIngredient,
     RecipeVersion,
@@ -21,6 +23,7 @@ from ..models import (
 from .pantry import reserve_plan_batches
 from .shopping import build_shopping_list
 from .recipe_methods import clone_method_snapshot
+from .planner import BOOST_PORTIONS, PORTIONS, SIDE_PORTIONS, recipe_portions
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +32,71 @@ class PlanSyncResult:
     shopping_list_rebuilt: bool = False
     shopping_list_id: str | None = None
     cooked_batches_unchanged: int = 0
+
+
+def _reconcile_batch_servings(
+    db: Session, plan: MealPlan, batch: MealBatch, version: RecipeVersion
+) -> None:
+    """Move uncooked allocations onto a replacement version's valid sequence."""
+    occurrences = db.scalars(
+        select(MealOccurrence)
+        .where(MealOccurrence.batch_id == batch.id)
+        .order_by(MealOccurrence.meal_date, MealOccurrence.id)
+    ).all()
+    batch_servings = Decimal("0")
+    for occurrence in occurrences:
+        allocations = db.scalars(
+            select(PortionAllocation)
+            .where(PortionAllocation.meal_occurrence_id == occurrence.id)
+            .order_by(PortionAllocation.member_id)
+        ).all()
+        old_largest = max(
+            (Decimal(allocation.servings) for allocation in allocations),
+            default=Decimal("0"),
+        )
+        for allocation in allocations:
+            current = Decimal(allocation.servings)
+            boosted = any(
+                item.get("meal_date") == occurrence.meal_date.isoformat()
+                and item.get("member_id") == allocation.member_id
+                and Decimal(str(item.get("calories") or 0)) > 0
+                and (
+                    not item.get("meal_allocations")
+                    or any(
+                        meal.get("meal_type") == occurrence.meal_type
+                        and Decimal(str(meal.get("percentage") or 0)) > 0
+                        for meal in item["meal_allocations"]
+                    )
+                )
+                for item in plan.calorie_boosts or []
+            )
+            standard = (
+                SIDE_PORTIONS
+                if batch.parent_batch_id is not None
+                else BOOST_PORTIONS if boosted else PORTIONS
+            )
+            allowed = recipe_portions(
+                standard,
+                version.minimum_servings,
+                version.serving_increment,
+            )
+            allocation.servings = min(
+                allowed,
+                key=lambda value: (abs(value - current), value),
+            )
+        new_largest = max(
+            (Decimal(allocation.servings) for allocation in allocations),
+            default=Decimal("0"),
+        )
+        if old_largest > 0 and occurrence.guest_servings:
+            occurrence.guest_servings = (
+                Decimal(occurrence.guest_servings) * new_largest / old_largest
+            )
+        batch_servings += sum(
+            (Decimal(allocation.servings) for allocation in allocations),
+            Decimal("0"),
+        ) + Decimal(occurrence.guest_servings)
+    batch.servings = batch_servings
 
 
 def clone_recipe_version_for_shopping(
@@ -44,6 +112,8 @@ def clone_recipe_version_for_shopping(
         version_number=previous.version_number + 1,
         title=previous.title,
         yield_servings=previous.yield_servings,
+        minimum_servings=previous.minimum_servings,
+        serving_increment=previous.serving_increment,
         custom_instructions=previous.custom_instructions,
         source_checksum=previous.source_checksum,
         publisher_nutrition=previous.publisher_nutrition,
@@ -145,13 +215,21 @@ def sync_recipe_versions_to_current_plans(
         plan = plans.get(batch.meal_plan_id)
         if plan is None:
             continue
-        if plan.status == PlanStatus.ACCEPTED.value and batch.cooked_at is not None:
+        if batch.cooked_at is not None:
             cooked_unchanged += 1
             continue
         replacement = replacements.get(batch.recipe_version_id)
         if replacement is None:
             continue
         batch.recipe_version_id = replacement
+        replacement_version = db.get(RecipeVersion, replacement)
+        if replacement_version is None:
+            raise DomainError(
+                "INVALID_RECIPE_VERSION",
+                "A replacement recipe version no longer exists",
+                409,
+            )
+        _reconcile_batch_servings(db, plan, batch, replacement_version)
         changed_plan_ids.add(plan.id)
         if plan.status == PlanStatus.ACCEPTED.value:
             accepted_changed_ids.add(plan.id)

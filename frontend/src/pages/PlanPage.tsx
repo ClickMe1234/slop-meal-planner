@@ -13,6 +13,7 @@ import {
   Flame,
   PackageOpen,
   Search,
+  SlidersHorizontal,
   Plus,
   Trash2,
   TriangleAlert,
@@ -51,6 +52,7 @@ import {
   compareMealTypes,
   cookStartKey,
   emptyIngredientGuidance,
+  editableMealGroupsFor,
   formatDateRange,
   hasLongBatch,
   isAttending,
@@ -64,7 +66,6 @@ import {
   guestDayEntries,
   guestMealKey,
   mealGroupOverrideKey,
-  mealGroupsFor,
   type CalorieBoosts,
   type CalorieBoostMealShares,
   type AttendanceOverrides,
@@ -107,7 +108,7 @@ const stepHelp = [
   'Choose any period from one day upwards.',
   'Household members and nutrition targets come from your saved profiles.',
   'Untick someone when they are out or do not need that meal. Servings and shopping quantities will follow these choices.',
-  'Household defaults are applied first. Split or combine any particular meal without changing the saved defaults.',
+  'Each meal starts with one recipe for everyone. Add recipe boxes only on the days people need different meals.',
   'Add extra calories for active days and guests for the dates they are joining you.',
   'A tick starts a new recipe batch. Unticked dates use the most recent recipe for that meal.',
   'Add plan-specific ingredient guidance. Saved household restrictions are applied automatically too.',
@@ -195,11 +196,6 @@ export function PlanPage() {
     queryFn: api.listMembers,
     enabled: !isDemoMode,
   })
-  const mealGroupDefaultsQuery = useQuery({
-    queryKey: ['meal-group-defaults'],
-    queryFn: api.getMealGroupDefaults,
-    enabled: !isDemoMode,
-  })
   const members = useMemo(
     () => sortPlannerPeople(isDemoMode ? [demoMember] : (membersQuery.data ?? []).filter(member => member.active)),
     [membersQuery.data],
@@ -266,11 +262,10 @@ export function PlanPage() {
 
   const dates = useMemo(() => plannerDates(startDate, days), [startDate, days])
   const mealGroupDefaults = useMemo<MealGroupDefaults>(() => {
-    if (isDemoMode || !mealGroupDefaultsQuery.data) {
-      return Object.fromEntries(MEAL_TYPES.map(mealType => [mealType, [{ group_key: 'shared', member_ids: members.map(member => member.id) }]])) as MealGroupDefaults
-    }
-    return mealGroupDefaultsQuery.data.groups
-  }, [mealGroupDefaultsQuery.data, members])
+    // A new plan starts simply: one recipe for everyone at every meal. Any
+    // splits selected in this wizard are plan-specific.
+    return Object.fromEntries(MEAL_TYPES.map(mealType => [mealType, [{ group_key: 'shared', member_ids: members.map(member => member.id) }]])) as MealGroupDefaults
+  }, [members])
   const slots = useMemo(() => buildPlanSlots({
     dates,
     selectedMemberIds,
@@ -281,6 +276,13 @@ export function PlanPage() {
     mealGroupOverrides,
   }), [attendance, cookStarts, dates, foodSafetyAcknowledged, mealGroupDefaults, mealGroupOverrides, selectedMemberIds])
   const longBatch = hasLongBatch(slots)
+  const incompleteMealGroups = dates.some(date => MEAL_TYPES.some(mealType => {
+    const configured = mealGroupOverrides[mealGroupOverrideKey(date.iso, mealType)]
+    if (!configured) return false
+    const participants = participantsFor(attendance, date.iso, mealType, selectedMemberIds)
+    return editableMealGroupsFor(mealGroupDefaults, mealGroupOverrides, date.iso, mealType, participants)
+      .some(group => !group.member_ids.length)
+  }))
 
   const restoredPlan = useQuery({
     queryKey: ['plan', restoredPlanId],
@@ -320,13 +322,16 @@ export function PlanPage() {
       ? !selectedMemberIds.length || selectedTargetLoading || selectedWithoutTarget.length > 0
       : step === 2
         ? slots.length === 0
-        : step === 5
-          ? longBatch && !foodSafetyAcknowledged
-          : false
+        : step === 3
+          ? incompleteMealGroups
+          : step === 5
+            ? longBatch && !foodSafetyAcknowledged
+            : false
   const generationBlocked = !slots.length
     || !selectedMemberIds.length
     || selectedTargetLoading
     || selectedWithoutTarget.length > 0
+    || incompleteMealGroups
     || (longBatch && !foodSafetyAcknowledged)
 
   const next = () => {
@@ -453,7 +458,7 @@ export function PlanPage() {
         {step === 0 && <DateStep startDate={startDate} days={days} dates={dates} onStartDate={setStartDate} onDays={value => setDays(clampDays(value))}/>}
         {step === 1 && <PeopleStep members={members} selectedMemberIds={selectedMemberIds} targets={targetsByMember} loading={membersQuery.isLoading || selectedTargetLoading} onToggle={toggleMember}/>}
         {step === 2 && <AttendanceStep dates={dates} members={members.filter(member => selectedMemberIds.includes(member.id))} attendance={attendance} onToggle={toggleAttendance}/>}
-        {step === 3 && <MealGroupsStep dates={dates} members={members.filter(member => selectedMemberIds.includes(member.id))} selectedMemberIds={selectedMemberIds} attendance={attendance} defaults={mealGroupDefaults} overrides={mealGroupOverrides} onChange={(date, mealType, groups) => setMealGroupOverrides(current => ({ ...current, [mealGroupOverrideKey(date, mealType)]: groups }))}/>}
+        {step === 3 && <><MealGroupsStep dates={dates} members={members.filter(member => selectedMemberIds.includes(member.id))} selectedMemberIds={selectedMemberIds} attendance={attendance} defaults={mealGroupDefaults} overrides={mealGroupOverrides} onChange={(date, mealType, groups) => setMealGroupOverrides(current => ({ ...current, [mealGroupOverrideKey(date, mealType)]: groups }))}/>{incompleteMealGroups && <Notice tone="warning" title="Every recipe needs someone">Move at least one person into each recipe box before continuing.</Notice>}</>}
         {step === 4 && <SpecialDaysStep dates={dates} slots={slots} members={members.filter(member => selectedMemberIds.includes(member.id))} targets={targetsByMember} calorieBoosts={calorieBoosts} calorieBoostShares={calorieBoostShares} guestCounts={guestCounts} guestMeals={guestMeals} guestMealGroups={guestMealGroups} onGuestMealGroup={(date, mealType, groupKey) => setGuestMealGroups(current => ({ ...current, [guestMealKey(date, mealType)]: groupKey }))} onCalorieBoost={(date, memberId, calories) => setCalorieBoosts(current => ({ ...current, [calorieBoostKey(date, memberId)]: calories }))} onCalorieBoostShares={(date, memberId, shares) => setCalorieBoostShares(current => ({ ...current, ...Object.fromEntries(MEAL_TYPES.map(mealType => [calorieBoostMealKey(date, memberId, mealType), shares[mealType]])) }))} onGuestCount={(date, count) => setGuestCounts(current => ({ ...current, [date]: count }))} onGuestMeals={(date, meals) => setGuestMeals(current => ({ ...current, ...Object.fromEntries(MEAL_TYPES.map(mealType => [guestMealKey(date, mealType), meals.includes(mealType)])) }))}/>}
         {step === 5 && <CookDaysStep dates={dates} slots={slots} members={members} cookStarts={cookStarts} foodSafetyAcknowledged={foodSafetyAcknowledged} onToggle={toggleCookStart} onAcknowledge={setFoodSafetyAcknowledged}/>}
         {step === 6 && <IngredientsStep query={ingredientQuery} onQuery={setIngredientQuery} loading={ingredientSearch.isFetching} results={ingredientResults} guidance={ingredientGuidance} profileRestrictions={profileRestrictions} catalogue={isDemoMode ? demoIngredientCatalogue : (recipeIngredientCatalogue.data?.items ?? [])} impactLoading={!isDemoMode && recipeIngredientCatalogue.isLoading} impactError={!isDemoMode && recipeIngredientCatalogue.isError} onAdd={addIngredient} onRemove={removeIngredient} onOpenPantry={() => setPantryImportOpen(true)}/>}
@@ -506,28 +511,31 @@ function AttendanceStep({ dates, members, attendance, onToggle }: { dates: Plann
   })}</fieldset></td>)}</tr>)}</tbody></table></div>
 }
 
-function MealGroupsStep({ dates, members, selectedMemberIds, attendance, defaults, overrides, onChange }: { dates: PlannerDate[]; members: BackendMember[]; selectedMemberIds: string[]; attendance: AttendanceOverrides; defaults: MealGroupDefaults; overrides: MealGroupOverrides; onChange: (date: string, mealType: MealType, groups: PlannerMealGroup[]) => void }) {
+export function MealGroupsStep({ dates, members, selectedMemberIds, attendance, defaults, overrides, onChange }: { dates: PlannerDate[]; members: BackendMember[]; selectedMemberIds: string[]; attendance: AttendanceOverrides; defaults: MealGroupDefaults; overrides: MealGroupOverrides; onChange: (date: string, mealType: MealType, groups: PlannerMealGroup[]) => void }) {
   const names = Object.fromEntries(members.map(member => [member.id, member.name]))
-  const groupLabel = (group: PlannerMealGroup) => group.member_ids.map(memberId => names[memberId] ?? 'Household member').join(' & ')
+  const [draggedMemberId, setDraggedMemberId] = useState('')
+  const setRecipeCount = (date: string, mealType: MealType, participants: string[], count: number) => {
+    const current = editableMealGroupsFor(defaults, overrides, date, mealType, participants)
+    const kept = current.slice(0, count).map(group => ({ ...group, member_ids: [...group.member_ids] }))
+    while (kept.length < count) kept.push({ group_key: `recipe-${kept.length + 1}`, member_ids: [] })
+    const retained = new Set(kept.flatMap(group => group.member_ids))
+    const returnedToFirst = participants.filter(memberId => !retained.has(memberId))
+    if (returnedToFirst.length) kept[0].member_ids.push(...returnedToFirst)
+    onChange(date, mealType, kept)
+  }
   const moveMember = (date: string, mealType: MealType, participants: string[], memberId: string, destination: string) => {
-    const groups = mealGroupsFor(defaults, overrides, date, mealType, participants)
+    const groups = editableMealGroupsFor(defaults, overrides, date, mealType, participants)
       .map(group => ({ ...group, member_ids: group.member_ids.filter(id => id !== memberId) }))
-      .filter(group => group.member_ids.length)
-    if (destination === 'new') {
-      groups.push({ group_key: `custom-${date}-${mealType}-${memberId}`, member_ids: [memberId] })
-    } else {
-      const target = groups.find(group => group.group_key === destination)
-      if (target) target.member_ids.push(memberId)
-      else groups.push({ group_key: destination, member_ids: [memberId] })
-    }
+    const target = groups.find(group => group.group_key === destination)
+    if (target) target.member_ids.push(memberId)
     onChange(date, mealType, groups)
   }
-  return <div className="meal-group-planner"><Notice title="One group, one recipe">People in the same group share a recipe but can receive different portion sizes. These changes apply only to this plan.</Notice>{dates.map(date => <section className="meal-group-day" key={date.iso}><header><strong>{date.weekday}</strong><span>{date.shortDate}</span></header><div>{MEAL_TYPES.map(mealType => {
+  return <div className="meal-group-planner"><Notice title="One box, one recipe">Choose how many recipes each meal needs. Everyone starts in Recipe 1; drag a name to another box, or tap it to move it to the next recipe.</Notice><div className="planner-table-wrap" tabIndex={0} aria-label="Recipe assignments grid"><table className="planner-grid planner-assignment-grid"><thead><tr><th scope="col">Meal</th>{dates.map(date => <th scope="col" key={date.iso}><strong>{date.weekday}</strong><small>{date.shortDate}</small></th>)}</tr></thead><tbody>{MEAL_TYPES.map(mealType => <tr key={mealType}><th scope="row">{capitalise(mealType)}</th>{dates.map(date => {
     const participants = participantsFor(attendance, date.iso, mealType, selectedMemberIds)
-    if (!participants.length) return null
-    const groups = mealGroupsFor(defaults, overrides, date.iso, mealType, participants)
-    return <article className="meal-group-slot" key={mealType}><div className="meal-group-slot__heading"><div><strong>{capitalise(mealType)}</strong><small>{groups.length === 1 ? 'One shared recipe' : `${groups.length} different recipes`}</small></div><div className="meal-group-quick-actions"><button type="button" onClick={() => onChange(date.iso, mealType, [{ group_key: groups[0]?.group_key ?? `custom-${date.iso}-${mealType}-shared`, member_ids: participants }])}>Everyone shares</button><button type="button" onClick={() => onChange(date.iso, mealType, participants.map(memberId => ({ group_key: `custom-${date.iso}-${mealType}-${memberId}`, member_ids: [memberId] })))}>Separate meals</button></div></div><div className="meal-group-columns">{groups.map((group, index) => <div className="meal-group-column" key={group.group_key}><span>Recipe {index + 1}</span><strong>{groupLabel(group)}</strong>{group.member_ids.map(memberId => <label key={memberId}><span>{names[memberId]}</span><select aria-label={`${names[memberId]} recipe group for ${mealType} on ${date.shortDate}`} value={group.group_key} onChange={event => moveMember(date.iso, mealType, participants, memberId, event.target.value)}>{groups.map((option, optionIndex) => <option value={option.group_key} key={option.group_key}>Recipe {optionIndex + 1}: {groupLabel(option)}</option>)}<option value="new">New separate recipe</option></select></label>)}</div>)}</div></article>
-  })}</div></section>)}</div>
+    if (!participants.length) return <td className="recipe-assignment-unused" key={date.iso} data-date={`${date.weekday} ${date.shortDate}`}>Not needed</td>
+    const groups = editableMealGroupsFor(defaults, overrides, date.iso, mealType, participants)
+    return <td key={date.iso} data-date={`${date.weekday} ${date.shortDate}`}><label className="recipe-count-label"><span>Recipes</span><select aria-label={`Number of ${mealType} recipes on ${date.shortDate}`} value={groups.length} onChange={event => setRecipeCount(date.iso, mealType, participants, Number(event.target.value))}>{participants.map((_, index) => <option key={index + 1} value={index + 1}>{index + 1}</option>)}</select></label><div className="recipe-assignment-boxes">{groups.map((group, groupIndex) => <div className="recipe-assignment-box" key={group.group_key} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }} onDrop={event => { event.preventDefault(); const memberId = event.dataTransfer.getData('text/member-id') || draggedMemberId; if (memberId) moveMember(date.iso, mealType, participants, memberId, group.group_key); setDraggedMemberId('') }}><div><strong>Recipe {groupIndex + 1}</strong><small>{group.member_ids.length === participants.length ? 'Everyone' : `${group.member_ids.length} ${group.member_ids.length === 1 ? 'person' : 'people'}`}</small></div><div className="recipe-member-pills">{group.member_ids.map(memberId => <button type="button" className="recipe-member-pill" draggable key={memberId} onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/member-id', memberId); setDraggedMemberId(memberId) }} onDragEnd={() => setDraggedMemberId('')} onClick={() => { if (groups.length > 1) moveMember(date.iso, mealType, participants, memberId, groups[(groupIndex + 1) % groups.length].group_key) }} aria-label={`${names[memberId] ?? 'Household member'} assigned to recipe ${groupIndex + 1} for ${mealType} on ${date.shortDate}${groups.length > 1 ? `; move to recipe ${(groupIndex + 1) % groups.length + 1}` : ''}`}><GripVertical aria-hidden="true"/>{names[memberId] ?? 'Household member'}</button>)}</div>{!group.member_ids.length && <span className="recipe-assignment-empty">Drop a name here</span>}</div>)}</div></td>
+  })}</tr>)}</tbody></table></div></div>
 }
 
 function SpecialDaysStep({ dates, slots, members, targets, calorieBoosts, calorieBoostShares, guestCounts, guestMeals, guestMealGroups, onCalorieBoost, onCalorieBoostShares, onGuestCount, onGuestMeals, onGuestMealGroup }: { dates: PlannerDate[]; slots: PlannerSlot[]; members: BackendMember[]; targets: Map<string, BackendTarget>; calorieBoosts: CalorieBoosts; calorieBoostShares: CalorieBoostMealShares; guestCounts: GuestCounts; guestMeals: GuestMeals; guestMealGroups: GuestMealGroups; onCalorieBoost: (date: string, memberId: string, calories: number) => void; onCalorieBoostShares: (date: string, memberId: string, shares: Record<MealType, number>) => void; onGuestCount: (date: string, count: number) => void; onGuestMeals: (date: string, meals: MealType[]) => void; onGuestMealGroup: (date: string, mealType: MealType, groupKey: string) => void }) {
@@ -557,17 +565,17 @@ function SpecialDaysStep({ dates, slots, members, targets, calorieBoosts, calori
   })}</div><Notice tone="info" title="How adjustments work"><span>Calorie boosts are assigned to the selected meals for that person. Guest portions increase only their selected meal batches and the shopping list, but do not change household nutrition totals.</span></Notice></div>
 }
 
-function CookDaysStep({ dates, slots, members, cookStarts, foodSafetyAcknowledged, onToggle, onAcknowledge }: { dates: PlannerDate[]; slots: PlannerSlot[]; members: BackendMember[]; cookStarts: CookStarts; foodSafetyAcknowledged: boolean; onToggle: (date: string, mealType: MealType, mealGroupKey: string) => void; onAcknowledge: (value: boolean) => void }) {
+export function CookDaysStep({ dates, slots, members, cookStarts, foodSafetyAcknowledged, onToggle, onAcknowledge }: { dates: PlannerDate[]; slots: PlannerSlot[]; members: BackendMember[]; cookStarts: CookStarts; foodSafetyAcknowledged: boolean; onToggle: (date: string, mealType: MealType, mealGroupKey: string) => void; onAcknowledge: (value: boolean) => void }) {
   const longBatch = hasLongBatch(slots)
   const names = Object.fromEntries(members.map(member => [member.id, member.name]))
-  const rows = MEAL_TYPES.flatMap(mealType => Array.from(new Set(slots.filter(slot => slot.meal_type === mealType).map(slot => slot.meal_group_key ?? 'shared'))).map(groupKey => ({ mealType, groupKey })))
-  return <><div className="planner-table-wrap" tabIndex={0} aria-label="New recipe cook days grid"><table className="planner-grid planner-cook-grid"><thead><tr><th scope="col">Meal group</th>{dates.map(date => <th scope="col" key={date.iso}><strong>{date.weekday}</strong><small>{date.shortDate}</small></th>)}</tr></thead><tbody>{rows.map(({ mealType, groupKey }) => {
+  const rows = MEAL_TYPES.flatMap(mealType => Array.from(new Set(slots.filter(slot => slot.meal_type === mealType).map(slot => slot.meal_group_key ?? 'shared'))).map((groupKey, index) => ({ mealType, groupKey, recipeNumber: index + 1 })))
+  return <><div className="planner-table-wrap" tabIndex={0} aria-label="New recipe cook days grid"><table className="planner-grid planner-cook-grid"><thead><tr><th scope="col">Meal group</th>{dates.map(date => <th scope="col" key={date.iso}><strong>{date.weekday}</strong><small>{date.shortDate}</small></th>)}</tr></thead><tbody>{rows.map(({ mealType, groupKey, recipeNumber }) => {
     const groupSlots = slots.filter(slot => slot.meal_type === mealType && slot.meal_group_key === groupKey)
-    const firstDate = [...groupSlots].sort((left, right) => left.meal_date.localeCompare(right.meal_date))[0]?.meal_date
     const groupNames = Array.from(new Set(groupSlots.flatMap(slot => slot.participant_member_ids))).map(id => names[id] ?? 'Household member').join(' & ')
-    return <tr key={`${mealType}:${groupKey}`}><th scope="row"><strong>{capitalise(mealType)}</strong><small>{groupNames}</small></th>{dates.map(date => {
+    return <tr key={`${mealType}:${groupKey}`}><th scope="row"><strong>{capitalise(mealType)} · Recipe {recipeNumber}</strong><small>{groupNames}</small></th>{dates.map((date, dateIndex) => {
       const planned = groupSlots.some(slot => slot.meal_date === date.iso)
-      const forced = planned && date.iso === firstDate
+      const previousDate = dates[dateIndex - 1]?.iso
+      const forced = planned && (!previousDate || !groupSlots.some(slot => slot.meal_date === previousDate))
       const checked = forced || Boolean(cookStarts[cookStartKey(date.iso, mealType, groupKey)])
       return <td key={date.iso} data-date={`${date.weekday} ${date.shortDate}`}><label className={`cook-choice${checked ? ' selected' : ''}${!planned ? ' disabled' : ''}`}><input type="checkbox" disabled={!planned || forced} checked={checked} onChange={() => onToggle(date.iso, mealType, groupKey)} aria-label={`Cook new ${mealType} for ${groupNames} on ${date.shortDate}`}/><span>{!planned ? 'Not needed' : forced ? 'First cook' : checked ? 'Cook new' : 'Use batch'}</span></label></td>
     })}</tr>
@@ -761,6 +769,89 @@ function ReviewStep({ dates, slots, members, guidance, profileRestrictionCount, 
   return <div className="constraint-review"><dl><div><dt>Dates</dt><dd>{formatDateRange(dates)} · {dates.length} {dates.length === 1 ? 'day' : 'days'}</dd></div><div><dt>Meal slots</dt><dd>{slots.length} total · {mealCounts}</dd></div><div><dt>People</dt><dd>{members.map(member => member.name).join(', ')}</dd></div><div><dt>Special days</dt><dd>{boosts.length} calorie {boosts.length === 1 ? 'boost' : 'boosts'} · {guestPlaces} guest {guestPlaces === 1 ? 'place' : 'places'}</dd></div><div><dt>Cooking</dt><dd>{batchCount(slots)} new recipe {batchCount(slots) === 1 ? 'batch' : 'batches'}</dd></div><div><dt>Plan guidance</dt><dd>{guidance.must.length} must use · {guidance.prefer.length} preferred · {guidance.exclude.length} excluded</dd></div><div><dt>Profile rules</dt><dd>{profileRestrictionCount} applied automatically</dd></div></dl><Notice title="Recipes are meal-tagged">Only planner-ready recipes tagged for the relevant breakfast, lunch, dinner or snack slot will be considered.</Notice>{generating && <ProgressBar value={72} label="Balancing nutrition, portions, batches and preferences…"/>}</div>
 }
 
+type PlannedOccurrence = BackendPlanDetail['occurrences'][number]
+
+function servingSequence(minimum: number, increment: number): string {
+  return Array.from({ length: 5 }, (_, index) => minimum + increment * index)
+    .map(value => Number(value.toFixed(2)).toLocaleString())
+    .join(', ')
+}
+
+function validServingConstraint(value: number): boolean {
+  return Number.isFinite(value) && value >= 0.25 && value <= 2 && Math.abs(value * 4 - Math.round(value * 4)) < 0.0001
+}
+
+export function ServingLimitsDialog({ item, plan, onClose, onPlanChange }: { item: PlannedOccurrence; plan: BackendPlanDetail; onClose: () => void; onPlanChange: (plan: BackendPlanDetail) => void }) {
+  const queryClient = useQueryClient()
+  const initiallyEnabled = item.minimum_servings != null && item.serving_increment != null
+  const [enabled, setEnabled] = useState(initiallyEnabled)
+  const [minimum, setMinimum] = useState(String(item.minimum_servings ?? 1))
+  const [increment, setIncrement] = useState(String(item.serving_increment ?? 0.5))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const minimumValue = Number(minimum)
+  const incrementValue = Number(increment)
+  const valid = !enabled || (validServingConstraint(minimumValue) && validServingConstraint(incrementValue))
+  const dirty = enabled !== initiallyEnabled || (enabled && (
+    minimumValue !== Number(item.minimum_servings)
+    || incrementValue !== Number(item.serving_increment)
+  ))
+
+  const save = async () => {
+    if (!valid || !dirty || saving) return
+    setSaving(true)
+    setError('')
+    const nextMinimum = enabled ? minimumValue : undefined
+    const nextIncrement = enabled ? incrementValue : undefined
+    try {
+      if (isDemoMode) {
+        const updated = {
+          ...plan,
+          occurrences: plan.occurrences.map(occurrence => occurrence.recipe_id === item.recipe_id ? {
+            ...occurrence,
+            minimum_servings: nextMinimum,
+            serving_increment: nextIncrement,
+          } : occurrence),
+        }
+        storeDemoPlan(updated)
+        onPlanChange(updated)
+      } else {
+        const expectedVersion = item.recipe_version ?? (await api.getRecipe(item.recipe_id)).version
+        await api.saveRecipeServingConstraints(item.recipe_id, {
+          expected_version: expectedVersion,
+          minimum_servings: nextMinimum ?? null,
+          serving_increment: nextIncrement ?? null,
+        })
+        const updated = await api.getPlan(plan.plan.id)
+        queryClient.setQueryData(['plan', plan.plan.id], updated)
+        onPlanChange(updated)
+      }
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : 'The serving limits could not be saved.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !saving) onClose() }}>
+    <Card className="serving-limits-dialog" role="dialog" aria-modal="true" aria-labelledby="serving-limits-title">
+      <button type="button" className="modal-close" aria-label="Close serving limits" disabled={saving} onClick={onClose}><X/></button>
+      <div><p className="eyebrow">Planner recipe rule</p><h2 id="serving-limits-title">Serving limits for {item.recipe_title}</h2><p className="muted">Keep planned portions practical for ingredients that cannot be divided freely.</p></div>
+      <label className="serving-limits-toggle"><span><strong>Use recipe-specific serving sizes</strong><small>Turn this off to restore the planner's flexible defaults.</small></span><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)}/></label>
+      {enabled && <div className="form-grid form-grid--2 serving-limits-fields">
+        <label>Minimum servings<input type="number" min="0.25" max="2" step="0.25" inputMode="decimal" value={minimum} onChange={event => setMinimum(event.target.value)}/><small>Smallest portion the planner may assign.</small></label>
+        <label>Serving increment<input type="number" min="0.25" max="2" step="0.25" inputMode="decimal" value={increment} onChange={event => setIncrement(event.target.value)}/><small>How much each next allowed portion increases.</small></label>
+      </div>}
+      {enabled && valid && <div className="serving-limits-preview"><span>Allowed sequence</span><strong>{servingSequence(minimumValue, incrementValue)}, …</strong></div>}
+      {enabled && !valid && <p className="field-error" role="alert">Use values from 0.25 to 2, in steps of 0.25.</p>}
+      {error && <Notice tone="warning" title="Could not save serving limits">{error}</Notice>}
+      <Notice title="Applies across this recipe">Saving updates every uncooked use of this recipe in current plans. Cooked batches keep their recorded portions.</Notice>
+      <div className="button-row"><Button variant="ghost" disabled={saving} onClick={onClose}>Cancel</Button><Button disabled={!valid || !dirty || saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save serving limits'}</Button></div>
+    </Card>
+  </div>
+}
+
 function GeneratedPlan({ plan, memberNames, onEditSetup, onPlanChange }: { plan: BackendPlanDetail; memberNames: Record<string, string>; onEditSetup: () => void; onPlanChange: (plan: BackendPlanDetail) => void }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -769,6 +860,7 @@ function GeneratedPlan({ plan, memberNames, onEditSetup, onPlanChange }: { plan:
   const [acceptError, setAcceptError] = useState<{ message: string; code?: string; actions: ApiAction[] } | null>(null)
   const [removingSideId, setRemovingSideId] = useState('')
   const [failedRemovalId, setFailedRemovalId] = useState('')
+  const [servingLimitsItem, setServingLimitsItem] = useState<PlannedOccurrence | null>(null)
   const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({})
   const grouped = useMemo(() => plan.occurrences.reduce<Record<string, BackendPlanDetail['occurrences']>>((result, item) => {
     ;(result[item.meal_date] ??= []).push(item)
@@ -854,20 +946,22 @@ function GeneratedPlan({ plan, memberNames, onEditSetup, onPlanChange }: { plan:
       const coverage = coveredDates.length > 1 ? `${shortBatchDate(coveredDates[0])}–${shortBatchDate(coveredDates.at(-1) as string)}` : shortBatchDate(coveredDates[0])
       return <div className={`generated-meal${isSide ? ' generated-meal--side' : ''}`} key={item.id}>
         <span>{isSide ? item.meal_type === 'snack' ? 'Snack' : 'Side' : capitalise(item.meal_type)}</span>
-        <div className="generated-meal-copy"><strong>{item.recipe_title}</strong><small>{item.portions.map(portion => `${memberNames[portion.member_id] ?? 'Household member'} ${Number(portion.servings)} serving${Number(portion.servings) === 1 ? '' : 's'}`).join(' · ')}{Number(item.guest_servings ?? 0) > 0 && ` · Guests ${Number(item.guest_servings)} serving${Number(item.guest_servings) === 1 ? '' : 's'}`}</small>{!isSide && <small>Cooking batch · {coverage}</small>}</div>
+        <div className="generated-meal-copy"><strong>{item.recipe_title}</strong><small>{item.portions.map(portion => `${memberNames[portion.member_id] ?? 'Household member'} ${Number(portion.servings)} serving${Number(portion.servings) === 1 ? '' : 's'}`).join(' · ')}{Number(item.guest_servings ?? 0) > 0 && ` · Guests ${Number(item.guest_servings)} serving${Number(item.guest_servings) === 1 ? '' : 's'}`}</small>{!isSide && <small>Cooking batch · {coverage}</small>}{item.minimum_servings != null && item.serving_increment != null && <small className="generated-serving-rule">Serving rule · starts at {Number(item.minimum_servings)}, steps by {Number(item.serving_increment)}</small>}</div>
         <small>{Math.round(kcal)} kcal</small>
         {editable && <div className="generated-meal-actions">
           {isSide ? <>
             <Link className="generated-meal-customise" to={`/plan/${plan.plan.id}/batches/${item.parent_batch_id}/sides/${item.component_slot}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><WandSparkles size={15}/>Replace</Link>
+            <button type="button" className="generated-meal-customise" onClick={() => setServingLimitsItem(item)}><SlidersHorizontal size={15}/>Serving limits</button>
             <button type="button" className="generated-meal-remove" disabled={removingSideId === item.batch_id} onClick={() => void removeSide(item.batch_id, failedRemovalId === item.batch_id)}><Trash2 size={15}/>{removingSideId === item.batch_id ? 'Removing…' : failedRemovalId === item.batch_id ? 'Continue anyway' : 'Remove'}</button>
           </> : <>
             <Link className="generated-meal-customise" to={`/plan/${plan.plan.id}/occurrences/${item.id}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><WandSparkles size={15}/>Customise</Link>
+            <button type="button" className="generated-meal-customise" onClick={() => setServingLimitsItem(item)}><SlidersHorizontal size={15}/>Serving limits</button>
             {nextSideSlot && <Link className="generated-meal-customise generated-meal-add" to={`/plan/${plan.plan.id}/batches/${item.batch_id}/sides/${nextSideSlot}/recipes?mealType=${encodeURIComponent(item.meal_type)}`}><Plus size={15}/>{item.meal_type === 'snack' ? 'Add snacks' : 'Add side'}</Link>}
           </>}
         </div>}
       </div>
     })}</div></Card>
-  })}</div></div>
+  })}</div>{servingLimitsItem && <ServingLimitsDialog key={`${servingLimitsItem.recipe_id}-${servingLimitsItem.recipe_version ?? 'demo'}`} item={servingLimitsItem} plan={plan} onClose={() => setServingLimitsItem(null)} onPlanChange={onPlanChange}/>}</div>
 }
 
 function appendReturnTo(href: string, returnTo: string): string {
