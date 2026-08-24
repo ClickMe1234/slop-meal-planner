@@ -21,6 +21,7 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [logoutError, setLogoutError] = useState('')
+  const [loggingOut, setLoggingOut] = useState(false)
   const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false })
   const username = session.data?.username ?? 'Zach'
   const role = session.data?.role ?? 'owner'
@@ -31,19 +32,23 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
     return () => document.body.classList.remove('nav-is-open')
   }, [menuOpen])
   const logout = async () => {
+    if (loggingOut) return
     try {
       setLogoutError('')
+      setLoggingOut(true)
+      let result: { redirect_url: string | null } = { redirect_url: null }
       if (!isDemoMode) {
-        await api.logout()
+        result = (await api.logout()) ?? { redirect_url: null }
         await queryClient.cancelQueries()
         queryClient.clear()
         await clearOfflineShoppingData()
       }
       localStorage.removeItem('slop-demo-session')
-      navigate('/login')
+      if (result.redirect_url) window.location.assign(result.redirect_url)
+      else navigate('/login')
     } catch {
       setLogoutError('Sign out could not be confirmed. You are still signed in; check your connection and try again.')
-    }
+    } finally { setLoggingOut(false) }
   }
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">Skip to content</a>
@@ -55,7 +60,7 @@ export function AppShell({ theme, setTheme }: { theme: ThemeChoice; setTheme: (t
         <NavLink to="/settings" className={location.pathname.startsWith('/settings') ? 'active' : ''}><Settings size={20} /><span>Settings</span></NavLink>
         <button className="theme-shortcut" onClick={() => setTheme(nextTheme)} aria-label={`Use ${nextTheme} theme`}>{theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}<span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span></button>
         {logoutError && <p className="field-error" role="alert">{logoutError}</p>}
-        <div className="profile-chip"><span>{username.slice(0, 1).toUpperCase()}</span><div><strong>{username}</strong><small>Household {role}</small></div><button type="button" aria-label="Sign out" onClick={logout}><LogOut size={16}/></button></div>
+        <div className="profile-chip"><span>{username.slice(0, 1).toUpperCase()}</span><div><strong>{username}</strong><small>Household {role}</small></div><button type="button" aria-label="Sign out" disabled={loggingOut} onClick={logout}>{loggingOut ? '…' : <LogOut size={16}/>}</button></div>
       </div>
     </aside>
     {menuOpen && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMenuOpen(false)} />}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,6 +26,8 @@ from .routes.recipe_routes import router as recipe_router
 from .routes.recipe_method_routes import router as recipe_method_router
 from .routes.system_routes import router as system_router
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -35,9 +38,10 @@ async def lifespan(_: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     reset_login_security_state()
+    logger.info("authentication mode configured", extra={"auth_mode": settings.auth_mode})
     app = FastAPI(
         title="Meal Planner API",
-        version=os.getenv("APP_VERSION", "1.3.4"),
+        version=os.getenv("APP_VERSION", "1.4.0"),
         docs_url="/api/docs" if settings.public_api_docs else None,
         openapi_url="/api/openapi.json" if settings.public_api_docs else None,
         lifespan=lifespan,
@@ -99,6 +103,16 @@ def create_app() -> FastAPI:
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError):
         trace_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        if request.url.path.startswith("/api/v1/auth"):
+            logger.warning(
+                "authentication request rejected",
+                extra={
+                    "auth_mode": settings.auth_mode,
+                    "auth_code": exc.code,
+                    "auth_status": exc.status_code,
+                    "request_path": request.url.path,
+                },
+            )
         return JSONResponse(
             status_code=exc.status_code,
             media_type="application/problem+json",

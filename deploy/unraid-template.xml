@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Slop Meal Planner</Name>
-  <Repository>ghcr.io/clickme1234/slop-meal-planner:1.3.4</Repository>
+  <Repository>ghcr.io/clickme1234/slop-meal-planner:authentiktest</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>Bridge</Network>
   <MyIP></MyIP>
@@ -33,6 +33,15 @@
   <Config Name="Redis password" Target="REDIS_PASSWORD" Default="" Mode="" Description="Strong Redis password, required when Redis is published on the LAN." Type="Variable" Display="always" Required="false" Mask="true"></Config>
   <Config Name="Application secret key" Target="MEAL_PLANNER_SECRET_KEY" Default="" Mode="" Description="Independent random value of at least 32 characters. Preserve it permanently because rotating it makes encrypted integration credentials unreadable." Type="Variable" Display="always" Required="true" Mask="true"></Config>
   <Config Name="Setup token" Target="MEAL_PLANNER_SETUP_TOKEN" Default="" Mode="" Description="Independent random value of at least 32 characters used to create the first owner." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="Authentication mode" Target="MEAL_PLANNER_AUTH_MODE" Default="builtin" Mode="" Description="builtin, authentik_proxy, or authentik_oidc. Prepare existing Slop accounts before selecting an Authentik mode." Type="Variable" Display="always" Required="true" Mask="false">builtin</Config>
+  <Config Name="Authentik proxy instance URL" Target="MEAL_PLANNER_AUTHENTIK_PROXY_INSTANCE_URL" Default="" Mode="" Description="Canonical HTTPS Authentik base URL; required only in authentik_proxy mode." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Authentik proxy app slug" Target="MEAL_PLANNER_AUTHENTIK_PROXY_APP_SLUG" Default="" Mode="" Description="Expected X-authentik-meta-app value; required only in authentik_proxy mode." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Authentik proxy shared secret" Target="MEAL_PLANNER_AUTHENTIK_PROXY_SHARED_SECRET" Default="" Mode="" Description="At least 32 random characters shared only by the trusted reverse proxy and Slop; required only in authentik_proxy mode." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Authentik proxy logout URL" Target="MEAL_PLANNER_AUTHENTIK_PROXY_LOGOUT_URL" Default="/outpost.goauthentik.io/sign_out" Mode="" Description="Outpost sign-out path or the configured Authentik absolute logout URL." Type="Variable" Display="advanced" Required="false" Mask="false">/outpost.goauthentik.io/sign_out</Config>
+  <Config Name="Public URL" Target="MEAL_PLANNER_PUBLIC_URL" Default="" Mode="" Description="Externally visible HTTPS Slop origin without a path; required only in authentik_oidc mode." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Authentik OIDC discovery URL" Target="MEAL_PLANNER_AUTHENTIK_OIDC_DISCOVERY_URL" Default="" Mode="" Description="Explicit Authentik application discovery URL; required only in authentik_oidc mode." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Authentik OIDC client ID" Target="MEAL_PLANNER_AUTHENTIK_OIDC_CLIENT_ID" Default="" Mode="" Description="Confidential Authentik OAuth2/OIDC client ID; required only in authentik_oidc mode." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Authentik OIDC client secret" Target="MEAL_PLANNER_AUTHENTIK_OIDC_CLIENT_SECRET" Default="" Mode="" Description="Confidential Authentik OAuth2/OIDC client secret; required only in authentik_oidc mode." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
   <Config Name="Allowed hosts" Target="MEAL_PLANNER_ALLOWED_HOSTS" Default="localhost,127.0.0.1" Mode="" Description="Comma-separated actual LAN IPs, hostnames, and reverse-proxy names used to open Slop." Type="Variable" Display="always" Required="true" Mask="false">localhost,127.0.0.1</Config>
   <Config Name="Secure cookies" Target="MEAL_PLANNER_COOKIE_SECURE" Default="true" Mode="" Description="Required for the supported HTTPS deployment. Do not expose passwords or sessions over direct LAN HTTP." Type="Variable" Display="always" Required="true" Mask="false">true</Config>
   <Config Name="HSTS" Target="MEAL_PLANNER_HSTS_ENABLED" Default="true" Mode="" Description="Send Strict-Transport-Security in the supported HTTPS deployment." Type="Variable" Display="always" Required="true" Mask="false">true</Config>

@@ -14,8 +14,11 @@ vi.mock('../api/client', async () => {
     api: {
       ...actual.api,
       me: vi.fn(),
+      authConfig: vi.fn(),
       setupStatus: vi.fn(),
       login: vi.fn(),
+      proxySession: vi.fn(),
+      oidcLoginUrl: vi.fn((returnTo: string) => `/api/v1/auth/oidc/login?return_to=${encodeURIComponent(returnTo)}`),
     },
   }
 })
@@ -53,9 +56,11 @@ const signedInUser = {
 }
 
 beforeEach(() => {
+  vi.mocked(api.authConfig).mockResolvedValue({ mode: 'builtin', provider: 'builtin', password_login_enabled: true })
   vi.mocked(api.setupStatus).mockResolvedValue({ setup_required: false })
   vi.mocked(api.me).mockRejectedValue(new Error('not signed in'))
   vi.mocked(api.login).mockResolvedValue({ user: signedInUser, csrf_token: 'csrf-token' })
+  vi.mocked(api.proxySession).mockResolvedValue({ user: signedInUser, csrf_token: 'csrf-token' })
 })
 
 describe('LoginPage', () => {
@@ -103,5 +108,15 @@ describe('LoginPage', () => {
 
     expect(help).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('region', { name: 'Sign-in help' })).toHaveTextContent(/contact the household owner/i)
+  })
+
+  it('uses the proxy exchange without rendering a Slop password form', async () => {
+    vi.mocked(api.authConfig).mockResolvedValue({ mode: 'authentik_proxy', provider: 'authentik', password_login_enabled: false })
+
+    renderLogin()
+
+    await waitFor(() => expect(api.proxySession).toHaveBeenCalledTimes(1))
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId('current-route')).toHaveTextContent('/week'))
   })
 })

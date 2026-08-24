@@ -574,8 +574,26 @@ def preview_archive(archive_value: str, source_household_id: str | None = None) 
                 for key in COMPONENTS
             ],
             "excluded": [
-                {"key": "sessions", "label": "Active sessions", "reason": "Never imported; sign in with the target installation."},
-                {"key": "integrations", "label": "API credentials", "reason": "Never imported; encrypted secrets stay on the target installation."},
+                {
+                    "key": "sessions",
+                    "label": "Active sessions",
+                    "reason": "Never imported; sign in with the target installation.",
+                },
+                {
+                    "key": "external_identities",
+                    "label": "Authentik identity links",
+                    "reason": "Never imported; restored users link afresh on their next Authentik login.",
+                },
+                {
+                    "key": "oidc_logout_replay",
+                    "label": "OIDC logout replay records",
+                    "reason": "Never imported; replay protection belongs to the target installation.",
+                },
+                {
+                    "key": "integrations",
+                    "label": "API credentials",
+                    "reason": "Never imported; encrypted secrets stay on the target installation.",
+                },
             ],
         }
 
@@ -838,6 +856,7 @@ def restore_archive(
                 "imported": {key: value for key, value in counts.items() if value},
                 "excluded": [
                     "Active sessions were not imported.",
+                    "Authentik identity links and OIDC logout replay records were not imported.",
                     "Encrypted integration credentials were not imported.",
                 ],
             }

@@ -1,32 +1,57 @@
 import { ArrowLeft, ArrowRight, Check, ExternalLink, Heart, KeyRound, ShieldCheck } from 'lucide-react'
 import { FormEvent, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge, Button, Card, Loading, Notice, ProgressBar, Segmented } from '../components/ui'
-import { api, ApiError, isDemoMode, type IngredientLocale, type MeasurementSystem } from '../api/client'
+import { api, ApiError, isDemoMode, type AuthMode, type IngredientLocale, type MeasurementSystem } from '../api/client'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
 import { clearOfflineShoppingData } from '../lib/offlineShopping'
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
-  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false, refetchOnMount: 'always' })
+  const authConfig = useQuery({ queryKey: ['auth-config'], queryFn: api.authConfig, enabled: !isDemoMode, retry: false, refetchOnMount: 'always' })
+  const mode: AuthMode = isDemoMode ? 'builtin' : (authConfig.data?.mode ?? 'builtin')
+  const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode && !authConfig.isLoading && !authConfig.isError, retry: false, refetchOnMount: 'always' })
   const [loading, setLoading] = useState(false)
   const [username, setUsername] = useState(isDemoMode ? 'zach' : '')
   const [password, setPassword] = useState(isDemoMode ? 'password' : '')
   const [rememberMe, setRememberMe] = useState(true)
   const [error, setError] = useState('')
   const [showHelp, setShowHelp] = useState(false)
+  const [proxyAttempted, setProxyAttempted] = useState(false)
+  const [allowProxyLogin, setAllowProxyLogin] = useState(false)
+  const loggedOut = new URLSearchParams(location.search).get('logged_out') === '1'
+  const returnTo = (() => {
+    const state = location.state as { returnTo?: string } | null
+    return state?.returnTo ?? new URLSearchParams(location.search).get('return_to') ?? '/week'
+  })()
   useEffect(() => {
-    if (!isDemoMode) {
+    if (!isDemoMode && authConfig.data?.password_login_enabled) {
       api.setupStatus().then(status => status.setup_required && navigate('/setup')).catch(() => undefined)
     }
-  }, [navigate])
+  }, [authConfig.data?.password_login_enabled, navigate])
   useEffect(() => {
-    if (!isDemoMode && session.isSuccess && !session.isFetching && session.data) {
-      navigate(session.data.must_change_password ? '/change-password' : '/week', { replace: true })
+    if (!isDemoMode && session.isFetchedAfterMount && session.isSuccess && !session.isFetching && session.data) {
+      navigate(mode === 'builtin' && session.data.must_change_password ? '/change-password' : returnTo, { replace: true })
     }
-  }, [navigate, session.data, session.isFetching, session.isSuccess])
+  }, [mode, navigate, returnTo, session.data, session.isFetchedAfterMount, session.isFetching, session.isSuccess])
+  useEffect(() => {
+    if (mode !== 'authentik_proxy' || isDemoMode || proxyAttempted || (loggedOut && !allowProxyLogin) || session.isLoading || session.isFetching || session.isSuccess) return
+    setProxyAttempted(true)
+    setLoading(true)
+    setError('')
+    api.proxySession().then(async () => {
+      queryClient.clear()
+      await clearOfflineShoppingData()
+      navigate(returnTo, { replace: true })
+    }).catch(reason => {
+      setError(reason instanceof ApiError ? reason.message : 'Authentik sign-in failed. Try again.')
+    }).finally(() => setLoading(false))
+  }, [allowProxyLogin, loggedOut, mode, navigate, proxyAttempted, queryClient, returnTo, session.isFetching, session.isLoading, session.isSuccess])
+  if (!isDemoMode && authConfig.isLoading) return <div className="page"><Loading label="Checking authentication settings…" /></div>
+  if (!isDemoMode && authConfig.isError) return <AuthFailureCard message="The authentication configuration could not be loaded. Ask the operator to check the Authentik settings, then retry." onRetry={() => void authConfig.refetch()} />
   if (!isDemoMode && (session.isLoading || session.isFetching)) return <div className="page"><Loading label="Checking your household session…" /></div>
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setLoading(true); setError('')
@@ -40,13 +65,14 @@ export function LoginPage() {
         await clearOfflineShoppingData()
         if (result.user.must_change_password) { navigate('/change-password'); return }
       }
-      navigate('/week')
+      navigate(returnTo)
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'Sign-in failed. Please try again.')
     } finally {
       setLoading(false)
     }
   }
+  if (mode !== 'builtin') return <ExternalLoginCard mode={mode} loggedOut={loggedOut} loading={loading} error={error} returnTo={returnTo} onProxyRetry={() => { setAllowProxyLogin(true); setProxyAttempted(false) }} />
   return <div className="auth-layout">
     <section className="auth-art">
       <div className="brand brand--light"><div className="brand-mark"><Heart size={20} fill="currentColor" /></div><div><strong>Slop</strong><span>meal planner</span></div></div>
@@ -57,25 +83,59 @@ export function LoginPage() {
   </div>
 }
 
+function ExternalLoginCard({ mode, loggedOut, loading, error, returnTo, onProxyRetry }: { mode: Exclude<AuthMode, 'builtin'>; loggedOut: boolean; loading: boolean; error: string; returnTo: string; onProxyRetry: () => void }) {
+  const oidc = mode === 'authentik_oidc'
+  const signIn = () => {
+    if (oidc) window.location.assign(api.oidcLoginUrl(returnTo))
+    else onProxyRetry()
+  }
+  return <div className="auth-layout">
+    <section className="auth-art"><div className="brand brand--light"><div className="brand-mark"><Heart size={20} fill="currentColor" /></div><div><strong>Slop</strong><span>meal planner</span></div></div><div><p className="eyebrow">Your week, made easier</p><h1>Plan once.<br/>Eat well all week.</h1><p>Recipes you trust, nutrition calculated consistently and one shopping list for the household.</p></div><blockquote>“Dinner is sorted before the week even begins.”</blockquote></section>
+    <section className="auth-panel"><Card className="auth-card"><div className="auth-heading"><div className="mobile-auth-mark"><Heart fill="currentColor" /></div><p className="eyebrow">Authentik</p><h2>{loggedOut ? 'You are signed out' : 'Sign in to your household'}</h2><p>{loggedOut ? 'Your Slop session and provider sign-out are complete.' : 'Use your trusted Authentik account to continue.'}</p></div>
+      {error && <Notice tone="warning" title="Could not sign in">{error}</Notice>}
+      {!loggedOut && mode === 'authentik_proxy' && !error && <Notice tone="info" title="Signing in with Authentik…">The trusted reverse proxy is checking your account.</Notice>}
+      {loggedOut && <Notice tone="success" title="Signed out">Choose the button below when you are ready to sign in again.</Notice>}
+      <Button type="button" disabled={loading} onClick={signIn}>{loading ? 'Signing in…' : error && mode === 'authentik_proxy' ? 'Try again' : oidc ? 'Sign in with Authentik' : 'Continue with Authentik'}<ArrowRight size={18} /></Button>
+      <div className="secure-note"><ShieldCheck size={17} /><span>No Slop password is used in this mode</span></div>
+    </Card></section>
+  </div>
+}
+
+function AuthFailureCard({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return <div className="auth-layout"><section className="auth-art"><div className="brand brand--light"><div className="brand-mark"><Heart size={20} fill="currentColor" /></div><div><strong>Slop</strong><span>meal planner</span></div></div><div><p className="eyebrow">Authentication unavailable</p><h1>We could not open sign-in.</h1><p>Ask the operator to check the deployment configuration.</p></div></section><section className="auth-panel"><Card className="auth-card"><div className="auth-heading"><h2>Authentication settings unavailable</h2></div><Notice tone="warning" title="Try again">{message}</Notice><Button type="button" onClick={onRetry}>Retry<ArrowRight size={18} /></Button></Card></section></div>
+}
+
 export function ChangePasswordPage(){
   const navigate=useNavigate()
+  const authConfig = useQuery({ queryKey: ['auth-config'], queryFn: api.authConfig, enabled: !isDemoMode, retry: false })
   const [current,setCurrent]=useState('')
   const [next,setNext]=useState('')
   const [confirm,setConfirm]=useState('')
   const [error,setError]=useState('')
   const [saving,setSaving]=useState(false)
+  useEffect(() => {
+    if (!isDemoMode && authConfig.data && !authConfig.data.password_login_enabled) navigate('/login', { replace: true })
+  }, [authConfig.data, navigate])
+  if (!isDemoMode && authConfig.isLoading) return <div className="page"><Loading label="Checking authentication settings…" /></div>
+  if (!isDemoMode && (authConfig.isError || authConfig.data?.password_login_enabled === false)) return null
   const submit=async(event:FormEvent)=>{event.preventDefault();if(next!==confirm){setError('The new passwords do not match.');return}setSaving(true);setError('');try{await api.changePassword(current,next);navigate('/week')}catch(reason){setError(reason instanceof ApiError?reason.message:'The password could not be changed.')}finally{setSaving(false)}}
   return <div className="auth-layout"><section className="auth-art"><div className="brand brand--light"><div className="brand-mark"><Heart fill="currentColor"/></div><div><strong>Slop</strong><span>meal planner</span></div></div><div><p className="eyebrow">Account security</p><h1>Choose your own password.</h1><p>Temporary passwords cannot be used to access household data.</p></div></section><section className="auth-panel"><Card className="auth-card"><div className="auth-heading"><h2>Change temporary password</h2><p>Use at least 12 characters.</p></div><form className="form-stack" onSubmit={submit}><label>Temporary password<input required type="password" value={current} onChange={event=>setCurrent(event.target.value)} autoComplete="current-password"/></label><label>New password<input required minLength={12} type="password" value={next} onChange={event=>setNext(event.target.value)} autoComplete="new-password"/></label><label>Confirm new password<input required minLength={12} type="password" value={confirm} onChange={event=>setConfirm(event.target.value)} autoComplete="new-password"/></label>{error&&<p role="alert" className="field-error">{error}</p>}<Button disabled={saving}>{saving?'Changing…':'Change password'}<ArrowRight/></Button></form></Card></section></div>
 }
 
 export function SetupPage() {
   const navigate = useNavigate()
+  const authConfig = useQuery({ queryKey: ['auth-config'], queryFn: api.authConfig, enabled: !isDemoMode, retry: false })
   const [householdName, setHouseholdName] = useState('Our household')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [setupToken, setSetupToken] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  useEffect(() => {
+    if (!isDemoMode && authConfig.data && !authConfig.data.password_login_enabled) navigate('/login', { replace: true })
+  }, [authConfig.data, navigate])
+  if (!isDemoMode && authConfig.isLoading) return <div className="page"><Loading label="Checking authentication settings…" /></div>
+  if (!isDemoMode && (authConfig.isError || authConfig.data?.password_login_enabled === false)) return null
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setLoading(true); setError('')
     try {

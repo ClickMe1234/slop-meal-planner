@@ -19,6 +19,14 @@ def _fernet(settings: Settings) -> Fernet:
     return Fernet(key)
 
 
+def encrypt_value(value: str, settings: Settings) -> str:
+    return _fernet(settings).encrypt(value.encode()).decode()
+
+
+def decrypt_value(value: str, settings: Settings) -> str:
+    return _fernet(settings).decrypt(value.encode()).decode()
+
+
 def credential_for(db: Session, household_id: str, provider: str) -> IntegrationCredential | None:
     return db.scalar(
         select(IntegrationCredential).where(
@@ -29,7 +37,7 @@ def credential_for(db: Session, household_id: str, provider: str) -> Integration
 
 
 def save_credential(db: Session, household_id: str, provider: str, value: str, settings: Settings) -> None:
-    encrypted = _fernet(settings).encrypt(value.encode()).decode()
+    encrypted = encrypt_value(value, settings)
     credential = credential_for(db, household_id, provider)
     if credential is None:
         credential = IntegrationCredential(
@@ -55,7 +63,7 @@ def effective_usda_key(db: Session, household_id: str, settings: Settings) -> tu
     credential = credential_for(db, household_id, USDA_PROVIDER)
     if credential is not None:
         try:
-            return _fernet(settings).decrypt(credential.encrypted_value.encode()).decode(), "saved"
+            return decrypt_value(credential.encrypted_value, settings), "saved"
         except InvalidToken:
             return "", "invalid"
     environment_key = settings.usda_api_key.strip()

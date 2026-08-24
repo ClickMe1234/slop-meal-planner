@@ -65,9 +65,11 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0024_recipe_serving_constraints (head)" in current.stdout
+    assert "0025_authentik_authentication (head)" in current.stdout
     assert len("0017_quarantine_urls") <= 32
     assert "recipe_publisher_tag" in _tables(database)
+    assert "external_identity" in _tables(database)
+    assert "oidc_logout_replay" in _tables(database)
 
     # A full reverse and second replay catches migration ordering, hidden live
     # metadata dependencies, and SQLite-incompatible historical operations.
@@ -117,7 +119,7 @@ def test_downgrade_refuses_split_meal_groups_without_mutating_data(tmp_path):
         )
         connection.commit()
 
-    result = _run_alembic(database, "downgrade", "-2")
+    result = _run_alembic(database, "downgrade", "-3")
 
     assert result.returncode != 0
     assert "Cannot downgrade 0023_member_meal_groups" in result.stderr

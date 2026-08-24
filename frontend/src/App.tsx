@@ -63,8 +63,10 @@ export default function App() {
 
 function ProtectedShell({ theme, setTheme }: { theme: ReturnType<typeof useTheme>['theme']; setTheme: ReturnType<typeof useTheme>['setTheme'] }) {
   const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false })
+  const authConfig = useQuery({ queryKey: ['auth-config'], queryFn: api.authConfig, enabled: !isDemoMode, retry: false })
+  const location = useLocation()
   if (!isDemoMode && session.isLoading) return <div className="page"><Loading label="Opening your household…"/></div>
-  if (!isDemoMode && session.isError) return <Navigate to="/login" replace/>
-  if (!isDemoMode && session.data?.must_change_password) return <Navigate to="/change-password" replace/>
+  if (!isDemoMode && session.isError) return <Navigate to="/login" state={{ returnTo: `${location.pathname}${location.search}` }} replace/>
+  if (!isDemoMode && authConfig.data?.password_login_enabled && session.data?.must_change_password) return <Navigate to="/change-password" replace/>
   return <AppShell theme={theme} setTheme={setTheme}/>
 }

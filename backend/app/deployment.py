@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import os
 import re
 from typing import Mapping, MutableMapping
-from urllib.parse import parse_qs, quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit, urlunsplit
 
 
 class DeploymentConfigError(ValueError):
@@ -120,6 +120,82 @@ def _secret(environment: Mapping[str, str], name: str) -> str:
 
 def _safe_url_error(field: str) -> DeploymentConfigError:
     return DeploymentConfigError(f"{field} is not a valid supported connection URL")
+
+
+def _auth_url(value: str, field: str, *, allow_path: bool = True) -> str:
+    try:
+        candidate = value.strip()
+        if any(ord(character) < 32 or ord(character) == 127 for character in candidate):
+            raise ValueError
+        parsed = urlsplit(candidate)
+        port = parsed.port
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or (not allow_path and parsed.path not in {"", "/"})
+        ):
+            raise ValueError
+        if parsed.scheme != "https" and parsed.hostname.lower() not in {"localhost", "127.0.0.1", "::1"}:
+            raise ValueError
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+    except (TypeError, ValueError, UnicodeError):
+        raise _safe_url_error(field) from None
+
+
+def _validate_authentication_environment(environment: Mapping[str, str]) -> None:
+    mode = (_value(environment, "MEAL_PLANNER_AUTH_MODE") or "builtin").strip()
+    if mode not in {"builtin", "authentik_proxy", "authentik_oidc"}:
+        raise DeploymentConfigError(
+            "MEAL_PLANNER_AUTH_MODE must be builtin, authentik_proxy, or authentik_oidc"
+        )
+    if mode == "authentik_proxy":
+        instance = _required(environment, "MEAL_PLANNER_AUTHENTIK_PROXY_INSTANCE_URL")
+        _auth_url(instance, "MEAL_PLANNER_AUTHENTIK_PROXY_INSTANCE_URL")
+        if not _required(environment, "MEAL_PLANNER_AUTHENTIK_PROXY_APP_SLUG").strip():
+            raise DeploymentConfigError("MEAL_PLANNER_AUTHENTIK_PROXY_APP_SLUG is required")
+        _secret(environment, "MEAL_PLANNER_AUTHENTIK_PROXY_SHARED_SECRET")
+        logout_url = _value(environment, "MEAL_PLANNER_AUTHENTIK_PROXY_LOGOUT_URL")
+        if logout_url:
+            if logout_url.startswith("/"):
+                if logout_url.startswith("//") or "\\" in logout_url:
+                    raise DeploymentConfigError(
+                        "MEAL_PLANNER_AUTHENTIK_PROXY_LOGOUT_URL must be a safe path"
+                    )
+            else:
+                normalized_logout = _auth_url(
+                    logout_url, "MEAL_PLANNER_AUTHENTIK_PROXY_LOGOUT_URL"
+                )
+                normalized_instance = _auth_url(
+                    instance, "MEAL_PLANNER_AUTHENTIK_PROXY_INSTANCE_URL"
+                )
+                if (
+                    urlsplit(normalized_logout).scheme,
+                    urlsplit(normalized_logout).netloc,
+                ) != (
+                    urlsplit(normalized_instance).scheme,
+                    urlsplit(normalized_instance).netloc,
+                ):
+                    raise DeploymentConfigError(
+                        "MEAL_PLANNER_AUTHENTIK_PROXY_LOGOUT_URL must use the configured Authentik instance"
+                    )
+    elif mode == "authentik_oidc":
+        _auth_url(
+            _required(environment, "MEAL_PLANNER_PUBLIC_URL"),
+            "MEAL_PLANNER_PUBLIC_URL",
+            allow_path=False,
+        )
+        _auth_url(
+            _required(environment, "MEAL_PLANNER_AUTHENTIK_OIDC_DISCOVERY_URL"),
+            "MEAL_PLANNER_AUTHENTIK_OIDC_DISCOVERY_URL",
+        )
+        _required(environment, "MEAL_PLANNER_AUTHENTIK_OIDC_CLIENT_ID")
+        _required(environment, "MEAL_PLANNER_AUTHENTIK_OIDC_CLIENT_SECRET")
 
 
 def _parse_postgres_url(url: str, field: str) -> PostgresEndpoint:
@@ -254,6 +330,8 @@ def configure_environment(
     """
 
     target = environment if environment is not None else os.environ
+    if require_application:
+        _validate_authentication_environment(target)
     postgres = _postgres_from_environment(target)
     target["MEAL_PLANNER_DATABASE_URL"] = _value(target, "MEAL_PLANNER_DATABASE_URL") or _postgres_url(postgres)
     target["PGHOST"] = postgres.host

@@ -64,11 +64,15 @@ jobs:
           version="$(tr -d '\r\n' < VERSION)"
           
           if [[ "$EVENT_NAME" == "release" ]]; then
-            [[ "$RELEASE_TAG" == "v${version}" ]] || {
-              echo "Release tag ${RELEASE_TAG} does not match v${version}" >&2
+            if [[ "$RELEASE_TAG" == "v${version}" ]]; then
+              image_tag="${version}"
+            elif [[ "$RELEASE_TAG" == "v${version}-authentiktest" ]]; then
+              # Keep this Authentik validation image separate from stable releases.
+              image_tag="authentiktest"
+            else
+              echo "Release tag ${RELEASE_TAG} does not match v${version} or v${version}-authentiktest" >&2
               exit 1
-            }
-            image_tag="${version}"
+            fi
           elif [[ "$EVENT_NAME" == "push" ]]; then
             image_tag="latest"
           else

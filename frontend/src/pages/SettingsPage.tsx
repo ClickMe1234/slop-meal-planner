@@ -42,6 +42,7 @@ export function HouseholdSettings() {
   const queryClient = useQueryClient()
   const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers, enabled: !isDemoMode })
   const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode })
+  const authConfig = useQuery({ queryKey: ['auth-config'], queryFn: api.authConfig, enabled: !isDemoMode, retry: false })
   const [adding, setAdding] = useState(false)
   const [newName, setNewName] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -215,7 +216,7 @@ export function HouseholdSettings() {
           ))}
         </div>
       )}
-      <Card className="settings-section">
+      {authConfig.data?.password_login_enabled && <Card className="settings-section">
         <h3>Change your password</h3>
         <p className="muted">Use at least 12 characters. Your current password is required.</p>
         <form className="form-stack" onSubmit={changePassword}>
@@ -235,7 +236,7 @@ export function HouseholdSettings() {
           </div>
           <Button disabled={saving || !currentPassword || newPassword.length < 12}>Change password</Button>
         </form>
-      </Card>
+      </Card>}
       <Card className="settings-section">
         <h3>Planning defaults</h3>
         <Notice tone="info" title="Set these per plan">

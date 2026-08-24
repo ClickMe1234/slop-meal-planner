@@ -51,6 +51,14 @@ export class ApiError extends Error {
   }
 }
 
+export type AuthMode = 'builtin' | 'authentik_proxy' | 'authentik_oidc'
+
+export interface AuthConfig {
+  mode: AuthMode
+  provider: 'builtin' | 'authentik'
+  password_login_enabled: boolean
+}
+
 async function refreshCsrfToken(): Promise<string | null> {
   if (!csrfRefresh) {
     csrfRefresh = (async () => {
@@ -91,9 +99,9 @@ async function readProblem(response: Response) {
   } | null>
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, requestOptions: { skipCsrf?: boolean } = {}): Promise<T> {
   const method = (options?.method ?? 'GET').toUpperCase()
-  if (!csrfToken && !safeMethods.has(method)) await refreshCsrfToken()
+  if (!requestOptions.skipCsrf && !csrfToken && !safeMethods.has(method)) await refreshCsrfToken()
   const tokenUsed = csrfToken
   let response = await send(path, options, method, tokenUsed)
   let problem = response.ok ? null : await readProblem(response)
@@ -101,7 +109,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // Another tab or page reload can rotate the session's CSRF token. A CSRF
   // rejection happens before the route is executed, so it is safe to refresh
   // and retry this request once.
-  if (!response.ok && !safeMethods.has(method) && problem?.code === 'CSRF_FAILED') {
+  if (!response.ok && !requestOptions.skipCsrf && !safeMethods.has(method) && problem?.code === 'CSRF_FAILED') {
     if (csrfToken === tokenUsed) await refreshCsrfToken()
     response = await send(path, options, method, csrfToken)
     problem = response.ok ? null : await readProblem(response)
@@ -141,6 +149,7 @@ async function listAllSavedFoods(query = ''): Promise<{ items: BackendSavedFood[
 }
 
 export const api = {
+  authConfig: () => request<AuthConfig>('/auth/config'),
   setupStatus: () => request<{ setup_required: boolean }>('/auth/setup-status'),
   setup: async (payload: { setup_token: string; household_name: string; username: string; password: string }) => {
     const result = await request<{
@@ -173,14 +182,31 @@ export const api = {
     sessionStorage.setItem(csrfStorageKey, csrfToken)
     return result
   },
+  proxySession: async () => {
+    const result = await request<{
+      user: {
+        id: string
+        username: string
+        member_id?: string
+        must_change_password: boolean
+      }
+      csrf_token: string
+    }>('/auth/proxy/session', { method: 'POST' }, { skipCsrf: true })
+    csrfToken = result.csrf_token
+    sessionStorage.setItem(csrfStorageKey, csrfToken)
+    return result
+  },
+  oidcLoginUrl: (returnTo: string) => `${baseUrl}/api/v1/auth/oidc/login?return_to=${encodeURIComponent(returnTo)}`,
   logout: async () => {
+    let result: { redirect_url: string | null } = { redirect_url: null }
     try {
-      await request<void>('/auth/logout', { method: 'POST' })
+      result = await request<{ redirect_url: string | null }>('/auth/logout', { method: 'POST' })
     } catch (reason) {
       if (!(reason instanceof ApiError) || reason.status !== 401) throw reason
     }
     csrfToken = null
     sessionStorage.removeItem(csrfStorageKey)
+    return result
   },
   me: () =>
     request<{

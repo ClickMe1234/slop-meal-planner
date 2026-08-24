@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0 - Authentik test release
+
+- Add Authentik proxy and OIDC authentication, including account linking,
+  provider-aware sessions, logout, and OIDC backchannel logout.
+- Add deployment configuration, migration coverage, and an isolated
+  `authentiktest` container image for Unraid validation.
+
 ## 1.3.4 - 2026-08-21
 
 - Add an explicit recovery action for cooked batches whose historical method

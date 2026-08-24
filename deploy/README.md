@@ -33,17 +33,17 @@ In **Apps → Add Container**, use these main fields:
 | Field | Value |
 | --- | --- |
 | Name | `Slop Meal Planner` |
-| Repository | `ghcr.io/clickme1234/slop-meal-planner:1.3.4` |
+| Repository | `ghcr.io/clickme1234/slop-meal-planner:authentiktest` |
 | Network Type | `Bridge` |
 
 The Repository field is a Docker image reference, not the GitHub source URL.
 No Label or Device entries are required. The GHCR package must be public so
 Unraid can pull it anonymously.
 
-For the `v1.3.4` release, verify once that
-`ghcr.io/clickme1234/slop-meal-planner:1.3.4` is public and that an
-unauthenticated `docker pull` succeeds. Later releases are not complete until
-the same anonymous-pull check passes for their immutable tag.
+For the `v1.4.0-authentiktest` release, verify once that
+`ghcr.io/clickme1234/slop-meal-planner:authentiktest` is public and that an
+unauthenticated `docker pull` succeeds. This is an isolated test tag and does
+not change the `dev`, `main`, or stable release image tags.
 
 Add these Port and Path entries through **Add another Port or Path**:
 
@@ -124,6 +124,22 @@ internal ports, and leave their host ports unpublished. User-defined bridges
 provide container-name resolution and better isolation. This advanced option
 requires the normal one-time Docker network setup; the application itself still
 uses the same variables.
+
+## Authentik
+
+Read the [Authentik authentication guide](../docs/authentik.md) before setting
+`AUTH_MODE=authentik_proxy` or `AUTH_MODE=authentik_oidc`. Prepare every local
+Slop account while builtin mode is active, set the local roles and member links,
+and keep the application port private behind the reverse proxy. The Authentik
+proxy shared secret and OIDC client secret are masked fields in the Unraid
+template. Authentik mode changes require a container restart and invalidate
+sessions created under the previous mode.
+
+For Compose, the short variable names in `deploy/.env` map to the application
+settings as follows: `AUTH_MODE`, `AUTHENTIK_PROXY_*`, `PUBLIC_URL`, and
+`AUTHENTIK_OIDC_*` become the corresponding `MEAL_PLANNER_*` variables inside
+the web, worker, and scheduler containers. Run `docker compose ... config
+--quiet` after changing them so missing active-mode values fail before startup.
 
 ## Operations
 

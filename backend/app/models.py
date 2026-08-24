@@ -37,6 +37,12 @@ class UserRole(str, enum.Enum):
     COLLABORATOR = "collaborator"
 
 
+class AuthMethod(str, enum.Enum):
+    BUILTIN = "builtin"
+    AUTHENTIK_PROXY = "authentik_proxy"
+    AUTHENTIK_OIDC = "authentik_oidc"
+
+
 class IngredientLocale(str, enum.Enum):
     UK = "uk"
     US = "us"
@@ -147,6 +153,36 @@ class User(IdMixin, AuditMixin, Base):
     member_id: Mapped[str | None] = mapped_column(ForeignKey("household_member.id", ondelete="SET NULL"), nullable=True)
 
 
+class ExternalIdentity(IdMixin, Base):
+    __tablename__ = "external_identity"
+    __table_args__ = (
+        UniqueConstraint(
+            "auth_method",
+            "issuer",
+            "subject",
+            name="uq_external_identity_method_issuer_subject",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "auth_method",
+            "issuer",
+            name="uq_external_identity_user_method_issuer",
+        ),
+        Index("ix_external_identity_user_id", "user_id"),
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False
+    )
+    auth_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    subject: Mapped[str] = mapped_column(String(512), nullable=False)
+    username_at_link: Mapped[str] = mapped_column(String(80), nullable=False)
+    last_seen_username: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class IngredientNameEquivalent(IdMixin, Base):
     __tablename__ = "ingredient_name_equivalent"
     __table_args__ = (UniqueConstraint("us_name", "uk_name"),)
@@ -174,7 +210,29 @@ class UserSession(IdMixin, Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     csrf_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     remember_me: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    auth_method: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=AuthMethod.BUILTIN.value
+    )
+    sid: Mapped[str | None] = mapped_column(String(512), nullable=True, index=True)
+    encrypted_id_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OidcLogoutReplay(IdMixin, Base):
+    __tablename__ = "oidc_logout_replay"
+    __table_args__ = (
+        UniqueConstraint(
+            "issuer",
+            "jti_hash",
+            name="uq_oidc_logout_replay_issuer_jti",
+        ),
+        Index("ix_oidc_logout_replay_expires_at", "expires_at"),
+    )
+
+    issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    jti_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

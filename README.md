@@ -2,7 +2,7 @@
 
 > A free, self-hosted meal planner for real households.
 
-Current release: **1.3.4**. See the [latest release notes](#changelog) or the
+Current release: **1.4.0 Authentik test**. See the [latest release notes](#changelog) or the
 [full changelog](CHANGELOG.md).
 
 ## About
@@ -94,6 +94,13 @@ Fuzzy matching of shopping list to pantry ingredients supported!
 ![Shopping list matching](docs/examples/shopping2.png)
 
 ## Changelog
+
+### 1.4.0 - Authentik test release
+
+- Add Authentik proxy and OIDC authentication, including account linking,
+  provider-aware sessions, logout, and OIDC backchannel logout.
+- Add deployment configuration, migration coverage, and an isolated
+  `authentiktest` container image for Unraid validation.
 
 ### 1.3.4 - 2026-08-21
 
@@ -241,7 +248,7 @@ Compose Manager is required for the application container.
    passwords, setup tokens, API keys, and session cookies to on-path devices.
 4. In Unraid Apps, choose **Add Container** and use the exact values in
    [`deploy/unraid-template.xml`](deploy/unraid-template.xml):
-   `ghcr.io/clickme1234/slop-meal-planner:1.3.4` as Repository, `Bridge` as
+   `ghcr.io/clickme1234/slop-meal-planner:authentiktest` as Repository, `Bridge` as
    Network Type, `Shell` as the console shell, Privileged off, and `--init` as
    Extra Parameters. The Repository is a Docker image reference, not the GitHub
    source URL. Leave Post Arguments blank.
@@ -423,6 +430,9 @@ above.
 - Responsive installable React PWA with touch-friendly navigation, safe-area
   support, mobile planning cards, and system/light/dark themes.
 - Demo mode for UI evaluation and a live API mode for the self-hosted service.
+- Optional Authentik proxy/outpost or native OIDC authentication with local
+  account linking, mode-isolated sessions, provider logout, and back-channel
+  revocation. See the [Authentik setup guide](docs/authentik.md).
 - Docker Compose deployment for the web app, worker, scheduler, PostgreSQL,
   and Redis.
 - Alembic migrations, verified backup/restore scripts, an Unraid reference
