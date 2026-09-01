@@ -2,7 +2,6 @@ import { ArrowLeft, ArrowRight, Barcode, Check, ExternalLink, FileSearch, Link2,
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { NutritionStrip } from '../components/Nutrition'
 import { BarcodeScanner } from '../components/BarcodeScanner'
 import { FoodSearchSources, type FoodSearchSourceSelection } from '../components/FoodSearchSources'
 import { UsdaKeyGuidance } from '../components/UsdaKeyGuidance'
@@ -36,12 +35,19 @@ interface NutritionFormValues {
   fibre_g: string
 }
 
-const NUTRITION_FIELDS: Array<{ key: keyof NutritionFormValues; label: string; unit: string }> = [
+const NUTRITION_FIELDS: Array<{ key: NutritionFieldKey; label: string; unit: string }> = [
   { key: 'energy_kcal', label: 'Calories', unit: 'kcal' },
   { key: 'protein_g', label: 'Protein', unit: 'g' },
   { key: 'carbohydrate_g', label: 'Carbohydrates', unit: 'g' },
   { key: 'fat_g', label: 'Fat', unit: 'g' },
-  { key: 'fibre_g', label: 'Fibre', unit: 'g' },
+]
+
+const NUTRITION_VALUE_KEYS: Array<keyof NutritionFormValues> = [
+  'energy_kcal',
+  'protein_g',
+  'carbohydrate_g',
+  'fat_g',
+  'fibre_g',
 ]
 
 const emptyNutritionValues = (): NutritionFormValues => ({
@@ -52,20 +58,22 @@ const emptyNutritionValues = (): NutritionFormValues => ({
   fibre_g: '',
 })
 
-function nutritionFormValues(nutrition?: BackendRecipeNutrition | null): NutritionFormValues {
+export function nutritionFormValues(nutrition?: BackendRecipeNutrition | null): NutritionFormValues {
   const values = emptyNutritionValues()
-  for (const field of NUTRITION_FIELDS) {
-    const value = nutrition?.[field.key]
-    values[field.key] = value == null ? '' : String(value)
+  const basis = (nutrition?.basis ?? '').replace(/\s+/g, '').toLowerCase()
+  if (!nutrition || basis.includes('100g') || basis.includes('100ml')) return values
+  for (const key of NUTRITION_VALUE_KEYS) {
+    const value = nutrition[key]
+    values[key] = value == null ? '' : String(value)
   }
   return values
 }
 
-export function nutritionReviewPayload(values: NutritionFormValues, basis = 'per serving'): BackendRecipeNutrition | null {
+export function nutritionReviewPayload(values: NutritionFormValues): BackendRecipeNutrition | null {
   if (!NUTRITION_FIELDS.some(({ key }) => values[key].trim())) return null
   const numberOrNull = (value: string) => value.trim() ? Number(value) : null
   return {
-    basis,
+    basis: 'per serving',
     energy_kcal: numberOrNull(values.energy_kcal),
     protein_g: numberOrNull(values.protein_g),
     carbohydrate_g: numberOrNull(values.carbohydrate_g),
@@ -93,45 +101,18 @@ function nutritionValuesComplete(values: NutritionFormValues): boolean {
   })
 }
 
-function nutritionForStrip(values: NutritionFormValues) {
-  return {
-    calories: Number(values.energy_kcal),
-    protein: Number(values.protein_g),
-    carbs: Number(values.carbohydrate_g),
-    fat: Number(values.fat_g),
-    basis: 'per_serving' as const,
-  }
-}
-
-function sourceBasisIsNonPerServing(basis: string): boolean {
-  return /100(?:g|ml)\b/i.test(basis.replace(/\s+/g, ''))
-}
-
-function nutritionBasisOption(basis?: string | null): 'per serving' | 'per 100g' | 'per 100ml' {
-  const compact = (basis ?? '').replace(/\s+/g, '').toLowerCase()
-  if (compact.includes('100ml')) return 'per 100ml'
-  if (compact.includes('100g')) return 'per 100g'
-  return 'per serving'
-}
-
 function NutritionReviewFields({
   values,
-  basis,
-  sourceBasis,
   sourcePublisher,
   onChange,
-  onBasisChange,
   onRefresh,
   refreshing = false,
   refreshError = '',
   disabled = false,
 }: {
   values: NutritionFormValues
-  basis: 'per serving' | 'per 100g' | 'per 100ml'
-  sourceBasis?: string
   sourcePublisher: string
   onChange: (key: keyof NutritionFormValues, value: string) => void
-  onBasisChange: (basis: 'per serving' | 'per 100g' | 'per 100ml') => void
   onRefresh?: () => void
   refreshing?: boolean
   refreshError?: string
@@ -140,23 +121,15 @@ function NutritionReviewFields({
   const valueError = nutritionValuesError(values)
   const complete = nutritionValuesComplete(values)
   const hasValues = NUTRITION_FIELDS.some(({ key }) => values[key].trim())
-  const sourceBasisWarning = sourceBasisIsNonPerServing(basis)
-  const basisLabel = basis === 'per 100g' ? 'per 100 g' : basis === 'per 100ml' ? 'per 100 ml' : 'per serving'
   return (
     <fieldset className="nutrition-review-fields" aria-describedby="nutrition-review-help">
-      <legend>Nutrition <span>Used for planning</span></legend>
+      <legend>
+        <span className="nutrition-review-heading"><Sparkles size={18} aria-hidden="true" /><span>Nutrition from {sourcePublisher} · per serving</span></span>
+        <span className="nutrition-review-planning">Used for planning</span>
+      </legend>
       <p id="nutrition-review-help" className="nutrition-review-help">
-        {sourcePublisher} values are pre-filled when the page reports them. Correct any mistakes or leave them blank if unavailable.
+        Values are pre-filled when {sourcePublisher} reports per-serving nutrition. Correct any mistakes or leave them blank if unavailable.
       </p>
-      <label>
-        Nutrition basis
-        <select value={basis} onChange={(event) => onBasisChange(event.target.value as typeof basis)} disabled={disabled}>
-          <option value="per serving">Per serving</option>
-          <option value="per 100g">Per 100 g</option>
-          <option value="per 100ml">Per 100 ml</option>
-        </select>
-        <small className="field-help">Choose per serving after converting source values when needed; that is the basis the planner uses.</small>
-      </label>
       <div className="nutrition-review-grid">
         {NUTRITION_FIELDS.map(({ key, label, unit }) => {
           const number = Number(values[key])
@@ -165,7 +138,7 @@ function NutritionReviewFields({
             <label key={key}>
               {label} <span>({unit})</span>
               <input
-                aria-label={`${label} ${basisLabel}`}
+                aria-label={`${label} per serving`}
                 type="number"
                 min="0"
                 step="any"
@@ -179,12 +152,9 @@ function NutritionReviewFields({
           )
         })}
       </div>
-      {sourceBasis && <small className={`nutrition-review-source${sourceBasisWarning ? ' nutrition-review-source--warning' : ''}`}>Source basis: {sourceBasis}</small>}
-      {!hasValues && <small className="nutrition-review-status">No nutrition was reported. Add all four planning values to make this recipe available to the planner.</small>}
+      {!hasValues && <small className="nutrition-review-status">No per-serving nutrition was reported. Add all four planning values to make this recipe available to the planner.</small>}
       {hasValues && !complete && <small className="nutrition-review-status nutrition-review-status--warning">Add calories, protein, carbohydrates and fat to make this recipe available to the planner.</small>}
-      {sourceBasisWarning && <small className="nutrition-review-status nutrition-review-status--warning">These values are not per serving. Convert them and select Per serving before using this recipe in the planner.</small>}
       {valueError && <small className="field-error" id="nutrition-review-error" role="alert">{valueError}</small>}
-      {complete && !sourceBasisWarning && <NutritionStrip nutrition={nutritionForStrip(values)} />}
       {onRefresh && (
         <div className="nutrition-review-actions">
           <Button type="button" variant="secondary" disabled={disabled || refreshing} onClick={onRefresh}>
@@ -895,7 +865,6 @@ function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoT
     carbohydrate_g: 39,
     fat_g: 18,
   }))
-  const [nutritionBasis, setNutritionBasis] = useState<'per serving' | 'per 100g' | 'per 100ml'>('per serving')
   const servingError = servingConstraintError(minimumServings, servingIncrement)
   const nutritionError = nutritionValuesError(nutritionValues)
   const demoIngredients = ['600g boneless skinless chicken thighs', '2 x 400g cans chickpeas, drained', '2 tbsp rose harissa', 'a splash of olive oil', '1 lemon, zest and juice']
@@ -928,6 +897,13 @@ function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoT
               {!mealTypes.length && <MealTypePlanningWarning />}
             </div>
           </Card>
+          <Card className="nutrition-review-card">
+            <NutritionReviewFields
+              values={nutritionValues}
+              sourcePublisher="Good Food"
+              onChange={(key, value) => setNutritionValues((current) => ({ ...current, [key]: value }))}
+            />
+          </Card>
           <div className="ingredient-review-list">
             {demoIngredients.map((item) => (
               <Card key={item} className="ingredient-row">
@@ -941,17 +917,8 @@ function DemoImportReviewPage({ presentation = 'page', onDismiss, onSaved, demoT
         </section>
         <aside>
           <Card className="review-summary">
-            <Sparkles />
-            <h2>Nutrition for planning</h2>
-            <NutritionReviewFields
-              values={nutritionValues}
-              basis={nutritionBasis}
-              sourceBasis="per serving"
-              sourcePublisher="Good Food"
-              onChange={(key, value) => setNutritionValues((current) => ({ ...current, [key]: value }))}
-              onBasisChange={setNutritionBasis}
-            />
-            <p>Values are saved with this recipe and used for planning · {yieldServings} servings confirmed</p>
+            <h2>Finish review</h2>
+            <p>Nutrition is saved per serving and used for planning when all four values are complete · {yieldServings} servings confirmed</p>
             <Button disabled={Boolean(servingError || nutritionError)} onClick={() => onSaved ? onSaved() : navigate('/recipes')}>Save recipe</Button>
             <div className="recipe-delete-action">
               <p>Remove this recipe from your collection.</p>
@@ -993,8 +960,6 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
   const [servingIncrement, setServingIncrement] = useState('')
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const [nutritionValues, setNutritionValues] = useState<NutritionFormValues>(emptyNutritionValues)
-  const [nutritionBasis, setNutritionBasis] = useState<'per serving' | 'per 100g' | 'per 100ml'>('per serving')
-  const [nutritionSourceBasis, setNutritionSourceBasis] = useState('')
   const [nutritionRefreshError, setNutritionRefreshError] = useState('')
   const [refreshingNutrition, setRefreshingNutrition] = useState(false)
   const [error, setError] = useState('')
@@ -1030,9 +995,6 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
     setMinimumServings(String(recipe.data.minimum_servings ?? ''))
     setServingIncrement(String(recipe.data.serving_increment ?? ''))
     setNutritionValues(nutritionFormValues(recipe.data.publisher_nutrition))
-    const sourceBasis = recipe.data.publisher_nutrition?.basis ?? ''
-    setNutritionSourceBasis(sourceBasis)
-    setNutritionBasis(nutritionBasisOption(sourceBasis))
     setNutritionRefreshError('')
     const savedMealTypes = recipeMealTypes(recipe.data)
     setMealTypes(savedMealTypes.length ? savedMealTypes : suggestedMealTypes)
@@ -1075,9 +1037,6 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
     try {
       const refreshed = await api.nutritionPreview(recipe.data.source_url, true)
       setNutritionValues(nutritionFormValues(refreshed.publisher_nutrition))
-      const sourceBasis = refreshed.publisher_nutrition?.basis ?? ''
-      setNutritionSourceBasis(sourceBasis)
-      setNutritionBasis(nutritionBasisOption(sourceBasis))
     } catch (reason) {
       setNutritionRefreshError(reason instanceof ApiError ? reason.message : 'The recipe source could not be read.')
     } finally {
@@ -1135,7 +1094,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
         minimum_servings: minimumServings ? Number(minimumServings) : null,
         serving_increment: servingIncrement ? Number(servingIncrement) : null,
         meal_types: mealTypes,
-        publisher_nutrition: nutritionReviewPayload(nutritionValues, nutritionBasis),
+        publisher_nutrition: nutritionReviewPayload(nutritionValues),
         ingredients: rows.map((row) => {
           const quantityGrams = row.quantity_grams || gramsFor(row.amount, row.unit)
           return {
@@ -1216,6 +1175,17 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
               <MealTypePicker value={mealTypes} onChange={setMealTypes} />
               {!mealTypes.length && <MealTypePlanningWarning />}
             </div>
+          </Card>
+          <Card className="nutrition-review-card">
+            <NutritionReviewFields
+              values={nutritionValues}
+              sourcePublisher={publisherName}
+              onChange={(key, value) => setNutritionValues((current) => ({ ...current, [key]: value }))}
+              onRefresh={recipe.data.source_url ? refreshNutrition : undefined}
+              refreshing={refreshingNutrition}
+              refreshError={nutritionRefreshError}
+              disabled={busy}
+            />
           </Card>
           <div className="ingredient-review-list">
             {rows.map((row, index) => {
@@ -1329,20 +1299,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
         </section>
         <aside>
           <Card className="review-summary">
-            <Sparkles />
-            <h2>Nutrition for planning</h2>
-            <NutritionReviewFields
-              values={nutritionValues}
-              basis={nutritionBasis}
-              sourceBasis={nutritionSourceBasis}
-              sourcePublisher={publisherName}
-              onChange={(key, value) => setNutritionValues((current) => ({ ...current, [key]: value }))}
-              onBasisChange={setNutritionBasis}
-              onRefresh={recipe.data.source_url ? refreshNutrition : undefined}
-              refreshing={refreshingNutrition}
-              refreshError={nutritionRefreshError}
-              disabled={busy}
-            />
+            <h2>Finish review</h2>
             <p>Saved as per-serving values and used by the planner when all four planning nutrients are complete.</p>
             {error && (
               <Notice tone="warning" title="Could not save">
