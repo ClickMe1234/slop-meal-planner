@@ -444,6 +444,20 @@ button.tag { cursor: pointer; font: inherit; }
 .field-help { color:var(--muted); display:block; font-size:.7rem; line-height:1.45; margin-top:7px; }
 .field-help--warning { color:var(--warning); }
 .review-summary { padding:22px;position:sticky;top:24px;}.review-summary>svg { color:var(--primary);}.review-summary .nutrition-strip { margin:20px 0 6px;}.review-summary>p { color:var(--muted);font-size:.68rem;text-align:center;}.review-summary dl { border-block:1px solid var(--border);margin:18px 0;padding:10px 0;}.review-summary dl div { display:flex;font-size:.72rem;justify-content:space-between;padding:6px 0;}.review-summary dt { color:var(--muted);}.review-summary dd { font-weight:700;margin:0;}.review-summary .notice { margin-bottom:14px;}.review-summary>.button { width:100%;}
+.nutrition-review-fields { border:0;display:grid;gap:12px;margin:18px 0 14px;min-width:0;padding:0; }
+.nutrition-review-fields legend { color:var(--text);font-size:.78rem;font-weight:800;padding:0; }
+.nutrition-review-fields legend span { color:var(--muted);font-size:.6rem;font-weight:700;margin-left:5px;text-transform:uppercase; }
+.nutrition-review-help,.nutrition-review-status,.nutrition-review-source { color:var(--muted);font-size:.67rem;line-height:1.45;margin:0;text-align:left; }
+.nutrition-review-grid { display:grid;gap:10px;grid-template-columns:repeat(2,minmax(0,1fr)); }
+.nutrition-review-grid label { font-size:.71rem;min-width:0; }
+.nutrition-review-grid label>span { color:var(--muted);font-size:.64rem;font-weight:500; }
+.nutrition-review-grid input { min-width:0; }
+.nutrition-review-source--warning,.nutrition-review-status--warning { color:var(--warning); }
+.nutrition-review-status { background:var(--surface-2);border-radius:8px;padding:9px 10px; }
+.nutrition-review-fields>.field-error { color:var(--danger);font-size:.68rem;font-weight:700; }
+.nutrition-review-fields>.nutrition-strip { margin:4px 0 0; }
+.nutrition-review-actions { display:flex;flex-wrap:wrap;gap:8px; }
+.nutrition-review-actions .button { flex:1;min-width:0; }
 .recipe-delete-action { border-top:1px solid var(--border);display:grid;gap:10px;margin-top:18px;padding-top:18px;}.recipe-delete-action>p { color:var(--muted);font-size:.68rem;margin:0;text-align:center;}.recipe-delete-action>.button { width:100%;}
 
 /* recipe planning metadata and shopping-quantity review */
@@ -1076,6 +1090,8 @@ button.tag { cursor: pointer; font: inherit; }
 
 @media (max-width: 430px) {
   .page-actions { display:flex;grid-template-columns:none; }
+  .nutrition-review-grid { grid-template-columns:1fr; }
+  .nutrition-review-actions .button { width:100%; }
   .page-actions .button:nth-child(n+3) { display:inline-flex; }
   .nutrition-summary { grid-template-columns:1fr; }
   .calorie-ring { margin:auto; }

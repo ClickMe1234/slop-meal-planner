@@ -228,3 +228,49 @@ def test_nutrition_preview_fetches_recipe_page_once_and_caches_it():
         assert len(fetcher.calls) == 1
 
     asyncio.run(run())
+
+
+def test_nutrition_preview_can_force_refresh_and_supports_generic_import_hosts():
+    async def run():
+        class PreviewFetcher:
+            def __init__(self):
+                self.calls = []
+
+            async def fetch_text(self, url, *, allowed_hosts):
+                self.calls.append((url, allowed_hosts))
+                calories = 410 + len(self.calls)
+                return f"""
+                    <script type="application/ld+json">
+                    {{
+                      "@type": "Recipe",
+                      "name": "Generic preview",
+                      "recipeYield": "4 servings",
+                      "nutrition": {{
+                        "calories": "{calories} kcal",
+                        "proteinContent": "31 g",
+                        "carbohydrateContent": "28 g",
+                        "fatContent": "19 g"
+                      }}
+                    }}
+                    </script>
+                """
+
+        fetcher = PreviewFetcher()
+        service = LiveSearchService(
+            fetcher,
+            policy=SearchPolicy(debounce_ms=0, preview_cache_ttl_seconds=30),
+        )
+        url = "https://recipes.example.org/preview"
+        first = await service.nutrition_preview(url)
+        cached = await service.nutrition_preview(url)
+        refreshed = await service.nutrition_preview(url, force=True)
+
+        assert first.publisher_nutrition is not None
+        assert first.publisher_nutrition.energy_kcal == 411
+        assert cached is first
+        assert refreshed.publisher_nutrition is not None
+        assert refreshed.publisher_nutrition.energy_kcal == 412
+        assert len(fetcher.calls) == 2
+        assert fetcher.calls[0][1] == {"recipes.example.org", "www.recipes.example.org"}
+
+    asyncio.run(run())
