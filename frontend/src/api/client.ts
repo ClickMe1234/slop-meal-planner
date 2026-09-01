@@ -568,7 +568,7 @@ export interface BackendRecipe {
   minimum_servings?: number
   serving_increment?: number
   publisher_nutrition?: BackendRecipeNutrition
-  calculated_nutrition?: Record<string, number>
+  calculated_nutrition?: BackendRecipeNutrition
   nutrition_method?: 'publisher' | 'complete'
   review_count?: number
   meal_types: BackendMealType[]

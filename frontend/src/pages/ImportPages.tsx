@@ -26,6 +26,7 @@ function gramsFor(amount: string, unit: string): string {
 }
 
 type NutritionFieldKey = 'energy_kcal' | 'protein_g' | 'carbohydrate_g' | 'fat_g'
+type NutritionOrigin = 'publisher' | 'calculated'
 
 interface NutritionFormValues {
   energy_kcal: string
@@ -69,6 +70,15 @@ export function nutritionFormValues(nutrition?: BackendRecipeNutrition | null): 
   return values
 }
 
+type NutritionReviewRecipe = Pick<BackendRecipeDetail, 'publisher_nutrition' | 'calculated_nutrition' | 'nutrition_method'>
+
+export function nutritionReviewValues(recipe: NutritionReviewRecipe): NutritionFormValues {
+  const nutrition = recipe.nutrition_method === 'complete'
+    ? recipe.calculated_nutrition ?? recipe.publisher_nutrition
+    : recipe.publisher_nutrition
+  return nutritionFormValues(nutrition)
+}
+
 export function nutritionReviewPayload(values: NutritionFormValues): BackendRecipeNutrition | null {
   if (!NUTRITION_FIELDS.some(({ key }) => values[key].trim())) return null
   const numberOrNull = (value: string) => value.trim() ? Number(value) : null
@@ -104,6 +114,7 @@ function nutritionValuesComplete(values: NutritionFormValues): boolean {
 function NutritionReviewFields({
   values,
   sourcePublisher,
+  calculated = false,
   onChange,
   onRefresh,
   refreshing = false,
@@ -112,6 +123,7 @@ function NutritionReviewFields({
 }: {
   values: NutritionFormValues
   sourcePublisher: string
+  calculated?: boolean
   onChange: (key: keyof NutritionFormValues, value: string) => void
   onRefresh?: () => void
   refreshing?: boolean
@@ -121,14 +133,17 @@ function NutritionReviewFields({
   const valueError = nutritionValuesError(values)
   const complete = nutritionValuesComplete(values)
   const hasValues = NUTRITION_FIELDS.some(({ key }) => values[key].trim())
+  const heading = calculated ? 'Nutrition calculated from ingredients' : `Nutrition from ${sourcePublisher}`
   return (
     <fieldset className="nutrition-review-fields" aria-describedby="nutrition-review-help">
       <legend>
-        <span className="nutrition-review-heading"><Sparkles size={18} aria-hidden="true" /><span>Nutrition from {sourcePublisher} · per serving</span></span>
+        <span className="nutrition-review-heading"><Sparkles size={18} aria-hidden="true" /><span>{heading} · per serving</span></span>
         <span className="nutrition-review-planning">Used for planning</span>
       </legend>
       <p id="nutrition-review-help" className="nutrition-review-help">
-        Values are pre-filled when {sourcePublisher} reports per-serving nutrition. Correct any mistakes or leave them blank if unavailable.
+        {calculated
+          ? 'These values were calculated from the matched ingredients per serving. Update the ingredient matches or quantities to recalculate them.'
+          : `Values are pre-filled when ${sourcePublisher} reports per-serving nutrition. Correct any mistakes or leave them blank if unavailable.`}
       </p>
       <div className="nutrition-review-grid">
         {NUTRITION_FIELDS.map(({ key, label, unit }) => {
@@ -145,14 +160,14 @@ function NutritionReviewFields({
                 inputMode="decimal"
                 value={values[key]}
                 aria-invalid={invalid || undefined}
-                disabled={disabled}
+                disabled={disabled || calculated}
                 onChange={(event) => onChange(key, event.target.value)}
               />
             </label>
           )
         })}
       </div>
-      {!hasValues && <small className="nutrition-review-status">No per-serving nutrition was reported. Add all four planning values to make this recipe available to the planner.</small>}
+      {!hasValues && <small className="nutrition-review-status">No per-serving nutrition was calculated or reported. Add all four planning values to make this recipe available to the planner.</small>}
       {hasValues && !complete && <small className="nutrition-review-status nutrition-review-status--warning">Add calories, protein, carbohydrates and fat to make this recipe available to the planner.</small>}
       {valueError && <small className="field-error" id="nutrition-review-error" role="alert">{valueError}</small>}
       {onRefresh && (
@@ -960,6 +975,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
   const [servingIncrement, setServingIncrement] = useState('')
   const [mealTypes, setMealTypes] = useState<RecipeMealType[]>([])
   const [nutritionValues, setNutritionValues] = useState<NutritionFormValues>(emptyNutritionValues)
+  const [nutritionOrigin, setNutritionOrigin] = useState<NutritionOrigin>('publisher')
   const [nutritionRefreshError, setNutritionRefreshError] = useState('')
   const [refreshingNutrition, setRefreshingNutrition] = useState(false)
   const [error, setError] = useState('')
@@ -994,7 +1010,9 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
     setYieldServings(String(recipe.data.yield_servings ?? ''))
     setMinimumServings(String(recipe.data.minimum_servings ?? ''))
     setServingIncrement(String(recipe.data.serving_increment ?? ''))
-    setNutritionValues(nutritionFormValues(recipe.data.publisher_nutrition))
+    const calculated = recipe.data.nutrition_method === 'complete' && Boolean(recipe.data.calculated_nutrition)
+    setNutritionOrigin(calculated ? 'calculated' : 'publisher')
+    setNutritionValues(nutritionReviewValues(recipe.data))
     setNutritionRefreshError('')
     const savedMealTypes = recipeMealTypes(recipe.data)
     setMealTypes(savedMealTypes.length ? savedMealTypes : suggestedMealTypes)
@@ -1036,6 +1054,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
     setNutritionRefreshError('')
     try {
       const refreshed = await api.nutritionPreview(recipe.data.source_url, true)
+      setNutritionOrigin('publisher')
       setNutritionValues(nutritionFormValues(refreshed.publisher_nutrition))
     } catch (reason) {
       setNutritionRefreshError(reason instanceof ApiError ? reason.message : 'The recipe source could not be read.')
@@ -1094,7 +1113,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
         minimum_servings: minimumServings ? Number(minimumServings) : null,
         serving_increment: servingIncrement ? Number(servingIncrement) : null,
         meal_types: mealTypes,
-        publisher_nutrition: nutritionReviewPayload(nutritionValues),
+        publisher_nutrition: nutritionOrigin === 'calculated' ? null : nutritionReviewPayload(nutritionValues),
         ingredients: rows.map((row) => {
           const quantityGrams = row.quantity_grams || gramsFor(row.amount, row.unit)
           return {
@@ -1142,18 +1161,22 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
     )
 
   const publisherName = recipe.data.publisher ?? 'the recipe website'
+  const calculatedNutrition = nutritionOrigin === 'calculated'
+  const nutritionHeading = calculatedNutrition ? 'Nutrition calculated from ingredients' : `Nutrition from ${publisherName}`
 
   return present(
     <div className="page page--wide">
       <IngredientUnitOptions />
       <div className="review-top">
         {presentation === 'drawer' ? <button type="button" className="icon-link icon-link--button" disabled={busy} onClick={onDismiss}><ArrowLeft />Back to results</button> : <Link to={returnTo} className="icon-link"><ArrowLeft />Back</Link>}
-        <Badge tone={nutritionValuesComplete(nutritionValues) ? 'green' : undefined}>Nutrition from {publisherName}</Badge>
+        <Badge tone={nutritionValuesComplete(nutritionValues) ? 'green' : undefined}>{nutritionHeading}</Badge>
       </div>
       <PageHeader
         eyebrow="Import review"
         title={recipe.data.title}
-        description="Review the extracted details, including nutrition. Source values are pre-filled when the page reports them."
+        description={calculatedNutrition
+          ? 'Review the extracted details, including nutrition calculated from the matched ingredients per serving.'
+          : 'Review the extracted details, including nutrition. Source values are pre-filled when the page reports them.'}
         actions={
           recipe.data.source_url ? (
             <Button variant="secondary" disabled={!safeExternalUrl(recipe.data.source_url)} onClick={() => openExternalUrl(recipe.data.source_url)}>
@@ -1180,6 +1203,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
             <NutritionReviewFields
               values={nutritionValues}
               sourcePublisher={publisherName}
+              calculated={calculatedNutrition}
               onChange={(key, value) => setNutritionValues((current) => ({ ...current, [key]: value }))}
               onRefresh={recipe.data.source_url ? refreshNutrition : undefined}
               refreshing={refreshingNutrition}
