@@ -112,6 +112,18 @@ describe('App', () => {
     expect(screen.getByText(/6 servings confirmed/i)).toBeInTheDocument()
   })
 
+  it('lets imported nutrition be corrected before saving the recipe', async () => {
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/imports/demo/review']}><App/></MemoryRouter></QueryClientProvider>)
+
+    const calories = screen.getByRole('spinbutton', { name: 'Calories per serving' })
+    expect(calories).toHaveValue(524)
+    await user.clear(calories)
+    await user.type(calories, '600')
+
+    expect(calories).toHaveValue(600)
+  })
+
   it('previews recipe-specific serving increments while reviewing', async () => {
     const user = userEvent.setup()
     render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/imports/demo/review']}><App/></MemoryRouter></QueryClientProvider>)

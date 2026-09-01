@@ -88,13 +88,14 @@ def list_recipe_categories(
 @router.get("/nutrition-preview")
 async def preview_recipe_nutrition(
     url: str = Query(max_length=4096),
+    refresh: bool = Query(default=False),
     context: AuthContext = Depends(get_auth_context),
 ):
     """Return publisher-reported nutrition without saving or calculating."""
 
     del context  # Authentication is required, but the preview is not household-specific.
     try:
-        recipe = await _live_service().nutrition_preview(url)
+        recipe = await _live_service().nutrition_preview(url, force=refresh)
     except DiscoveryError as exc:
         status = 502 if isinstance(exc, FetchError) else 422
         raise DomainError(exc.code, str(exc), status) from exc

@@ -86,6 +86,21 @@ describe('saved food library', () => {
   })
 })
 
+describe('recipe nutrition preview', () => {
+  it('can request a fresh source read', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({
+      url: 'https://example.org/recipe',
+      publisher: 'Example',
+      publisher_nutrition: null,
+    }))
+    const { api } = await import('./client')
+
+    await api.nutritionPreview('https://example.org/recipe', true)
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/recipe-discovery/nutrition-preview?url=https%3A%2F%2Fexample.org%2Frecipe&refresh=true')
+  })
+})
+
 describe('recipe deletion', () => {
   it('sends a DELETE request for the selected recipe', async () => {
     sessionStorage.setItem('slop-csrf', 'current-token')

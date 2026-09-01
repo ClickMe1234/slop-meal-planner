@@ -321,6 +321,17 @@ class RecipeCreate(APIModel):
         return self
 
 
+class RecipeNutritionIn(APIModel):
+    """Nutrition values saved with a reviewed recipe version."""
+
+    basis: str = Field(default="per serving", min_length=1, max_length=160)
+    energy_kcal: Decimal | None = Field(default=None, ge=0)
+    protein_g: Decimal | None = Field(default=None, ge=0)
+    carbohydrate_g: Decimal | None = Field(default=None, ge=0)
+    fat_g: Decimal | None = Field(default=None, ge=0)
+    fibre_g: Decimal | None = Field(default=None, ge=0)
+
+
 class RecipeReviewUpdate(VersionedUpdate):
     title: str = Field(min_length=1, max_length=300)
     yield_servings: Decimal = Field(gt=0)
@@ -331,6 +342,7 @@ class RecipeReviewUpdate(VersionedUpdate):
         default=None, ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
     )
     meal_types: list[RecipeTag] | None = Field(default=None, max_length=20)
+    publisher_nutrition: RecipeNutritionIn | None = None
     ingredients: list[RecipeIngredientIn] = Field(min_length=1, max_length=500)
 
     @model_validator(mode="after")
