@@ -108,6 +108,10 @@ read [Database and migrations](#database-and-migrations) first.
   missing quantities are surfaced for review.
 - Review lets a user confirm yield, meal tags, shopping-list names, included
   or optional ingredients, food matches, shopping exclusions, and quantities.
+- Import review also exposes editable per-serving nutrition (with publisher
+  values pre-filled when available); a complete set is persisted with the
+  recipe version for planning, and an explicit source refresh can restore the
+  publisher values after an accidental edit.
 - Recipe changes can synchronize eligible current plans and shopping lists
   through the recipe-plan sync service.
 - Recipes can have attributed publisher cooking methods or concise
@@ -605,9 +609,9 @@ interactive targets usable at small heights.
 - RecipesPage queries saved recipes and remote discovery independently, then
   maps both into the catalogue card shape. Saving a remote result starts a
   job, polls it, opens review, and only becomes planner-ready after review.
-- ImportPages owns the review form and preserves user corrections in the
-  review payload. Review validation blocks included shopping ingredients that
-  have no amount/unit unless explicitly excluded.
+- ImportPages owns the review form and preserves user corrections, including
+  editable nutrition, in the review payload. Review validation blocks included
+  shopping ingredients that have no amount/unit unless explicitly excluded.
 - IngredientsPage composes local food records, USDA search, Open Food Facts,
   saved foods, manual labels, and BarcodeScanner; it maps provider failures to
   actionable notices.
@@ -652,9 +656,9 @@ interactive targets usable at small heights.
    recipe JSON-LD/semantic fields, parses ingredients, stores publisher tags
    and a recipe-version snapshot, and sets the job to awaiting_review.
 4. The review page polls GET /jobs/{job_id}, then loads GET /recipes/{id}.
-5. PUT /recipes/{id}/review persists the corrected title/yield/tags/ingredients.
-   Complete publisher nutrition or a valid custom calculation is what makes a
-   recipe planner-ready.
+5. PUT /recipes/{id}/review persists the corrected title/yield/tags,
+   ingredients, and nutrition values. Complete per-serving nutrition or a valid
+   custom calculation is what makes a recipe planner-ready.
 
 ### Remote discovery
 

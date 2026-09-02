@@ -42,6 +42,7 @@ from ..schemas import (
     RecipeCreate,
     RecipeDetail,
     RecipeIngredientIn,
+    RecipeNutritionIn,
     RecipePlanSyncOut,
     RecipeReviewUpdate,
     RecipeServingConstraintsUpdate,
@@ -109,6 +110,21 @@ def _publisher_tag_data(db: Session, recipe: Recipe) -> tuple[list[dict[str, str
 
 def _normalised_name(value: str | None) -> str:
     return " ".join((value or "").casefold().split())
+
+
+def _review_nutrition_values(value: RecipeNutritionIn | None) -> dict | None:
+    if value is None:
+        return None
+    values = value.model_dump()
+    if not any(
+        values.get(key) is not None
+        for key in ("energy_kcal", "protein_g", "carbohydrate_g", "fat_g", "fibre_g")
+    ):
+        return None
+    return {
+        key: float(item) if isinstance(item, Decimal) else item
+        for key, item in values.items()
+    }
 
 
 def _ingredient_values(
@@ -642,6 +658,11 @@ def save_recipe_review(
     previous = _latest_version(db, recipe.id)
     if previous is None:
         raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+    reviewed_nutrition = (
+        _review_nutrition_values(payload.publisher_nutrition)
+        if "publisher_nutrition" in payload.model_fields_set
+        else previous.publisher_nutrition
+    )
     next_version = RecipeVersion(
         recipe_id=recipe.id,
         version_number=previous.version_number + 1,
@@ -659,7 +680,7 @@ def save_recipe_review(
         ),
         custom_instructions=previous.custom_instructions,
         source_checksum=previous.source_checksum,
-        publisher_nutrition=previous.publisher_nutrition,
+        publisher_nutrition=reviewed_nutrition,
     )
     db.add(next_version)
     db.flush()

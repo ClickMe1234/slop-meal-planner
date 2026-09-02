@@ -290,10 +290,10 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
 
 type NutritionValues = {
   basis?: string
-  energy_kcal?: number
-  protein_g?: number
-  carbohydrate_g?: number
-  fat_g?: number
+  energy_kcal?: number | string | null
+  protein_g?: number | string | null
+  carbohydrate_g?: number | string | null
+  fat_g?: number | string | null
 }
 
 function completeNutrition(nutrition?: NutritionValues): nutrition is Required<Pick<NutritionValues, 'energy_kcal' | 'protein_g' | 'carbohydrate_g' | 'fat_g'>> & NutritionValues {

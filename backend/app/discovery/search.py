@@ -8,9 +8,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from dataclasses import replace
 from typing import Literal
+from urllib.parse import urlsplit
 
 from .categories import CATEGORY_BY_KEY, RecipeCategory
-from .errors import DiscoveryError
+from .errors import DiscoveryError, UnsupportedSourceError
 from .extraction import extract_recipe
 from .models import CombinedSearchResponse, ExtractedRecipe, SearchResult, SourceSearchResponse
 from .registry import SourceRegistry, default_registry
@@ -206,24 +207,39 @@ class LiveSearchService:
             category_match=category_match,
         )
 
-    async def nutrition_preview(self, url: str) -> ExtractedRecipe:
-        """Fetch and cache publisher nutrition without importing the recipe."""
+    async def nutrition_preview(self, url: str, *, force: bool = False) -> ExtractedRecipe:
+        """Fetch publisher nutrition without importing the recipe.
+
+        Supported publishers use their adapter host policy. Generic imported
+        URLs are limited to the submitted host and its ordinary ``www`` pair,
+        matching the worker import boundary. An explicit refresh bypasses the
+        normal preview cache so the user can restore source values after an
+        edit.
+        """
 
         canonical = canonicalize_url(url)
-        adapter = self.registry.for_url(canonical)
+        try:
+            adapter = self.registry.for_url(canonical)
+            allowed_hosts = set(adapter.hosts)
+        except UnsupportedSourceError:
+            host = urlsplit(canonical).hostname or ""
+            host_without_www = host.removeprefix("www.")
+            allowed_hosts = {host_without_www, f"www.{host_without_www}"}
         now = time.monotonic()
-        cached = self._preview_cache.get(canonical)
-        if cached is not None and now <= cached[0]:
-            return cached[1]
-
-        lock = self._preview_locks.setdefault(canonical, asyncio.Lock())
-        async with lock:
-            now = time.monotonic()
+        if not force:
             cached = self._preview_cache.get(canonical)
             if cached is not None and now <= cached[0]:
                 return cached[1]
 
-            html = await self.fetcher.fetch_text(canonical, allowed_hosts=set(adapter.hosts))
+        lock = self._preview_locks.setdefault(canonical, asyncio.Lock())
+        async with lock:
+            now = time.monotonic()
+            if not force:
+                cached = self._preview_cache.get(canonical)
+                if cached is not None and now <= cached[0]:
+                    return cached[1]
+
+            html = await self.fetcher.fetch_text(canonical, allowed_hosts=allowed_hosts)
             recipe = extract_recipe(html, canonical)
             expired_keys = [
                 key for key, value in self._preview_cache.items() if now > value[0]

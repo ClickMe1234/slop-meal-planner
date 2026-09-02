@@ -262,6 +262,7 @@ export const api = {
       minimum_servings?: number | null
       serving_increment?: number | null
       meal_types?: BackendMealType[]
+      publisher_nutrition?: BackendRecipeNutrition | null
       ingredients: Array<Record<string, unknown>>
     },
   ) =>
@@ -284,7 +285,7 @@ export const api = {
   searchRecipeIngredients: (query = '') => request<{ items: BackendRecipeIngredientChoice[]; total: number }>(`/recipe-ingredients?q=${encodeURIComponent(query)}`),
   recipeCategories: () => request<RecipeCategoryResponse>('/recipe-discovery/categories'),
   searchRemote: (query: string, requestKey: string, sources: RecipeSourceKey[], publisherCategories: string[] = [], publisherCategoryMatch: RecipeCategoryMatchMode = 'any') => request<DiscoveryResponse>(`/recipe-discovery?q=${encodeURIComponent(query)}&request_key=${encodeURIComponent(requestKey)}&sources=${encodeURIComponent(sources.join(','))}&publisher_category_match=${publisherCategoryMatch}${publisherCategories.map((value) => `&publisher_category=${encodeURIComponent(value)}`).join('')}`),
-  nutritionPreview: (url: string) => request<DiscoveryNutritionPreview>(`/recipe-discovery/nutrition-preview?url=${encodeURIComponent(url)}`),
+  nutritionPreview: (url: string, refresh = false) => request<DiscoveryNutritionPreview>(`/recipe-discovery/nutrition-preview?url=${encodeURIComponent(url)}${refresh ? '&refresh=true' : ''}`),
   methodPreview: (url: string) => request<BackendMethodView>('/recipe-discovery/method-previews', { method: 'POST', body: JSON.stringify({ url }) }),
   getMethodPreview: (token: string) => request<BackendMethodView>(`/recipe-discovery/method-previews/${encodeURIComponent(token)}`),
   saveMethodPreview: (token: string, mealTypes: BackendMealType[]) => request<BackendRecipeDetail>(`/recipe-discovery/method-previews/${encodeURIComponent(token)}/save`, { method: 'POST', body: JSON.stringify({ meal_types: mealTypes }) }),
@@ -545,6 +546,15 @@ export interface BackendRecipeIngredientChoice {
   recipes: Array<{ id: string; title: string }>
 }
 
+export interface BackendRecipeNutrition {
+  basis?: string
+  energy_kcal?: ApiDecimal | null
+  protein_g?: ApiDecimal | null
+  carbohydrate_g?: ApiDecimal | null
+  fat_g?: ApiDecimal | null
+  fibre_g?: ApiDecimal | null
+}
+
 export interface BackendRecipe {
   id: string
   title: string
@@ -557,14 +567,8 @@ export interface BackendRecipe {
   yield_servings?: number
   minimum_servings?: number
   serving_increment?: number
-  publisher_nutrition?: {
-    basis?: string
-    energy_kcal?: number
-    protein_g?: number
-    carbohydrate_g?: number
-    fat_g?: number
-  }
-  calculated_nutrition?: Record<string, number>
+  publisher_nutrition?: BackendRecipeNutrition
+  calculated_nutrition?: BackendRecipeNutrition
   nutrition_method?: 'publisher' | 'complete'
   review_count?: number
   meal_types: BackendMealType[]
@@ -931,13 +935,7 @@ export interface DiscoveryResult {
   title: string
   url: string
   image_url?: string
-  publisher_nutrition?: {
-    basis?: string
-    energy_kcal?: number
-    protein_g?: number
-    carbohydrate_g?: number
-    fat_g?: number
-  }
+  publisher_nutrition?: BackendRecipeNutrition
   already_saved: boolean
   star_rating?: number
   rating_count?: number

@@ -120,6 +120,82 @@ def test_existing_import_drafts_are_enriched_with_detected_units(client, owner):
     assert ingredient["food_phrase"] == "chickpeas"
 
 
+def test_recipe_review_saves_manual_import_nutrition_for_planning(client, owner, session_factory):
+    headers = {"X-CSRF-Token": owner["csrf_token"]}
+    created = client.post(
+        "/api/v1/recipes",
+        headers=headers,
+        json={
+            "title": "Nutrition review dinner",
+            "source_type": "url",
+            "source_url": "https://recipes.example.org/nutrition-review",
+            "yield_servings": 4,
+            "ingredients": [{
+                "original_text": "100 g spinach",
+                "quantity": 100,
+                "unit": "g",
+                "quantity_grams": 100,
+                "food_phrase": "spinach",
+            }],
+        },
+    )
+    assert created.status_code == 201, created.text
+    current = created.json()
+    assert current["publisher_nutrition"] is None
+    ingredient = current["ingredients"][0]
+
+    reviewed = client.put(
+        f"/api/v1/recipes/{current['id']}/review",
+        headers=headers,
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "meal_types": ["dinner"],
+            "publisher_nutrition": {
+                "energy_kcal": 475,
+                "protein_g": 32,
+                "carbohydrate_g": 41,
+                "fat_g": 17,
+                "fibre_g": 7,
+            },
+            "ingredients": [{
+                "lineage_id": ingredient["lineage_id"],
+                "original_text": ingredient["original_text"],
+                "quantity": ingredient["quantity"],
+                "unit": ingredient["unit"],
+                "quantity_grams": ingredient["quantity_grams"],
+                "food_phrase": ingredient["food_phrase"],
+                "included": True,
+                "optional": False,
+                "needs_review": False,
+                "shopping_excluded": False,
+            }],
+        },
+    )
+
+    assert reviewed.status_code == 200, reviewed.text
+    saved = reviewed.json()
+    assert saved["publisher_nutrition"] == {
+        "basis": "per serving",
+        "energy_kcal": 475.0,
+        "protein_g": 32.0,
+        "carbohydrate_g": 41.0,
+        "fat_g": 17.0,
+        "fibre_g": 7.0,
+    }
+    assert saved["planner_eligible"] is True
+    assert saved["nutrition_method"] == "publisher"
+
+    with session_factory() as db:
+        version = db.scalar(
+            select(RecipeVersion)
+            .where(RecipeVersion.recipe_id == current["id"])
+            .order_by(RecipeVersion.version_number.desc())
+        )
+        assert version.publisher_nutrition["energy_kcal"] == 475.0
+
+
 def test_existing_publisher_import_is_derived_as_planner_ready(client, owner, session_factory):
     with session_factory() as db:
         household = db.scalar(select(Household))
