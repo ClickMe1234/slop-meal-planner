@@ -5,6 +5,7 @@ from app.models import (
     FoodNutrient,
     FoodRecord,
     Household,
+    HouseholdFoodUnitConversion,
     HouseholdMember,
     PantryLot,
     Recipe,
@@ -48,6 +49,16 @@ def test_source_bundle_scopes_household_and_keeps_linked_food_records(db):
         PantryLot(household_id=source.id, food_record_id=food.id, display_name="Soup vegetables", initial_quantity=2, unit="kg"),
         Recipe(household_id=other.id, title="Other recipe"),
     ])
+    db.add(
+        HouseholdFoodUnitConversion(
+            household_id=source.id,
+            food_record_id=food.id,
+            nutrition_input_unit="can",
+            nutrition_basis_amount_per_unit=400,
+            nutrition_basis_unit="g",
+            nutrition_conversion_source="package",
+        )
+    )
     db.commit()
 
     bundle = _load_source_bundle(db, source.id)
@@ -57,6 +68,9 @@ def test_source_bundle_scopes_household_and_keeps_linked_food_records(db):
     assert _counts(bundle)["recipes"]["recipes"] == 1
     assert _component_tables({"recipes"}, bundle.tables) >= {"recipe", "recipe_version", "food_record", "food_nutrient"}
     assert "saved_food" not in _component_tables({"recipes"}, bundle.tables)
+    assert "household_food_unit_conversion" not in _component_tables({"recipes"}, bundle.tables)
+    assert "household_food_unit_conversion" in _component_tables({"ingredients"}, bundle.tables)
+    assert bundle.tables["household_food_unit_conversion"][0]["nutrition_input_unit"] == "can"
 
 
 def test_insert_rows_remaps_household_and_is_idempotent(db):

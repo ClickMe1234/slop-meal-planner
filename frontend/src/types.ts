@@ -15,6 +15,9 @@ export interface Recipe {
   id: string
   title: string
   source: string
+  /** Persisted recipes retain their source so the catalogue can send custom
+   * recipes to the unit-aware editor without changing imported review flow. */
+  sourceType?: string
   sourceUrl: string
   imageUrl?: string
   yield?: number

@@ -24,6 +24,8 @@ from .pantry import reserve_plan_batches
 from .shopping import build_shopping_list
 from .recipe_methods import clone_method_snapshot
 from .planner import BOOST_PORTIONS, PORTIONS, SIDE_PORTIONS, recipe_portions
+from .quantities import canonical_quantity_unit
+from .recipe_versions import next_recipe_version_number
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +111,7 @@ def clone_recipe_version_for_shopping(
 
     next_version = RecipeVersion(
         recipe_id=recipe.id,
-        version_number=previous.version_number + 1,
+        version_number=next_recipe_version_number(db, recipe.id),
         title=previous.title,
         yield_servings=previous.yield_servings,
         minimum_servings=previous.minimum_servings,
@@ -117,6 +119,8 @@ def clone_recipe_version_for_shopping(
         custom_instructions=previous.custom_instructions,
         source_checksum=previous.source_checksum,
         publisher_nutrition=previous.publisher_nutrition,
+        meal_types=previous.meal_types,
+        is_shopping_snapshot=True,
     )
     db.add(next_version)
     db.flush()
@@ -128,9 +132,10 @@ def clone_recipe_version_for_shopping(
         }
         change = changes.get(ingredient.id)
         if change:
+            target_unit = canonical_quantity_unit(str(change["unit"]))
             values.update(
                 quantity=Decimal(str(change["quantity"])),
-                unit=str(change["unit"]),
+                unit=target_unit,
                 food_phrase=str(change["food_phrase"]),
                 name_overridden=True,
                 shopping_measurement_overridden=True,
@@ -138,6 +143,16 @@ def clone_recipe_version_for_shopping(
             )
             if change.get("quantity_grams") is not None:
                 values["quantity_grams"] = Decimal(str(change["quantity_grams"]))
+            if values.get("nutrition_input_unit") and (
+                canonical_quantity_unit(str(values["nutrition_input_unit"]))
+                != target_unit
+            ):
+                values.update(
+                    nutrition_input_unit=None,
+                    nutrition_basis_amount_per_unit=None,
+                    nutrition_basis_unit=None,
+                    nutrition_conversion_source=None,
+                )
         db.add(
             RecipeIngredient(
                 recipe_version_id=next_version.id,

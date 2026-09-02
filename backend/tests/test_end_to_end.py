@@ -196,6 +196,72 @@ def test_recipe_review_saves_manual_import_nutrition_for_planning(client, owner,
         assert version.publisher_nutrition["energy_kcal"] == 475.0
 
 
+def test_url_recipe_review_preserves_existing_publisher_nutrition_when_payload_is_blank(
+    client, owner
+):
+    headers = {"X-CSRF-Token": owner["csrf_token"]}
+    created = client.post(
+        "/api/v1/recipes",
+        headers=headers,
+        json={
+            "title": "Publisher nutrition stays put",
+            "source_type": "url",
+            "source_url": "https://www.bbcgoodfood.com/recipes/publisher-nutrition-stays-put",
+            "yield_servings": 4,
+            "meal_types": ["dinner"],
+            "publisher_nutrition": {
+                "basis": "per serving",
+                "energy_kcal": 412,
+                "protein_g": 18,
+                "carbohydrate_g": 50,
+                "fat_g": 10,
+            },
+            "ingredients": [{
+                "original_text": "100 g spinach",
+                "quantity": 100,
+                "unit": "g",
+                "quantity_grams": 100,
+                "food_phrase": "spinach",
+            }],
+        },
+    )
+    assert created.status_code == 201, created.text
+    current = created.json()
+    ingredient = current["ingredients"][0]
+
+    reviewed = client.put(
+        f"/api/v1/recipes/{current['id']}/review",
+        headers=headers,
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "meal_types": ["dinner"],
+            # A stale pre-editor client could send this after treating an old
+            # ingredient calculation as authoritative. It must not erase the
+            # publisher snapshot for a URL import.
+            "publisher_nutrition": None,
+            "ingredients": [{
+                "lineage_id": ingredient["lineage_id"],
+                "original_text": ingredient["original_text"],
+                "quantity": ingredient["quantity"],
+                "unit": ingredient["unit"],
+                "quantity_grams": ingredient["quantity_grams"],
+                "food_phrase": ingredient["food_phrase"],
+                "included": True,
+                "optional": False,
+                "needs_review": False,
+                "shopping_excluded": False,
+            }],
+        },
+    )
+
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["publisher_nutrition"]["energy_kcal"] == 412.0
+    assert reviewed.json()["nutrition_method"] == "publisher"
+    assert reviewed.json()["planner_eligible"] is True
+
+
 def test_existing_publisher_import_is_derived_as_planner_ready(client, owner, session_factory):
     with session_factory() as db:
         household = db.scalar(select(Household))

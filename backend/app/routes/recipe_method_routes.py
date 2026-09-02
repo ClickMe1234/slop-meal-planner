@@ -53,6 +53,7 @@ from ..services.recipe_methods import (
     source_text_from_blocks,
 )
 from ..services.recipe_plan_sync import sync_recipe_versions_to_current_plans
+from ..services.recipe_versions import next_recipe_version_number
 from .discovery_routes import _live_service
 from .recipe_routes import _latest_version, _recipe_detail
 
@@ -244,7 +245,7 @@ async def _create_preview(
 def _clone_version(db: Session, previous: RecipeVersion) -> tuple[RecipeVersion, list[RecipeIngredient]]:
     next_version = RecipeVersion(
         recipe_id=previous.recipe_id,
-        version_number=previous.version_number + 1,
+        version_number=next_recipe_version_number(db, previous.recipe_id),
         title=previous.title,
         yield_servings=previous.yield_servings,
         minimum_servings=previous.minimum_servings,
@@ -252,6 +253,7 @@ def _clone_version(db: Session, previous: RecipeVersion) -> tuple[RecipeVersion,
         custom_instructions=previous.custom_instructions,
         source_checksum=previous.source_checksum,
         publisher_nutrition=previous.publisher_nutrition,
+        meal_types=previous.meal_types,
     )
     db.add(next_version)
     db.flush()
@@ -510,6 +512,7 @@ def save_method_preview(
             if preview.extracted.publisher_nutrition
             else None
         ),
+        meal_types=[meal_type.value for meal_type in payload.meal_types],
     )
     db.add(version)
     db.flush()

@@ -20,6 +20,7 @@ from .models import (
     TargetMode,
     UserRole,
 )
+from .services.quantities import canonical_quantity_unit
 
 MACRO_MINIMUM_TOLERANCE_G = Decimal("10")
 BoundedIdentifier = Annotated[str, StringConstraints(min_length=1, max_length=80)]
@@ -265,6 +266,10 @@ class RecipeIngredientIn(APIModel):
     quantity: Decimal | None = Field(default=None, ge=0)
     unit: str | None = Field(default=None, max_length=80)
     quantity_grams: Decimal | None = Field(default=None, ge=0)
+    nutrition_input_unit: str | None = Field(default=None, min_length=1, max_length=80)
+    nutrition_basis_amount_per_unit: Decimal | None = Field(default=None, gt=0)
+    nutrition_basis_unit: Literal["g", "ml"] | None = None
+    nutrition_conversion_source: Literal["package", "serving", "manual"] | None = None
     food_phrase: str | None = Field(default=None, max_length=300)
     preparation: str | None = Field(default=None, max_length=300)
     included: bool = True
@@ -279,7 +284,117 @@ class RecipeIngredientIn(APIModel):
     def optional_defaults_to_excluded(self):
         if self.optional and "included" not in self.model_fields_set:
             self.included = False
+        conversion = (
+            self.nutrition_input_unit,
+            self.nutrition_basis_amount_per_unit,
+            self.nutrition_basis_unit,
+            self.nutrition_conversion_source,
+        )
+        if any(value is not None for value in conversion):
+            if any(value is None for value in conversion):
+                raise ValueError("complete the nutrition unit conversion or clear it")
+            self.nutrition_input_unit = canonical_quantity_unit(
+                self.nutrition_input_unit or ""
+            )
+            if self.unit and self.nutrition_input_unit != canonical_quantity_unit(self.unit):
+                raise ValueError("nutrition conversion must use the ingredient's current unit")
         return self
+
+
+class NutritionPreviewIngredientIn(APIModel):
+    """A transient editor row. ``client_id`` is never persisted by preview."""
+
+    client_id: str = Field(min_length=1, max_length=120)
+    original_text: str = Field(default="", max_length=1000)
+    quantity: Decimal | None = Field(default=None, ge=0)
+    unit: str | None = Field(default=None, max_length=80)
+    included: bool = True
+    food_record_id: str | None = None
+    food_phrase: str | None = Field(default=None, max_length=300)
+    nutrition_input_unit: str | None = Field(default=None, min_length=1, max_length=80)
+    nutrition_basis_amount_per_unit: Decimal | None = Field(default=None, gt=0)
+    nutrition_basis_unit: Literal["g", "ml"] | None = None
+    nutrition_conversion_source: Literal["package", "serving", "manual"] | None = None
+
+    @model_validator(mode="after")
+    def validate_conversion(self):
+        conversion = (
+            self.nutrition_input_unit,
+            self.nutrition_basis_amount_per_unit,
+            self.nutrition_basis_unit,
+            self.nutrition_conversion_source,
+        )
+        if any(value is not None for value in conversion):
+            if any(value is None for value in conversion):
+                raise ValueError("complete the nutrition unit conversion or clear it")
+            self.nutrition_input_unit = canonical_quantity_unit(
+                self.nutrition_input_unit or ""
+            )
+            if self.unit and self.nutrition_input_unit != canonical_quantity_unit(self.unit):
+                raise ValueError("nutrition conversion must use the ingredient's current unit")
+        return self
+
+
+class NutritionPreviewRequest(APIModel):
+    yield_servings: Decimal | None = Field(default=None, gt=0)
+    ingredients: list[NutritionPreviewIngredientIn] = Field(
+        default_factory=list, max_length=500
+    )
+
+    @model_validator(mode="after")
+    def unique_client_ids(self):
+        client_ids = [row.client_id for row in self.ingredients]
+        if len(client_ids) != len(set(client_ids)):
+            raise ValueError("ingredient client IDs must be unique")
+        return self
+
+
+class NutritionPreviewIssue(APIModel):
+    code: str
+    message: str
+    client_id: str | None = None
+
+
+class NutritionLabelBasisOut(APIModel):
+    amount: Decimal
+    unit: Literal["g", "ml"]
+
+
+class NutritionConversionOptionOut(APIModel):
+    kind: Literal["remembered", "package", "serving", "manual"]
+    source: Literal["package", "serving", "manual"] | None = None
+    input_unit: str
+    basis_amount_per_unit: Decimal | None = None
+    basis_unit: Literal["g", "ml"] | None = None
+    description: str
+    requires_confirmation: bool = True
+
+
+class NutritionPreviewIngredientOut(APIModel):
+    client_id: str
+    status: str
+    food_record_id: str | None = None
+    food_name: str | None = None
+    label_basis: NutritionLabelBasisOut | None = None
+    effective_amount: Decimal | None = None
+    effective_unit: Literal["g", "ml"] | None = None
+    formula: str | None = None
+    contribution: dict[str, Decimal] = Field(default_factory=dict)
+    assumptions: list[str] = Field(default_factory=list)
+    conversion_options: list[NutritionConversionOptionOut] = Field(default_factory=list)
+    issues: list[NutritionPreviewIssue] = Field(default_factory=list)
+
+
+class NutritionPreviewOut(APIModel):
+    complete: bool
+    yield_servings: Decimal | None = None
+    batch_values: dict[str, Decimal] = Field(default_factory=dict)
+    # ``total_values`` mirrors NutritionCalculation terminology for clients
+    # that render a preview and a saved calculation through one component.
+    total_values: dict[str, Decimal] = Field(default_factory=dict)
+    per_serving_values: dict[str, Decimal] = Field(default_factory=dict)
+    issues: list[NutritionPreviewIssue] = Field(default_factory=list)
+    ingredients: list[NutritionPreviewIngredientOut] = Field(default_factory=list)
 
 
 class RecipeCreate(APIModel):
@@ -342,11 +457,41 @@ class RecipeReviewUpdate(VersionedUpdate):
         default=None, ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
     )
     meal_types: list[RecipeTag] | None = Field(default=None, max_length=20)
+    custom_instructions: str | None = Field(default=None, max_length=20_000)
     publisher_nutrition: RecipeNutritionIn | None = None
     ingredients: list[RecipeIngredientIn] = Field(min_length=1, max_length=500)
 
     @model_validator(mode="after")
     def validate_meal_types(self):
+        if self.meal_types is not None and len(set(self.meal_types)) != len(self.meal_types):
+            raise ValueError("recipe meal types must be unique")
+        if (
+            ("minimum_servings" in self.model_fields_set)
+            != ("serving_increment" in self.model_fields_set)
+        ):
+            raise ValueError("minimum servings and serving increment must be supplied together")
+        if (self.minimum_servings is None) != (self.serving_increment is None):
+            raise ValueError("minimum servings and serving increment must be supplied together")
+        return self
+
+
+class RecipeCustomUpdate(VersionedUpdate):
+    """The draft-friendly counterpart to the strict imported-recipe review."""
+
+    title: str = Field(min_length=1, max_length=300)
+    yield_servings: Decimal | None = Field(default=None, gt=0)
+    minimum_servings: Decimal | None = Field(
+        default=None, ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
+    serving_increment: Decimal | None = Field(
+        default=None, ge=Decimal("0.25"), le=Decimal("2"), multiple_of=Decimal("0.25")
+    )
+    meal_types: list[RecipeTag] | None = Field(default=None, max_length=20)
+    custom_instructions: str | None = Field(default=None, max_length=20_000)
+    ingredients: list[RecipeIngredientIn] = Field(default_factory=list, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_editor_fields(self):
         if self.meal_types is not None and len(set(self.meal_types)) != len(self.meal_types):
             raise ValueError("recipe meal types must be unique")
         if (
@@ -629,6 +774,14 @@ class FoodRecordOut(APIModel):
     basis_unit: str
     density_g_per_ml: Decimal | None
     nutrients: list[dict[str, Any]]
+    brand: str | None = None
+    barcode: str | None = None
+    package_amount: Decimal | None = None
+    package_unit: str | None = None
+    package_description: str | None = None
+    serving_amount: Decimal | None = None
+    serving_unit: str | None = None
+    serving_description: str | None = None
 
 
 class FoodLookupSearch(APIModel):
@@ -655,8 +808,10 @@ class FoodLookupOut(APIModel):
     complete: bool
     package_amount: Decimal | None = None
     package_unit: Literal["g", "ml"] | None = None
+    package_description: str | None = None
     serving_amount: Decimal | None = None
     serving_unit: Literal["g", "ml"] | None = None
+    serving_description: str | None = None
     source_url: str | None = None
     image_url: str | None = None
     attribution: str | None = None
@@ -749,9 +904,11 @@ class SavedFoodOut(APIModel):
     meal_types: list[RecipeTag] = Field(default_factory=list)
     package_amount: Decimal | None = None
     package_unit: str | None = None
+    package_description: str | None = None
     source_url: str | None = None
     image_url: str | None = None
     attribution: str | None = None
+    serving_description: str | None = None
     warnings: list[str] = Field(default_factory=list)
     version: int
 

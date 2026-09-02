@@ -13,6 +13,7 @@ from ..models import (
     Household,
     MealBatch,
     MealPlan,
+    NutritionCalculation,
     PantryLot,
     PlanStatus,
     Recipe,
@@ -631,11 +632,7 @@ def _ingredient_source_measurement(
         if food is not None and food.density_g_per_ml is not None
         else profile.density_g_per_ml if profile is not None else None
     )
-    if (
-        ingredient.shopping_measurement_overridden
-        and ingredient.quantity is not None
-        and ingredient.unit
-    ):
+    if ingredient.quantity is not None and ingredient.unit:
         return Decimal(ingredient.quantity), canonical_quantity_unit(ingredient.unit), density
     if ingredient.quantity_grams is not None:
         return Decimal(ingredient.quantity_grams), "g", density
@@ -670,7 +667,7 @@ def _ingredient_change_preview(
         conversions.append(
             {
                 "recipe_id": recipe.id,
-                "recipe_title": recipe.title,
+                "recipe_title": version.title,
                 "recipe_ingredient_id": ingredient.id,
                 "original_text": ingredient.original_text,
                 "current_quantity": round_quantity(amount, unit),
@@ -893,14 +890,34 @@ def apply_shopping_ingredient_change(
         version = value["version"]
         latest = db.scalar(
             select(RecipeVersion)
-            .where(RecipeVersion.recipe_id == recipe.id)
+            .where(
+                RecipeVersion.recipe_id == recipe.id,
+                RecipeVersion.is_shopping_snapshot.is_(False),
+            )
             .order_by(RecipeVersion.version_number.desc())
             .with_for_update()
         )
-        if latest is None or latest.id != version.id:
+        latest_complete_id = db.scalar(
+            select(RecipeVersion.id)
+            .join(
+                NutritionCalculation,
+                NutritionCalculation.recipe_version_id == RecipeVersion.id,
+            )
+            .where(
+                RecipeVersion.recipe_id == recipe.id,
+                NutritionCalculation.status.in_(["complete", "publisher"]),
+            )
+            .order_by(
+                RecipeVersion.version_number.desc(),
+                NutritionCalculation.calculated_at.desc(),
+            )
+        )
+        if latest is None or (
+            latest.id != version.id and latest_complete_id != version.id
+        ):
             raise DomainError(
                 "SHOPPING_SOURCE_STALE",
-                f"{recipe.title} changed; reload the shopping list and try again",
+                f"{version.title} changed; reload the shopping list and try again",
                 409,
             )
         quantity = value["target_quantity"] or manual[ingredient.id]

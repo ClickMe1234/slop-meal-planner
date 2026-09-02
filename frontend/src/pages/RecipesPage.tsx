@@ -282,7 +282,7 @@ function RecipeCard({ recipe, saving, onSave }: { recipe: Recipe; saving: boolea
       {missingMealTypes && <div className="recipe-planning-note recipe-planning-note--warning" role="status"><strong>Not used for meal planning</strong><span>Add breakfast, lunch, dinner, snack or side so the planner knows where this recipe belongs.</span></div>}
       <div className="recipe-actions">
         <Link to={saved ? `/recipes/${recipe.id}/method` : `/recipes/method-preview?url=${encodeURIComponent(recipe.sourceUrl)}`} className="button button--secondary recipe-method-button"><BookOpenText size={17}/>Method</Link>
-        {saved ? <Link to={`/recipes/${recipe.id}/review`} className="button button--secondary">{recipe.reviewCount ? 'Review ingredients' : missingMealTypes ? 'Add meal types' : 'Edit recipe'}</Link> : <Button data-recipe-save-id={recipe.id} disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}
+        {saved ? <Link to={`/recipes/${recipe.id}/${recipe.sourceType === 'custom' ? 'edit' : 'review'}`} className="button button--secondary">{recipe.reviewCount ? 'Review ingredients' : missingMealTypes ? 'Add meal types' : 'Edit recipe'}</Link> : <Button data-recipe-save-id={recipe.id} disabled={saving} onClick={onSave}>{saving ? 'Checking…' : 'Save recipe'}</Button>}
       </div>
     </div>
   </Card></div>
@@ -349,6 +349,7 @@ export function mapSavedRecipe(recipe: BackendRecipe, categoryLabels: Map<string
     id: recipe.id,
     title: recipe.title,
     source: 'Saved recipe',
+    sourceType: recipe.source_type,
     sourceUrl: recipe.source_url ?? '',
     imageUrl: recipe.image_url,
     yield: recipe.yield_servings,

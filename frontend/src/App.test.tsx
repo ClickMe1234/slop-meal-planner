@@ -215,7 +215,7 @@ describe('App', () => {
     expect(screen.getByText(/photo and number lookup still work/i)).toBeInTheDocument()
   })
 
-  it('integrates nutrition search and barcode scanning while building a custom recipe', async () => {
+  it('explains that live nutrition lookup is unavailable while building a demo custom recipe', async () => {
     const user = userEvent.setup()
     render(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/recipes/new']}><App/></MemoryRouter></QueryClientProvider>)
 
@@ -224,10 +224,12 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: /find nutrition/i }))
     expect(screen.getByRole('checkbox', { name: /general usda/i })).toBeChecked()
     expect(screen.getByRole('checkbox', { name: /packaged open food facts/i })).toBeChecked()
-    expect(screen.getByRole('button', { name: /^search$/i })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /scan barcode/i }))
-    expect(screen.getByRole('textbox', { name: /barcode number for recipe ingredient/i })).toBeInTheDocument()
-    expect(screen.getByText(/photo and number lookup still work/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^search$/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /scan barcode/i })).toBeDisabled()
+    expect(screen.getByText(/nutrition matching is unavailable in demo mode/i)).toBeInTheDocument()
+    expect(screen.getByText(/saving needs a live household/i)).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /saving unavailable in demo/i })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: /saving unavailable in demo/i }).every((button) => button.hasAttribute('disabled'))).toBe(true)
     expect(screen.getByText(/0 of 1 ingredients matched/i)).toBeInTheDocument()
   })
 })
