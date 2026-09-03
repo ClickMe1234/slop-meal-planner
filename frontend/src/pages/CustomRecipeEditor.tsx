@@ -275,6 +275,13 @@ function presentationFromLookup(food: BackendFoodLookup, foodRecordId?: string):
   }
 }
 
+function resolvedFoodName(food: Pick<LookupFoodPresentation, 'name' | 'brand'>): string {
+  const name = food.name.trim()
+  const brand = food.brand?.split(',')[0]?.trim()
+  if (!brand || name.toLocaleLowerCase().includes(brand.toLocaleLowerCase())) return name
+  return `${brand} ${name}`
+}
+
 function fallbackConversionOptions(food: LookupFoodPresentation, row: EditableCustomIngredient): BackendRecipeNutritionConversionOption[] {
   const inputUnit = canonicalInputUnit(row.unit) || row.unit
   const options: BackendRecipeNutritionConversionOption[] = []
@@ -415,7 +422,7 @@ function NutritionLookupDialog({
 
   const choosePresentation = (food: LookupFoodPresentation) => {
     if (!food.foodRecordId) return
-    onSelectFood({ foodRecordId: food.foodRecordId, name: food.name })
+    onSelectFood({ foodRecordId: food.foodRecordId, name: resolvedFoodName(food) })
     if (isDirectNutritionUnit(row.unit, food.basisUnit)) {
       onClose()
       return
@@ -445,12 +452,13 @@ function NutritionLookupDialog({
     setSelectingKey(lookup.provider_record_id)
     setError('')
     try {
+      const presentation = presentationFromLookup(lookup)
       let saved
       try {
         saved = await api.createSavedFood({
           source_type: 'open_food_facts',
           barcode: lookup.barcode,
-          display_name: lookup.name,
+          display_name: resolvedFoodName(presentation),
         })
       } catch (reason) {
         if (!(reason instanceof ApiError && reason.code === 'INGREDIENT_ALREADY_SAVED')) throw reason
@@ -458,7 +466,7 @@ function NutritionLookupDialog({
         saved = library.items.find((item) => item.barcode === lookup.barcode)
       }
       if (!saved) throw new Error('The saved ingredient could not be found.')
-      choosePresentation(presentationFromLookup(lookup, saved.food_record_id))
+      choosePresentation({ ...presentation, foodRecordId: saved.food_record_id })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'The product could not be attached to this ingredient.')
     } finally {
@@ -601,7 +609,7 @@ function ingredientPayload(row: EditableCustomIngredient): BackendCustomRecipeUp
     quantity: row.amount ? Number(row.amount) : null,
     unit: row.amount ? row.unit || null : null,
     quantity_grams: quantityGrams ? Number(quantityGrams) : null,
-    food_phrase: row.original_text.trim(),
+    food_phrase: row.food_record_id ? row.matched_name?.trim() || row.original_text.trim() : row.original_text.trim(),
     food_record_id: row.food_record_id,
     nutrition_input_unit: row.nutrition_input_unit,
     nutrition_basis_amount_per_unit: row.nutrition_basis_amount_per_unit ? Number(row.nutrition_basis_amount_per_unit) : null,
@@ -821,11 +829,6 @@ export function CustomRecipePage({ recipe: suppliedRecipe }: { recipe?: BackendR
             const rowPreview = previewForIngredient(nutritionPreview.data, row.client_id)
             const rowIssues = issueForIngredient(nutritionPreview.data, row.client_id)
             const shoppingQuantityMissing = row.included && !row.shopping_excluded && row.original_text.trim() && (!row.amount.trim() || !row.unit.trim())
-            const hasConversion = Boolean(row.nutrition_basis_amount_per_unit && row.nutrition_basis_unit)
-            const rowYield = Number(yieldServings)
-            const perServingCalories = rowPreview?.contribution?.energy_kcal != null && Number.isFinite(rowYield) && rowYield > 0
-              ? Number(rowPreview.contribution.energy_kcal) / rowYield
-              : null
             return <Card key={row.client_id} className={`ingredient-row custom-ingredient-row ${shoppingQuantityMissing ? 'ingredient-row--amount' : ''} ${rowPreview?.status === 'resolved' ? 'custom-ingredient-row--resolved' : ''}`}>
               <div className="ingredient-copy">
                 <div className="form-grid form-grid--ingredient">
@@ -842,10 +845,7 @@ export function CustomRecipePage({ recipe: suppliedRecipe }: { recipe?: BackendR
                 {row.original_text.trim() && <div className="custom-ingredient-nutrition">
                   <Badge tone={issueTone(rowPreview, row)}>{rowPreview?.status === 'resolved' && <Check aria-hidden="true" />}{statusLabel(rowPreview, row)}</Badge>
                   {row.matched_name && <span className="custom-matched-name">{row.matched_name}</span>}
-                  {rowPreview?.formula && <span className="custom-ingredient-formula">{rowPreview.formula}</span>}
-                  {rowPreview?.contribution?.energy_kcal != null && <strong>{displayNumber(rowPreview.contribution.energy_kcal)} kcal in batch · {perServingCalories == null ? '—' : displayNumber(perServingCalories)} kcal/serving</strong>}
-                  {rowPreview?.assumptions?.map((assumption, assumptionIndex) => <small key={`assumption-${assumptionIndex}`}>{assumption}</small>)}
-                  {hasConversion && <small>Nutrition mapping: 1 {row.nutrition_input_unit ?? row.unit} = {row.nutrition_basis_amount_per_unit} {row.nutrition_basis_unit} ({row.nutrition_conversion_source}).</small>}
+                  {rowPreview?.status === 'resolved' && rowPreview.contribution?.energy_kcal != null && <strong>{displayNumber(rowPreview.contribution.energy_kcal)} kcal</strong>}
                   {rowIssues.map((issue, issueIndex) => <small className="field-help field-help--warning" key={`${issue.code}-${issueIndex}`}>{issue.message}</small>)}
                 </div>}
               </div>
