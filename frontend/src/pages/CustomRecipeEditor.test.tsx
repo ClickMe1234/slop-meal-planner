@@ -67,6 +67,19 @@ function renderEditor() {
 }
 
 describe('CustomRecipePage', () => {
+  it('shows one compact nutrition summary immediately below the instructions', () => {
+    renderEditor()
+
+    const instructions = screen.getByText('Your instructions').closest('label')
+    const nutritionSummary = screen.getByText('Nutrition needs ingredient matches').closest('.custom-nutrition-summary')
+
+    expect(instructions).not.toBeNull()
+    expect(nutritionSummary).not.toBeNull()
+    if (!instructions || !nutritionSummary) throw new Error('Expected the instructions and nutrition summary')
+    expect(instructions.compareDocumentPosition(nutritionSummary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.querySelectorAll('.custom-nutrition-summary')).toHaveLength(1)
+  })
+
   it('confirms a package conversion, shows the formula, and preserves cans in the save payload', async () => {
     const user = userEvent.setup()
     const preview = vi.spyOn(api, 'previewRecipeNutrition').mockImplementation(async (request) => previewFor(request))
@@ -94,7 +107,8 @@ describe('CustomRecipePage', () => {
     await user.click(screen.getByRole('button', { name: 'Confirm equivalent' }))
 
     expect(await screen.findByText(/2 cans × 400 g\/can/i)).toBeInTheDocument()
-    expect(screen.getAllByText('Complete nutrition').length).toBeGreaterThan(0)
+    expect(await screen.findByText('Nutrition calculated from ingredients · per serving')).toBeInTheDocument()
+    expect(screen.getAllByText('Nutrition calculated from ingredients · per serving')).toHaveLength(1)
     await user.click(screen.getAllByRole('button', { name: 'Save recipe' })[0])
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce())
@@ -120,7 +134,7 @@ describe('CustomRecipePage', () => {
     renderEditor()
 
     await user.type(screen.getByRole('textbox', { name: 'Recipe title' }), 'Unfinished soup')
-    expect(screen.getAllByText('Known so far').length).toBeGreaterThan(0)
+    expect(screen.getByText('Nutrition needs ingredient matches')).toBeInTheDocument()
     await user.click(screen.getAllByRole('button', { name: 'Save as draft' })[0])
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce())

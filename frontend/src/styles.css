@@ -1762,29 +1762,9 @@ button.tag { cursor: pointer; font: inherit; }
 .custom-recipe-aside { display:grid;gap:10px;min-width:0; }
 .custom-recipe-aside>.button { width:100%; }
 .custom-method-after-save { text-align:center; }
-.custom-mobile-save,.custom-nutrition-summary-mobile { display:none; }
-.custom-nutrition-summary { display:grid;gap:13px; }
-.custom-nutrition-summary-heading { align-items:start;display:flex;gap:10px;justify-content:space-between; }
-.custom-nutrition-summary-heading>div { display:grid;gap:2px;min-width:0; }
-.custom-nutrition-summary-heading .eyebrow { margin:0; }
-.custom-nutrition-summary-heading h2 { font-size:1.15rem;margin:0; }
-.custom-nutrition-summary-heading .badge { flex:none; }
-.custom-preview-stale,.custom-nutrition-baseline { color:var(--muted);font-size:.67rem;line-height:1.45; }
-.custom-nutrition-grid { border-block:1px solid var(--border);display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr));padding:11px 0; }
-.custom-nutrition-grid>div { display:grid;gap:3px;min-width:0; }
-.custom-nutrition-grid span { color:var(--muted);font-size:.59rem;text-transform:uppercase; }
-.custom-nutrition-grid strong { font-size:.76rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere; }
-.custom-macro-summary { display:grid;gap:7px;margin:0; }
-.custom-macro-summary div { align-items:center;display:flex;font-size:.72rem;justify-content:space-between;gap:10px; }
-.custom-macro-summary dt { color:var(--muted); }
-.custom-macro-summary dd { font-variant-numeric:tabular-nums;font-weight:800;margin:0;text-align:right; }
-.custom-nutrition-delta { background:var(--primary-soft);border-radius:8px;color:var(--primary);font-size:.67rem;font-weight:700;line-height:1.4;padding:8px 9px; }
-.custom-nutrition-delta.positive { background:var(--warm-soft);color:var(--warm); }
-.custom-nutrition-delta.negative { background:var(--primary-soft);color:var(--primary); }
-.custom-preview-issues { background:color-mix(in srgb,var(--warning) 9%,var(--surface));border-radius:9px;display:grid;gap:6px;padding:10px; }
-.custom-preview-issues strong { color:var(--warning);font-size:.69rem; }
-.custom-preview-issues ul { display:grid;gap:4px;margin:0;padding-left:17px; }
-.custom-preview-issues li { color:var(--muted);font-size:.66rem;line-height:1.4; }
+.custom-mobile-save { display:none; }
+.custom-nutrition-summary { display:grid;gap:7px;position:static; }
+.custom-preview-stale { color:var(--muted);font-size:.67rem;line-height:1.45; }
 
 .nutrition-lookup-backdrop { align-items:center;background:rgba(12,18,14,.58);display:flex;inset:0;justify-content:center;padding:20px;position:fixed;z-index:110; }
 .nutrition-lookup-dialog-wrap { display:contents; }
@@ -1823,7 +1803,6 @@ button.tag { cursor: pointer; font: inherit; }
   .custom-recipe-editor { display:block; }
   .custom-recipe-editor-main { gap:14px; }
   .custom-recipe-aside { display:none; }
-  .custom-nutrition-summary-mobile { display:block; }
   .custom-mobile-save { background:color-mix(in srgb,var(--surface) 94%,transparent);border-top:1px solid var(--border);bottom:calc(62px + env(safe-area-inset-bottom));display:block;left:0;padding:10px 15px calc(10px + env(safe-area-inset-bottom));position:sticky;right:0;z-index:8; }
   .custom-mobile-save .button { width:100%; }
   .custom-ingredient-list-header { align-items:start;flex-direction:column; }
@@ -1833,11 +1812,6 @@ button.tag { cursor: pointer; font: inherit; }
   .custom-ingredient-actions .button { width:100%; }
   .custom-ingredient-controls { align-items:start;display:grid;grid-template-columns:1fr 1fr; }
   .custom-ingredient-controls .check-label:last-child { grid-column:1/-1; }
-  .custom-nutrition-summary { padding:15px;position:static; }
-  @media (min-height:600px) {
-    .custom-nutrition-summary-mobile { position:sticky;top:68px;z-index:5; }
-    .custom-nutrition-summary-mobile .custom-nutrition-summary { box-shadow:0 8px 24px color-mix(in srgb,var(--text) 8%,transparent); }
-  }
   .nutrition-lookup-backdrop { align-items:stretch;padding:0; }
   .nutrition-lookup-dialog { border-radius:0;max-height:none;max-width:none;min-height:100dvh;padding:22px 16px calc(22px + env(safe-area-inset-bottom)); }
   .nutrition-lookup-dialog .modal-close { right:13px;top:14px; }
@@ -1851,8 +1825,6 @@ button.tag { cursor: pointer; font: inherit; }
   .custom-ingredient-controls { grid-template-columns:1fr; }
   .custom-ingredient-controls .check-label:last-child { grid-column:auto; }
   .custom-ingredient-actions { grid-template-columns:1fr; }
-  .custom-nutrition-grid { grid-template-columns:1fr; }
-  .custom-nutrition-grid>div { align-items:center;display:flex;justify-content:space-between;gap:10px; }
   .nutrition-equivalence-fields { grid-template-columns:1fr; }
   .nutrition-lookup-actions { display:grid;grid-template-columns:1fr; }
   .nutrition-lookup-actions .button { width:100%; }

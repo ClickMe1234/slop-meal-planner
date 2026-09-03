@@ -1,10 +1,11 @@
-import { ArrowLeft, Barcode, Check, Package, Plus, Search, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Barcode, Check, Package, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarcodeScanner } from '../components/BarcodeScanner'
 import { FoodSearchSources, type FoodSearchSourceSelection } from '../components/FoodSearchSources'
 import { MealTypePicker, normaliseRecipeMealTypes, type RecipeMealType } from '../components/MealTypePicker'
+import { NutritionStrip } from '../components/Nutrition'
 import { UsdaKeyGuidance } from '../components/UsdaKeyGuidance'
 import { Badge, Button, Card, Loading, Notice, PageHeader } from '../components/ui'
 import {
@@ -17,7 +18,6 @@ import {
   type BackendFood,
   type BackendFoodLookup,
   type BackendRecipeDetail,
-  type BackendRecipeNutrition,
   type BackendRecipeNutritionConversionOption,
   type BackendRecipeNutritionPreview,
   type BackendRecipeNutritionPreviewIngredientResult,
@@ -26,6 +26,7 @@ import {
   type NutrientCode,
 } from '../api/client'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
+import type { Nutrition } from '../types'
 
 const INGREDIENT_UNITS = ['g', 'kg', 'mg', 'ml', 'l', 'tsp', 'tbsp', 'cup', 'clove', 'small', 'medium', 'large', 'item', 'slice', 'bunch', 'handful', 'can', 'tin', 'jar', 'packet', 'pack', 'bottle', 'sprig', 'stalk', 'head', 'fillet', 'piece', 'pinch', 'dash', 'splash']
 
@@ -83,21 +84,8 @@ function displayNumber(value: ApiDecimal | null | undefined, maximumFractionDigi
     : number.toLocaleString(undefined, { maximumFractionDigits })
 }
 
-function displayNutrient(value: ApiDecimal | null | undefined, unit: string) {
-  const number = Number(value)
-  return value == null || !Number.isFinite(number) ? '—' : `${displayNumber(number)} ${unit}`
-}
-
 function compactNutrition(values: Partial<Record<NutrientCode, ApiDecimal | null>>) {
   return `Kc: ${displayNumber(values.energy_kcal)}, C: ${displayNumber(values.carbohydrate_g)}, F: ${displayNumber(values.fat_g)}, P: ${displayNumber(values.protein_g)}`
-}
-
-function nutritionComplete(values: BackendRecipeNutrition | undefined | null) {
-  return Boolean(values
-    && values.energy_kcal != null
-    && values.protein_g != null
-    && values.carbohydrate_g != null
-    && values.fat_g != null)
 }
 
 function servingConstraintError(minimumServings: string, servingIncrement: string) {
@@ -579,60 +567,30 @@ function NutritionSummary({
   preview,
   isLoading,
   isFetching,
-  previewError,
-  saveError,
-  previousNutrition,
-  previousYield,
-  saving,
-  savedMessage,
-  onReload,
 }: {
   preview?: BackendRecipeNutritionPreview
   isLoading: boolean
   isFetching: boolean
-  previewError: string
-  saveError: string
-  previousNutrition?: BackendRecipeNutrition
-  previousYield?: number
-  saving: boolean
-  savedMessage: string
-  onReload?: () => void
 }) {
   const complete = Boolean(preview?.complete)
-  const batch = preview?.batch_values
   const perServing = preview?.per_serving_values
-  const previousPerServing = Number(previousNutrition?.energy_kcal)
-  const currentPerServing = Number(perServing?.energy_kcal)
-  const calorieDelta = Number.isFinite(previousPerServing) && Number.isFinite(currentPerServing)
-    ? currentPerServing - previousPerServing
+  const nutrition: Nutrition | undefined = complete && perServing
+    ? {
+        calories: Number(perServing.energy_kcal),
+        protein: Number(perServing.protein_g),
+        carbs: Number(perServing.carbohydrate_g),
+        fat: Number(perServing.fat_g),
+        basis: 'per_serving',
+      }
     : undefined
-  const issues = preview?.issues ?? []
-  return <Card className="review-summary custom-nutrition-summary" aria-live="polite">
-    <div className="custom-nutrition-summary-heading"><div><span className="eyebrow">Live nutrition</span><h2>{complete ? 'Complete nutrition' : 'Known so far'}</h2></div>{complete ? <Badge tone="green">Ready for planning</Badge> : <Badge tone="warning">Draft</Badge>}</div>
-    {isLoading && <Loading label="Calculating ingredient nutrition…" />}
-    {isFetching && !isLoading && <small className="custom-preview-stale">Updating nutrition… previous values are shown while we check.</small>}
-    {!preview && !isLoading && !previewError && <p>Add ingredients and match a food record to see a live nutrition preview.</p>}
-    {preview && <>
-      <div className="custom-nutrition-grid">
-        <div><span>Batch calories</span><strong>{displayNutrient(batch?.energy_kcal, 'kcal')}</strong></div>
-        <div><span>Yield division</span><strong>{preview.yield_servings == null ? '—' : `${displayNumber(preview.yield_servings)} servings`}</strong></div>
-        <div><span>Per serving</span><strong>{displayNutrient(perServing?.energy_kcal, 'kcal')}</strong></div>
-      </div>
-      <dl className="custom-macro-summary">
-        <div><dt>Protein</dt><dd>{displayNutrient(perServing?.protein_g, 'g')}</dd></div>
-        <div><dt>Carbohydrates</dt><dd>{displayNutrient(perServing?.carbohydrate_g, 'g')}</dd></div>
-        <div><dt>Fat</dt><dd>{displayNutrient(perServing?.fat_g, 'g')}</dd></div>
-      </dl>
-      {previousYield && nutritionComplete(previousNutrition) && <small className="custom-nutrition-baseline">Previous complete version: {displayNumber(Number(previousNutrition?.energy_kcal) * previousYield)} kcal in batch.</small>}
-      {calorieDelta != null && <small className={`custom-nutrition-delta ${calorieDelta === 0 ? '' : calorieDelta > 0 ? 'positive' : 'negative'}`}>{calorieDelta === 0 ? 'No calorie change from the saved version.' : `${calorieDelta > 0 ? '+' : ''}${displayNumber(calorieDelta)} kcal per serving from the saved version.`}</small>}
-      {!complete && issues.length > 0 && <div className="custom-preview-issues"><strong>Still needed</strong><ul>{issues.map((issue, index) => <li key={`${issue.client_id ?? 'recipe'}-${issue.code}-${index}`}>{issue.message}</li>)}</ul></div>}
-    </>}
-    {previewError && <Notice tone="warning" title="Could not update nutrition">{previewError}</Notice>}
-    {saveError && <Notice tone="warning" title="Could not save recipe">{saveError}</Notice>}
-    {savedMessage && <Notice tone="success" title="Recipe saved">{savedMessage}</Notice>}
-    {onReload && saveError && <Button type="button" variant="secondary" onClick={onReload}>Reload editor</Button>}
-    {saving && <Loading label="Saving recipe…" />}
-  </Card>
+  const firstIssue = preview?.issues[0]?.message
+  return <section className="custom-nutrition-summary" aria-live="polite">
+    {isLoading ? <Loading label="Calculating ingredient nutrition…" /> : nutrition ? <div className="nutrition-panel nutrition-panel--calculated">
+      <div className="panel-label"><span><Sparkles size={14} aria-hidden="true" />Nutrition calculated from ingredients · per serving</span><Badge tone="green">Ready for planning</Badge></div>
+      <NutritionStrip nutrition={nutrition} compact />
+    </div> : <div className="nutrition-missing"><div><strong>Nutrition needs ingredient matches</strong><span>{firstIssue ?? 'Add ingredients, match their food records, and set servings to calculate nutrition.'}</span></div></div>}
+    {isFetching && !isLoading && <small className="custom-preview-stale">Updating nutrition…</small>}
+  </section>
 }
 
 function ingredientPayload(row: EditableCustomIngredient): BackendCustomRecipeUpdate['ingredients'][number] {
@@ -852,7 +810,11 @@ export function CustomRecipePage({ recipe: suppliedRecipe }: { recipe?: BackendR
             ? <Notice tone="info" title="Cooking method stays with its version"><Link to={`/recipes/${recipe?.id}/method`}>Edit the cooking method on its dedicated page.</Link></Notice>
             : <label>Your instructions <span className="optional-label">Optional</span><textarea value={instructions} onChange={(event) => { setInstructions(event.target.value); setSavedMessage('') }} rows={7} /></label>}
         </Card>
-        <div className="custom-nutrition-summary-mobile"><NutritionSummary preview={nutritionPreview.data} isLoading={nutritionPreview.isLoading} isFetching={nutritionPreview.isFetching} previewError={previewError} saveError={error} previousNutrition={recipe?.calculated_nutrition} previousYield={recipe?.yield_servings} saving={saving} savedMessage={savedMessage} onReload={recipe ? reloadEditor : undefined} /></div>
+        <NutritionSummary preview={nutritionPreview.data} isLoading={nutritionPreview.isLoading} isFetching={nutritionPreview.isFetching} />
+        {previewError && <Notice tone="warning" title="Could not update nutrition">{previewError}</Notice>}
+        {error && <Notice tone="warning" title="Could not save recipe">{error}</Notice>}
+        {savedMessage && <Notice tone="success" title="Recipe saved">{savedMessage}</Notice>}
+        {error && recipe && <Button type="button" variant="secondary" onClick={reloadEditor}>Reload editor</Button>}
         <div className="custom-ingredient-list-header"><div><p className="eyebrow">Ingredients</p><h2>Recipe quantities and nutrition</h2><span>{resolvedRows} of {validRows.length} ingredients matched</span></div><Button type="button" variant="secondary" onClick={() => setRows((current) => [...current, emptyIngredient()])}><Plus aria-hidden="true" />Add ingredient</Button></div>
         <div className="ingredient-review-list custom-ingredient-review-list">
           {rows.map((row, index) => {
@@ -897,7 +859,7 @@ export function CustomRecipePage({ recipe: suppliedRecipe }: { recipe?: BackendR
         <Button type="button" variant="secondary" className="custom-add-ingredient-bottom" onClick={() => setRows((current) => [...current, emptyIngredient()])}><Plus aria-hidden="true" />Add ingredient</Button>
       </section>
       </fieldset>
-      <aside className="custom-recipe-aside"><NutritionSummary preview={nutritionPreview.data} isLoading={nutritionPreview.isLoading} isFetching={nutritionPreview.isFetching} previewError={previewError} saveError={error} previousNutrition={recipe?.calculated_nutrition} previousYield={recipe?.yield_servings} saving={saving} savedMessage={savedMessage} onReload={recipe ? reloadEditor : undefined} /><Button type="submit" disabled={saving || isDemoMode}>{saveLabel}</Button>{savedRecipe && <Link to={`/recipes/${savedRecipe.id}/method`} className="button button--secondary custom-method-after-save">Edit cooking method</Link>}{savedMessage && <Button type="button" variant="ghost" onClick={() => navigate('/recipes')}>Back to recipes</Button>}</aside>
+      <aside className="custom-recipe-aside"><Button type="submit" disabled={saving || isDemoMode}>{saveLabel}</Button>{savedRecipe && <Link to={`/recipes/${savedRecipe.id}/method`} className="button button--secondary custom-method-after-save">Edit cooking method</Link>}{savedMessage && <Button type="button" variant="ghost" onClick={() => navigate('/recipes')}>Back to recipes</Button>}</aside>
       <div className="custom-mobile-save"><Button type="submit" disabled={saving || isDemoMode}>{saveLabel}</Button></div>
     </form>
     {activeRow && <NutritionLookupDialog
