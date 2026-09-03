@@ -187,6 +187,61 @@ def test_custom_method_wording_is_persisted_on_the_recipe_version(client, owner)
     assert reloaded["source_blocks"][0]["text"] == updated_text
 
 
+def test_recipe_editor_api_rejects_custom_instruction_changes_when_method_snapshot_exists(
+    client, owner, session_factory
+):
+    recipe = _custom_recipe(client, owner, "Fry the zucchini until tender.")
+    ingredient = recipe["ingredients"][0]
+    editor_payload = {
+        "expected_version": recipe["version"],
+        "title": recipe["title"],
+        "yield_servings": recipe["yield_servings"],
+        "meal_types": recipe["meal_types"],
+        "custom_instructions": "Bake the zucchini instead.",
+        "ingredients": [{
+            "lineage_id": ingredient["lineage_id"],
+            "original_text": ingredient["original_text"],
+            "quantity": ingredient["quantity"],
+            "unit": ingredient["unit"],
+            "food_phrase": ingredient["food_phrase"],
+            "included": ingredient["included"],
+        }],
+    }
+
+    editor_update = client.put(
+        f"/api/v1/recipes/{recipe['id']}",
+        headers=_headers(owner),
+        json=editor_payload,
+    )
+    assert editor_update.status_code == 409
+    assert editor_update.json()["code"] == "METHOD_EDITOR_REQUIRED"
+
+    review_update = client.put(
+        f"/api/v1/recipes/{recipe['id']}/review",
+        headers=_headers(owner),
+        json=editor_payload,
+    )
+    assert review_update.status_code == 409
+    assert review_update.json()["code"] == "METHOD_EDITOR_REQUIRED"
+
+    with session_factory() as db:
+        from app.models import RecipeMethodSnapshot, RecipeVersion
+
+        versions = db.scalars(
+            select(RecipeVersion)
+            .where(RecipeVersion.recipe_id == recipe["id"])
+            .order_by(RecipeVersion.version_number)
+        ).all()
+        assert len(versions) == 1
+        snapshot = db.scalar(
+            select(RecipeMethodSnapshot).where(
+                RecipeMethodSnapshot.recipe_version_id == versions[0].id
+            )
+        )
+        assert snapshot is not None
+        assert snapshot.source_text == "Fry the zucchini until tender."
+
+
 def test_custom_method_without_a_snapshot_is_repaired_from_submitted_instructions(
     client, owner, session_factory
 ):

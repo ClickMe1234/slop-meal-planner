@@ -57,6 +57,7 @@ from ..services.planner import (
     rebalance_plan_portions,
 )
 from ..services.regional_ingredients import equivalent_terms
+from ..services.recipe_versions import latest_planning_recipe_version
 from ..services.shopping import build_shopping_list
 
 router = APIRouter(prefix="/meal-plans", tags=["meal planning"])
@@ -105,11 +106,7 @@ def _candidate(db: Session, recipe: Recipe, meal_type: str) -> RecipeCandidate |
     )
     if tagged is None:
         return None
-    version = db.scalar(
-        select(RecipeVersion)
-        .where(RecipeVersion.recipe_id == recipe.id)
-        .order_by(RecipeVersion.version_number.desc())
-    )
+    version = latest_planning_recipe_version(db, recipe)
     return _candidate_from_version(db, recipe, version)
 
 
@@ -128,11 +125,7 @@ def _side_candidate(
     )
     if tagged is None:
         return None
-    version = db.scalar(
-        select(RecipeVersion)
-        .where(RecipeVersion.recipe_id == recipe.id)
-        .order_by(RecipeVersion.version_number.desc())
-    )
+    version = latest_planning_recipe_version(db, recipe)
     return _candidate_from_version(db, recipe, version)
 
 
@@ -283,6 +276,7 @@ def _validate_mutable_plan_constraints(
         if batch.id == replacement_batch_id and replacement_candidate is not None:
             candidate = replacement_candidate
             recipe = db.get(Recipe, candidate.recipe_id)
+            version = db.get(RecipeVersion, candidate.recipe_version_id)
         else:
             version = db.get(RecipeVersion, batch.recipe_version_id)
             recipe = db.get(Recipe, version.recipe_id) if version is not None else None
@@ -291,13 +285,14 @@ def _validate_mutable_plan_constraints(
                 if recipe is not None
                 else None
             )
+        snapshot_title = version.title if version is not None else (recipe.title if recipe is not None else "Recipe")
         if recipe is None or candidate is None:
             actions = []
             if recipe is not None:
                 actions.append(
                     {
                         "kind": "review_recipe",
-                        "label": f"Review {recipe.title}",
+                        "label": f"Review {snapshot_title}",
                         "href": f"/recipes/{recipe.id}/review",
                         "suggestion": (
                             "Confirm the recipe yield and complete nutrition, then return to the plan."
@@ -336,11 +331,11 @@ def _validate_mutable_plan_constraints(
                 tag_description = " or ".join(required_tags)
                 raise DomainError(
                     "RECIPE_MEAL_TYPE_REVIEW_REQUIRED",
-                    f"{recipe.title} is no longer tagged for {tag_description}",
+                    f"{snapshot_title} is no longer tagged for {tag_description}",
                     actions=[
                         {
                             "kind": "review_recipe",
-                            "label": f"Update tags for {recipe.title}",
+                            "label": f"Update tags for {snapshot_title}",
                             "href": f"/recipes/{recipe.id}/review",
                             "suggestion": (
                                 f"Add a {tag_description} tag, then return and accept the plan again."
@@ -358,7 +353,7 @@ def _validate_mutable_plan_constraints(
             occurrence = occurrences[0]
             raise DomainError(
                 "PLAN_EXCLUDED_INGREDIENT",
-                f"{recipe.title} now contains an ingredient excluded from this plan",
+                f"{snapshot_title} now contains an ingredient excluded from this plan",
                 actions=[
                     {
                         "kind": "replace_recipe",
@@ -394,7 +389,7 @@ def _validate_mutable_plan_constraints(
             occurrence = occurrences[0]
             raise DomainError(
                 "RECIPE_RESTRICTED",
-                f"{recipe.title} conflicts with a participating member's hard restriction",
+                f"{snapshot_title} conflicts with a participating member's hard restriction",
                 actions=[
                     {
                         "kind": "replace_recipe",
@@ -1222,11 +1217,7 @@ def generate_plan(
     db.flush()
     base_candidates: dict[str, RecipeCandidate] = {}
     for recipe in recipes:
-        version = db.scalar(
-            select(RecipeVersion)
-            .where(RecipeVersion.recipe_id == recipe.id)
-            .order_by(RecipeVersion.version_number.desc())
-        )
+        version = latest_planning_recipe_version(db, recipe)
         candidate = _candidate_from_version(db, recipe, version)
         if candidate is not None:
             base_candidates[recipe.id] = candidate
@@ -1532,7 +1523,7 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
                 "component_slot": occurrence.component_slot,
                 "guest_servings": occurrence.guest_servings,
                 "recipe_id": recipe.id,
-                "recipe_title": recipe.title,
+                "recipe_title": version.title,
                 "recipe_version": recipe.version,
                 "minimum_servings": version.minimum_servings,
                 "serving_increment": version.serving_increment,

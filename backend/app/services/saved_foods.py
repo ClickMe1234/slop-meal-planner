@@ -22,6 +22,7 @@ from ..models import (
 )
 from ..schemas import FoodNutrientIn, SavedFoodOut
 from .nutrition import REQUIRED_NUTRIENTS, calculate_recipe
+from .recipe_versions import latest_editor_recipe_version, next_recipe_version_number
 
 
 def accessible_food_record(db: Session, food_record_id: str, household_id: str) -> FoodRecord:
@@ -88,9 +89,11 @@ def saved_food_out(db: Session, saved: SavedFood) -> SavedFoodOut:
         meal_types=meal_types,
         package_amount=_metadata_decimal(metadata, "package_amount"),
         package_unit=metadata.get("package_unit"),
+        package_description=str(metadata.get("quantity") or "") or None,
         source_url=metadata.get("source_url"),
         image_url=metadata.get("image_url"),
         attribution=metadata.get("attribution"),
+        serving_description=str(metadata.get("serving_size") or "") or None,
         warnings=warnings,
         version=saved.version,
     )
@@ -169,11 +172,7 @@ def create_manual_record(
 
 
 def _latest_recipe_version(db: Session, recipe_id: str) -> RecipeVersion | None:
-    return db.scalar(
-        select(RecipeVersion)
-        .where(RecipeVersion.recipe_id == recipe_id)
-        .order_by(RecipeVersion.version_number.desc())
-    )
+    return latest_editor_recipe_version(db, recipe_id)
 
 
 def sync_planner_food(
@@ -222,7 +221,7 @@ def sync_planner_food(
         serving_increment = None
     else:
         latest = _latest_recipe_version(db, recipe.id)
-        version_number = (latest.version_number if latest else 0) + 1
+        version_number = next_recipe_version_number(db, recipe.id)
         minimum_servings = latest.minimum_servings if latest else None
         serving_increment = latest.serving_increment if latest else None
         recipe.title = saved.display_name
@@ -240,6 +239,7 @@ def sync_planner_food(
         yield_servings=Decimal("1"),
         minimum_servings=minimum_servings,
         serving_increment=serving_increment,
+        meal_types=sorted(set(meal_types)),
     )
     db.add(version)
     db.flush()

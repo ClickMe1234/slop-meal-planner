@@ -50,6 +50,7 @@ describe('saved recipe planning status', () => {
     })
     expect(mapped.nutritionSource).toBe('calculated')
     expect(mapped.state).toBe('ready')
+    expect(mapped.sourceType).toBe('custom')
     expect(recipeNutritionHeading(mapped, mapped.nutritionSourceName ?? '')).toBe('Nutrition calculated from ingredients')
   })
 })

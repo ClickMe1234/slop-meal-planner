@@ -150,11 +150,7 @@ def build_shopping_list(
                 if food is not None and food.density_g_per_ml is not None
                 else profile.density_g_per_ml if profile is not None else None
             )
-            if (
-                ingredient.shopping_measurement_overridden
-                and ingredient.quantity is not None
-                and ingredient.unit
-            ):
+            if ingredient.quantity is not None and ingredient.unit:
                 source_amount = Decimal(ingredient.quantity)
                 source_unit = canonical_quantity_unit(ingredient.unit)
             elif ingredient.quantity_grams is not None:

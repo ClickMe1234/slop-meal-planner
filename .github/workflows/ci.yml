@@ -71,7 +71,11 @@ jobs:
         run: python -m pytest
 
       - name: Audit backend production dependencies
-        run: python -m pip_audit -r requirements.lock
+        # NLTK has no patched release for PYSEC-2026-3740 yet. This service
+        # only uses ingredient parsing and SnowballStemmer; it does not expose
+        # the affected caller-controlled model import/export APIs. Remove this
+        # narrow exception as soon as NLTK publishes a fixed release.
+        run: python -m pip_audit -r requirements.lock --ignore-vuln PYSEC-2026-3740
 
   frontend:
     name: Frontend tests and build

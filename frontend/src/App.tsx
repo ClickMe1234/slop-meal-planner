@@ -5,7 +5,8 @@ import { useTheme } from './lib/theme'
 import { ChangePasswordPage, LoginPage, OnboardingPage, SetupPage } from './pages/AuthPages'
 import { api, isDemoMode } from './api/client'
 import { Loading } from './components/ui'
-import { CustomRecipePage, ImportReviewDrawer, ImportReviewPage, RecipeImportPage } from './pages/ImportPages'
+import { ImportReviewDrawer, ImportReviewPage, RecipeImportPage } from './pages/ImportPages'
+import { CustomRecipeEditPage, CustomRecipePage } from './pages/CustomRecipeEditor'
 import { PantryPage } from './pages/PantryPage'
 import { PlanPage } from './pages/PlanPage'
 import { PlanEditPage } from './pages/PlanEditPage'
@@ -38,6 +39,7 @@ export default function App() {
       <Route path="/recipes/method-preview" element={<MethodPreviewPage/>}/>
       <Route path="/ingredients" element={<IngredientsPage/>}/>
       <Route path="/recipes/new" element={<CustomRecipePage/>}/>
+      <Route path="/recipes/:recipeId/edit" element={<CustomRecipeEditPage/>}/>
       <Route path="/recipes/import" element={<RecipeImportPage/>}/>
       <Route path="/imports/:jobId/review" element={<ImportReviewPage/>}/>
       <Route path="/recipes/:recipeId/review" element={<ImportReviewPage/>}/>

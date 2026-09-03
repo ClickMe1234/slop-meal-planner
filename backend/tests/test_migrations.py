@@ -65,9 +65,25 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0024_recipe_serving_constraints (head)" in current.stdout
+    assert "0026_shopping_recipe_snapshots (head)" in current.stdout
     assert len("0017_quarantine_urls") <= 32
     assert "recipe_publisher_tag" in _tables(database)
+    assert "household_food_unit_conversion" in _tables(database)
+
+    with sqlite3.connect(database) as connection:
+        version_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(recipe_version)")
+        }
+        ingredient_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(recipe_ingredient)")
+        }
+        assert {"meal_types", "is_shopping_snapshot"} <= version_columns
+        assert {
+            "nutrition_input_unit",
+            "nutrition_basis_amount_per_unit",
+            "nutrition_basis_unit",
+            "nutrition_conversion_source",
+        } <= ingredient_columns
 
     # A full reverse and second replay catches migration ordering, hidden live
     # metadata dependencies, and SQLite-incompatible historical operations.
@@ -117,7 +133,10 @@ def test_downgrade_refuses_split_meal_groups_without_mutating_data(tmp_path):
         )
         connection.commit()
 
-    result = _run_alembic(database, "downgrade", "-2")
+    # The live-unit and shopping-snapshot migrations sit above the
+    # serving-constraints migration, so step through all three before
+    # exercising the guarded 0023 downgrade.
+    result = _run_alembic(database, "downgrade", "-4")
 
     assert result.returncode != 0
     assert "Cannot downgrade 0023_member_meal_groups" in result.stderr

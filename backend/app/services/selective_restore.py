@@ -37,6 +37,7 @@ from ..models import (
     FoodNutrient,
     FoodRecord,
     Household,
+    HouseholdFoodUnitConversion,
     HouseholdMealGroupAssignment,
     HouseholdMember,
     IngredientNameEquivalent,
@@ -93,7 +94,7 @@ COMPONENT_INFO: dict[str, dict[str, str]] = {
     },
     "ingredients": {
         "label": "Ingredients & nutrition",
-        "description": "Saved foods, nutrition records and household ingredient aliases.",
+        "description": "Saved foods, nutrition records, ingredient aliases and confirmed unit mappings.",
     },
     "pantry": {
         "label": "Pantry",
@@ -129,6 +130,7 @@ MODEL_BY_TABLE = {
         RecipeMethodSnapshot,
         FoodRecord,
         FoodNutrient,
+        HouseholdFoodUnitConversion,
         SavedFood,
         FoodAlias,
         NutritionCalculation,
@@ -445,6 +447,11 @@ def _load_source_bundle(db: Session, source_household_id: str | None) -> SourceB
         "nutrition_calculation": [],
         "food_record": [],
         "food_nutrient": [],
+        "household_food_unit_conversion": _rows(
+            db,
+            HouseholdFoodUnitConversion,
+            HouseholdFoodUnitConversion.household_id == household_id,
+        ),
         "saved_food": _rows(db, SavedFood, SavedFood.household_id == household_id),
         "food_alias": _rows(db, FoodAlias, FoodAlias.household_id == household_id),
         "meal_plan": _rows(db, MealPlan, MealPlan.household_id == household_id),
@@ -487,7 +494,13 @@ def _load_source_bundle(db: Session, source_household_id: str | None) -> SourceB
     tables["shopping_item"] = _rows(db, ShoppingItem, ShoppingItem.shopping_list_id.in_(shopping_ids)) if shopping_ids else []
 
     food_ids: set[str] = set()
-    for table in ("recipe_ingredient", "saved_food", "pantry_lot", "shopping_item"):
+    for table in (
+        "recipe_ingredient",
+        "household_food_unit_conversion",
+        "saved_food",
+        "pantry_lot",
+        "shopping_item",
+    ):
         food_ids.update(row["food_record_id"] for row in tables[table] if row.get("food_record_id"))
     source_owned = db.scalars(
         select(FoodRecord).where(
@@ -534,6 +547,7 @@ def _counts(bundle: SourceBundle) -> dict[str, dict[str, int]]:
             "food_records": len(tables["food_record"]),
             "saved_foods": len(tables["saved_food"]),
             "aliases": len(tables["food_alias"]),
+            "unit_conversions": len(tables["household_food_unit_conversion"]),
         },
         "pantry": {"items": len(tables["pantry_lot"]), "movements": len(tables["pantry_transaction"])},
         "shopping": {"lists": len(tables["shopping_list"]), "items": len(tables["shopping_item"])},
@@ -589,7 +603,7 @@ def _component_tables(components: set[str], tables: dict[str, list[dict[str, Any
     if "recipes" in components:
         include.update({"recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "recipe_method_snapshot", "nutrition_calculation", "food_record", "food_nutrient"})
     if "ingredients" in components:
-        include.update({"food_record", "food_nutrient", "saved_food", "food_alias", "ingredient_name_override", "ingredient_name_equivalent"})
+        include.update({"food_record", "food_nutrient", "household_food_unit_conversion", "saved_food", "food_alias", "ingredient_name_override", "ingredient_name_equivalent"})
     if "pantry" in components:
         include.update({"pantry_lot", "pantry_transaction", "food_record", "food_nutrient"})
     if "shopping" in components:
@@ -610,7 +624,7 @@ def _as_target_value(value: Any) -> Any:
 NUMERIC_COLUMNS = {
     "tolerance_percent", "calorie_target", "protein_target_g", "carbohydrate_target_g", "fat_target_g",
     "protein_min_g", "protein_max_g", "carbohydrate_min_g", "carbohydrate_max_g", "fat_min_g", "fat_max_g",
-    "percentage", "yield_servings", "quantity", "quantity_grams", "name_confidence", "basis_amount",
+    "percentage", "yield_servings", "quantity", "quantity_grams", "nutrition_basis_amount_per_unit", "name_confidence", "basis_amount",
     "density_g_per_ml", "serving_amount", "amount", "servings", "cooked_weight_grams", "guest_servings",
     "exact_quantity", "purchase_quantity", "initial_quantity", "quantity_delta",
 }
@@ -785,6 +799,7 @@ def restore_archive(
                 "ingredient_name_override",
                 "food_record",
                 "food_nutrient",
+                "household_food_unit_conversion",
                 "recipe",
                 "recipe_meal_type",
                 "recipe_publisher_tag",
