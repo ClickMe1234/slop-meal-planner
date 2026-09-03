@@ -81,6 +81,7 @@ from ..services.recipe_methods import clone_method_snapshot, snapshot_values
 from ..services.recipe_versions import (
     latest_complete_custom_recipe_version,
     latest_editor_recipe_version,
+    latest_planning_recipe_version,
     next_recipe_version_number,
 )
 from ..services.saved_foods import accessible_food_record
@@ -574,6 +575,16 @@ def list_recipes(
         raise DomainError("TOO_MANY_RECIPE_CATEGORIES", str(exc), 422) from exc
     except KeyError as exc:
         raise DomainError("UNKNOWN_RECIPE_CATEGORY", f"Unknown recipe category: {exc.args[0]}", 422) from exc
+    editor_title = (
+        select(RecipeVersion.title)
+        .where(
+            RecipeVersion.recipe_id == Recipe.id,
+            RecipeVersion.is_shopping_snapshot.is_(False),
+        )
+        .order_by(RecipeVersion.version_number.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
     conditions = [Recipe.household_id == context.user.household_id, Recipe.archived_at.is_(None)]
     if not include_food:
         conditions.append(Recipe.source_type != "food")
@@ -597,7 +608,7 @@ def list_recipes(
         )
         conditions.append(
             or_(
-                *(func.lower(Recipe.title).contains(term) for term in search_terms),
+                *(func.lower(editor_title).contains(term) for term in search_terms),
                 ingredient_match,
                 exists(
                     select(RecipePublisherTag.id).where(
@@ -641,7 +652,7 @@ def list_recipes(
     recipes = db.scalars(
         select(Recipe)
         .where(*conditions)
-        .order_by(Recipe.title)
+        .order_by(editor_title)
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
@@ -1101,6 +1112,7 @@ def save_custom_recipe(
     db.add(next_version)
     db.flush()
     ingredient_values: list[dict] = []
+    used_lineages: set[str] = set()
     for position, item in enumerate(payload.ingredients):
         values = _ingredient_values(
             db,
@@ -1110,7 +1122,11 @@ def save_custom_recipe(
             source_type="custom",
         )
         if "lineage_id" not in values and position < len(previous.ingredients):
-            values["lineage_id"] = previous.ingredients[position].lineage_id
+            candidate = previous.ingredients[position].lineage_id
+            if candidate not in used_lineages:
+                values["lineage_id"] = candidate
+        if values.get("lineage_id"):
+            used_lineages.add(values["lineage_id"])
         ingredient_values.append(values)
     new_ingredients: list[RecipeIngredient] = []
     for position, values in enumerate(ingredient_values):
@@ -1196,7 +1212,7 @@ def save_recipe_serving_constraints(
             "This recipe changed while you were editing its serving limits. Reload before saving.",
             409,
         )
-    previous = _latest_version(db, recipe.id)
+    previous = latest_planning_recipe_version(db, recipe)
     if previous is None:
         raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
 
