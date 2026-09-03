@@ -20,9 +20,14 @@ def test_release_metadata_uses_the_version_file_as_its_single_source_of_truth():
     assert project["project"]["version"] == version
 
     expected_image = f"ghcr.io/clickme1234/slop-meal-planner:{version}"
-    assert expected_image in (ROOT / "deploy" / "unraid-template.xml").read_text(encoding="utf-8")
-    assert expected_image in (ROOT / "deploy" / "README.md").read_text(encoding="utf-8")
-    assert f"Current release: **{version}**" in (ROOT / "README.md").read_text(encoding="utf-8")
+    unraid_template = (ROOT / "deploy" / "unraid-template.xml").read_text(encoding="utf-8")
+    deployment_readme = (ROOT / "deploy" / "README.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert f"<Repository>{expected_image}</Repository>" in unraid_template
+    assert f"| Repository | `{expected_image}` |" in deployment_readme
+    assert f"`{expected_image}` is public" in deployment_readme
+    assert f"`{expected_image}` as Repository" in readme
+    assert f"Current release: **{version}**" in readme
     assert f"## {version} - " in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
     for path in (ROOT / "backend" / "app" / "main.py", ROOT / "backend" / "app" / "config.py", ROOT / "backend" / "app" / "services" / "food_search.py"):
