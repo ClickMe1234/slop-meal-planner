@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -80,7 +80,7 @@ describe('CustomRecipePage', () => {
     expect(document.querySelectorAll('.custom-nutrition-summary')).toHaveLength(1)
   })
 
-  it('confirms a package conversion, shows the formula, and preserves cans in the save payload', async () => {
+  it('confirms a package conversion, shows the resolved product and selected-amount calories, and preserves cans in the save payload', async () => {
     const user = userEvent.setup()
     const preview = vi.spyOn(api, 'previewRecipeNutrition').mockImplementation(async (request) => previewFor(request))
     vi.spyOn(api, 'searchFoods').mockResolvedValue({ items: [], total: 0 })
@@ -106,7 +106,12 @@ describe('CustomRecipePage', () => {
     expect(screen.getByRole('spinbutton', { name: 'Equivalent amount for one can' })).toHaveValue(400)
     await user.click(screen.getByRole('button', { name: 'Confirm equivalent' }))
 
-    expect(await screen.findByText(/2 cans × 400 g\/can/i)).toBeInTheDocument()
+    expect(await screen.findByText('Tinned Co Chickpeas in water')).toBeInTheDocument()
+    const ingredientRow = screen.getByLabelText('Ingredient as written 1').closest<HTMLElement>('.custom-ingredient-row')
+    if (!ingredientRow) throw new Error('Expected the chickpea ingredient row')
+    await waitFor(() => expect(within(ingredientRow).getByText('672 kcal')).toBeInTheDocument())
+    expect(within(ingredientRow).queryByText(/2 cans × 400 g\/can/i)).not.toBeInTheDocument()
+    expect(within(ingredientRow).queryByText(/kcal\/serving/i)).not.toBeInTheDocument()
     expect(await screen.findByText('Nutrition calculated from ingredients · per serving')).toBeInTheDocument()
     expect(screen.getAllByText('Nutrition calculated from ingredients · per serving')).toHaveLength(1)
     await user.click(screen.getAllByRole('button', { name: 'Save recipe' })[0])
@@ -119,6 +124,7 @@ describe('CustomRecipePage', () => {
         quantity: 2,
         unit: 'can',
         food_record_id: 'saved-chickpeas',
+        food_phrase: 'Tinned Co Chickpeas in water',
         nutrition_input_unit: 'can',
         nutrition_basis_amount_per_unit: 400,
         nutrition_basis_unit: 'g',
