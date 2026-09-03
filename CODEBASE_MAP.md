@@ -2,7 +2,7 @@
 
 This is the orientation guide for developers and agents working in Slop Meal
 Planner. It describes the repository as inspected on 15 August 2026, at
-release 1.3.2. The source files and tests are authoritative when this guide
+release 1.4.0. The source files and tests are authoritative when this guide
 and an implementation disagree; update this document when a structural
 change makes it misleading.
 
@@ -87,7 +87,10 @@ read [Database and migrations](#database-and-migrations) first.
 
 ### Recipes and discovery
 
-- Custom recipes can be authored directly.
+- Custom recipes use a draft-friendly live editor for both creation and later
+  editing. Recipe-facing quantity/unit remains authoritative for shopping and
+  pantry, while an explicitly confirmed, versioned nutrition mapping resolves
+  package or count units against a matched food label.
 - Recipes can be imported from a URL, with a persisted job and a review step.
 - Supported live discovery sources are Good Food and Allrecipes. Search can
   filter by source and publisher category, rank by relevance and rating
@@ -108,6 +111,10 @@ read [Database and migrations](#database-and-migrations) first.
   missing quantities are surfaced for review.
 - Review lets a user confirm yield, meal tags, shopping-list names, included
   or optional ingredients, food matches, shopping exclusions, and quantities.
+- The custom editor gets a side-effect-free nutrition preview from locally
+  persisted food data. Missing matches or package/count conversions keep a
+  revision a draft; only complete custom revisions synchronize ready/accepted
+  plans and shopping state.
 - Import review also exposes editable per-serving nutrition (with publisher
   values pre-filled when available); a complete set is persisted with the
   recipe version for planning, and an explicit source refresh can restore the
@@ -154,6 +161,10 @@ read [Database and migrations](#database-and-migrations) first.
   corrections without changing the community source record.
 - Saved foods can be enabled as planner choices, assigned meal tags, and given
   confirmed serving information.
+- Package and label-serving descriptions are retained locally for explicit
+  confirmation. Household product-and-unit conversion memories are append-only
+  suggestions, never silently applied metadata; each recipe version retains an
+  independent immutable mapping snapshot.
 - Nutrition provenance, provider record IDs, dataset versions, assumptions,
   and ingredient contributions are persisted.
 - Publisher-reported complete per-serving nutrition is authoritative for URL
@@ -357,7 +368,7 @@ owner-only uses require_owner.
 | --- | --- | --- |
 | [auth_routes.py](backend/app/routes/auth_routes.py) | GET /auth/setup-status; POST /auth/setup, /auth/login, /auth/logout, /auth/change-password; GET/PATCH /auth/me; GET /auth/csrf; GET/POST /auth/users; DELETE /auth/users/{user_id} | Setup, sessions, preferences, password changes, and collaborator accounts. |
 | [household_routes.py](backend/app/routes/household_routes.py) | GET /households/current; GET/PUT /households/current/meal-group-defaults; GET/POST /household-members; PATCH /household-members/{member_id}; GET /household-members/targets; GET/PUT /household-members/{member_id}/target; GET/POST/DELETE /household-members/{member_id}/restrictions... | Household metadata, member profiles, meal-group defaults, targets, allocations, and restrictions. |
-| [recipe_routes.py](backend/app/routes/recipe_routes.py) | GET /recipes, /recipes/{recipe_id}, /recipe-ingredients, /foods, /jobs/{job_id}; POST /recipes, /recipes/{recipe_id}/calculate, /recipe-imports, /foods; PUT /recipes/{recipe_id}/review; DELETE /recipes/{recipe_id} | Recipe collection, review, versioned imports, calculation, jobs, general food search, and owner-only food records. |
+| [recipe_routes.py](backend/app/routes/recipe_routes.py) | GET /recipes, /recipes/{recipe_id}, /recipe-ingredients, /foods, /jobs/{job_id}; POST /recipes, /recipes/nutrition-preview, /recipes/{recipe_id}/calculate, /recipe-imports, /foods; PUT /recipes/{recipe_id}, /recipes/{recipe_id}/review; DELETE /recipes/{recipe_id} | Recipe collection, side-effect-free custom nutrition previews and draft saves, publisher-import review, versioned calculations, jobs, general food search, and owner-only food records. |
 | [discovery_routes.py](backend/app/routes/discovery_routes.py) | GET /recipe-discovery, /recipe-discovery/categories, /recipe-discovery/nutrition-preview, /recipe-discovery/image | Supported publisher search, category catalogue, cached nutrition preview, and authenticated image proxy. |
 | [recipe_method_routes.py](backend/app/routes/recipe_method_routes.py) | POST/GET /recipe-discovery/method-previews and POST .../{preview_token}/save; GET/POST/PUT /recipes/{recipe_id}/method...; POST method/extract, method/refresh-preview, method/refresh | Explicit method extraction, ephemeral preview tokens, method snapshots, editing, review, scaling, and refresh. |
 | [food_routes.py](backend/app/routes/food_routes.py) | GET /food-lookups/barcode/{barcode}, /saved-foods; POST /food-lookups/search, /saved-foods; PATCH/DELETE /saved-foods/{saved_food_id} | Open Food Facts lookup, packaged-food search, and household saved-food library. |
@@ -395,8 +406,8 @@ updated_at, and version for optimistic concurrency.
 | --- | --- | --- |
 | Identity | Household, User, UserSession, IntegrationCredential | Users and encrypted provider credentials belong to a household; sessions belong to users. |
 | Names and household rules | IngredientNameEquivalent, IngredientNameOverride, HouseholdMember, HouseholdMealGroupAssignment, TargetProfile, MealAllocation, Restriction | Members carry targets/rules; name overrides are household-wide; meal groups map members to a meal type. |
-| Recipes | Recipe, RecipeMealType, RecipePublisherTag, RecipeVersion, RecipeIngredient, RecipeMethodSnapshot | Recipe is the current library identity; versions preserve ingredient/method snapshots; tags determine planner use. |
-| Food and nutrition | FoodRecord, FoodNutrient, SavedFood, FoodAlias, NutritionCalculation | Food records retain provider/dataset provenance; saved foods make them household choices; calculations record contributions and assumptions. |
+| Recipes | Recipe, RecipeMealType, RecipePublisherTag, RecipeVersion, RecipeIngredient, RecipeMethodSnapshot | Recipe is the current library identity; versions preserve title, tag, ingredient, and method snapshots, including confirmed nutrition-unit mappings. Recipe-level tags remain the last complete planner-safe choice while an incomplete custom draft is edited. |
+| Food and nutrition | FoodRecord, FoodNutrient, SavedFood, FoodAlias, HouseholdFoodUnitConversion, NutritionCalculation | Food records retain provider/dataset provenance; saved foods make them household choices; append-only household product/unit mappings are reusable suggestions; calculations record contributions and assumptions. |
 | Async work | Job | Import jobs belong to a household/user and carry status, stage, progress, result, and errors. |
 | Plans | MealPlan, MealBatch, MealOccurrence, PortionAllocation | A plan contains occurrences; occurrences reference batches; batches reference recipe versions; allocations map members to portions. |
 | Pantry | PantryLot, PantryTransaction, PantryReservation | Lot balance is initial quantity plus movements minus reservations; accepted plan batches reserve lots. |
@@ -423,7 +434,8 @@ response shaping. Reusable domain rules belong in services.
 | Service | Role |
 | --- | --- |
 | [planner.py](backend/app/services/planner.py) | Candidate selection, target bounds, quarter-serving choices, preference/variety scoring, infeasibility diagnostics, and fixed-plan portion rebalancing. |
-| [nutrition.py](backend/app/services/nutrition.py) | Publisher nutrition validation, ingredient-based calculations, per-serving values, contribution/provenance snapshots, and planner values. |
+| [nutrition.py](backend/app/services/nutrition.py) | Shared Decimal resolver for preview and persisted calculations, explicit package/serving/manual mapping options, publisher-nutrition validation, contribution/provenance snapshots, and planner values. |
+| [recipe_versions.py](backend/app/services/recipe_versions.py) | Chooses editable versus planner-safe complete custom revisions, and allocates version numbers around plan-only shopping snapshots. |
 | [ingredients.py](backend/app/services/ingredients.py) | NLP ingredient parsing, fractions, descriptive units, package arithmetic, preparation extraction, confidence, and review flags. |
 | [quantities.py](backend/app/services/quantities.py) | Canonical unit aliases, storage/display precision, countable-unit rounding, culinary fraction formatting, and purchase round-up. |
 | [measurement_conversion.py](backend/app/services/measurement_conversion.py) | Reviewed ingredient density profiles and safe mass/volume conversion. It never invents density for an unknown ingredient. |
@@ -456,12 +468,12 @@ This is intentionally deterministic and does not depend on a solver service.
 
 #### Nutrition authority
 
-planning_values prefers the latest persisted NutritionCalculation when complete,
-then falls back to complete publisher per-serving values. calculate_recipe uses
-publisher values for URL recipes when complete; URL recipes do not silently
-fall back to ingredient calculations. Custom recipes can be calculated from
-food records when amounts, units, and all four required nutrients are present:
-energy_kcal, protein_g, carbohydrate_g, and fat_g.
+For URL imports, planning_values and calculate_recipe use complete publisher
+per-serving values first and never fall back to ingredient calculations. Custom
+recipes use a complete persisted calculation snapshot. Their shared preview/
+calculation resolver requires an explicit mapping for count/package units but
+safely handles compatible mass/volume and reviewed-density conversions. All
+calculated recipes require energy_kcal, protein_g, carbohydrate_g, and fat_g.
 
 ### Discovery boundary
 
@@ -533,7 +545,8 @@ the underlying recipe catalogue.
 | /plan/:planId/occurrences/:occurrenceId/recipes | PlanRecipePickerPage | Replace a main occurrence recipe. |
 | /plan/:planId/batches/:batchId/sides/:componentSlot/recipes | PlanRecipePickerPage | Choose a side/snack component. |
 | /recipes | RecipesPage | Saved catalogue plus Good Food/Allrecipes discovery. |
-| /recipes/new | ImportPages.CustomRecipePage | Create a custom recipe. |
+| /recipes/new | CustomRecipeEditor.CustomRecipePage | Create a custom recipe with a live, unit-aware nutrition preview. |
+| /recipes/:recipeId/edit | CustomRecipeEditor.CustomRecipeEditPage | Edit a custom recipe, including its immutable nutrition-unit conversion snapshots. |
 | /recipes/import | ImportPages.RecipeImportPage | Start a URL import. |
 | /imports/:jobId/review | ImportPages.ImportReviewPage or drawer | Poll an import job and review extracted recipe data. |
 | /recipes/:recipeId/review | ImportPages.ImportReviewPage | Review an existing recipe directly. |
@@ -609,9 +622,14 @@ interactive targets usable at small heights.
 - RecipesPage queries saved recipes and remote discovery independently, then
   maps both into the catalogue card shape. Saving a remote result starts a
   job, polls it, opens review, and only becomes planner-ready after review.
-- ImportPages owns the review form and preserves user corrections, including
+- ImportPages owns the imported-recipe review form and preserves user corrections, including
   editable nutrition, in the review payload. Review validation blocks included
   shopping ingredients that have no amount/unit unless explicitly excluded.
+- CustomRecipeEditor owns both new and existing custom recipes. It previews
+  nutrition through POST /recipes/nutrition-preview using stable draft row IDs;
+  recipe/shopping units remain distinct from explicitly confirmed g/ml food
+  conversions, and incomplete revisions save as drafts without replacing a
+  complete version in current plans.
 - IngredientsPage composes local food records, USDA search, Open Food Facts,
   saved foods, manual labels, and BarcodeScanner; it maps provider failures to
   actionable notices.
@@ -657,8 +675,22 @@ interactive targets usable at small heights.
    and a recipe-version snapshot, and sets the job to awaiting_review.
 4. The review page polls GET /jobs/{job_id}, then loads GET /recipes/{id}.
 5. PUT /recipes/{id}/review persists the corrected title/yield/tags,
-   ingredients, and nutrition values. Complete per-serving nutrition or a valid
-   custom calculation is what makes a recipe planner-ready.
+   ingredients, and publisher nutrition values. Complete publisher nutrition
+   remains authoritative for URL imports; imports never fall back to ingredient
+   calculations.
+
+### Live custom recipe editing
+
+1. POST /recipes/nutrition-preview accepts stable draft-row IDs and only reads
+   locally persisted food/nutrient data. It returns known totals, formulae,
+   structured issues, and confirmable mapping choices without writing history
+   or calculations.
+2. A chosen mapping is stored alongside the recipe quantity/unit. Product
+   metadata and household memory remain suggestions until explicitly confirmed.
+3. PUT /recipes/{id} saves custom immutable versions even when incomplete.
+   Only a complete calculated revision replaces a previous complete version in
+   ready/accepted plans; a changed confirmed mapping is appended to household
+   conversion history on save.
 
 ### Remote discovery
 
@@ -893,9 +925,9 @@ stops application services, invokes restore, and starts them only after success.
 ## Database and migrations
 
 [backend/migrations/](backend/migrations/) is the authoritative, replayable
-schema history. The current head is 0023_member_meal_groups. There was a
-historical two-branch 0020 around method flow tables and persistent sessions;
-0021 reconciles the branches, followed by 0022 and 0023.
+schema history. The current head is 0026_shopping_recipe_snapshots. There was
+a historical two-branch 0020 around method flow tables and persistent sessions;
+0021 reconciles the branches, followed by 0022-0026.
 
 The high-level migration themes are:
 
@@ -908,7 +940,11 @@ The high-level migration themes are:
   unsafe URL quarantine, and recipe-linked shopping sources;
 - 0019-0022 method snapshots/flow reconciliation, persistent sessions, and
   normalized method view;
-- 0023 reusable household member meal groups.
+- 0023 reusable household member meal groups;
+- 0024 recipe-specific planner serving constraints;
+- 0025 immutable recipe nutrition-conversion and meal-tag snapshots plus
+  append-only household product/unit conversion memory.
+- 0026 plan-only shopping snapshots, which preserve the newer editable draft.
 
 Read [docs/database-migrations.md](docs/database-migrations.md) before editing
 the schema. Required rules:
@@ -975,6 +1011,10 @@ only tests are not sufficient for new controls.
 - .github/workflows/container.yml verifies pull-request images and publishes
   immutable release/SHA or latest images to GHCR on main/release events.
 - .github/workflows/dev.yml builds/publishes the dev image on the dev branch.
+- `VERSION` is the release source of truth. A release bump keeps it aligned
+  with the frontend and backend package versions, default API/user-agent
+  versions, deployment image references, README, and CHANGELOG; the backend
+  release-metadata test enforces that contract.
 
 The expected local validation for a normal change is:
 

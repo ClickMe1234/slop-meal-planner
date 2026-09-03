@@ -11,7 +11,7 @@ from app.models import (
     RecipeIngredient,
     RecipeVersion,
 )
-from app.services.nutrition import calculate_recipe
+from app.services.nutrition import calculate_recipe, resolve_recipe_nutrition
 
 
 def test_recipe_nutrition_is_calculated_per_serving(db):
@@ -138,3 +138,93 @@ def test_url_recipe_never_falls_back_to_ingredient_calculation(db):
 
     assert error.value.code == "PUBLISHER_NUTRITION_UNAVAILABLE"
     assert recipe.eligibility != "planner_ready"
+
+
+def test_shared_resolver_uses_reviewed_density_and_decimal_amounts(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    food = FoodRecord(
+        provider="test",
+        provider_record_id="plain-flour",
+        dataset_version="1",
+        name="Plain flour",
+        basis_amount=Decimal("100"),
+        basis_unit="g",
+    )
+    db.add(food)
+    db.flush()
+    for code, amount, unit in (
+        ("energy_kcal", Decimal("100"), "kcal"),
+        ("protein_g", Decimal("10"), "g"),
+        ("carbohydrate_g", Decimal("20"), "g"),
+        ("fat_g", Decimal("1"), "g"),
+    ):
+        db.add(FoodNutrient(food_record_id=food.id, code=code, amount=amount, unit=unit))
+    db.flush()
+
+    result = resolve_recipe_nutrition(
+        db,
+        yield_servings=Decimal("2"),
+        household_id=household.id,
+        ingredients=[
+            {
+                "client_id": "flour",
+                "original_text": "1 cup plain flour",
+                "food_phrase": "plain flour",
+                "quantity": Decimal("1"),
+                "unit": "cup",
+                "included": True,
+                "food_record_id": food.id,
+            }
+        ],
+    )
+
+    assert result.complete is True
+    assert result.ingredients[0].status == "resolved"
+    assert result.ingredients[0].effective_amount == Decimal("125.040")
+    assert result.batch_values["energy_kcal"] == Decimal("125.040")
+    assert result.per_serving_values["energy_kcal"] == Decimal("62.520")
+    assert "reviewed density" in result.assumptions[0].casefold()
+
+
+def test_shared_resolver_returns_structured_incomplete_nutrient_issue(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    food = FoodRecord(
+        provider="test",
+        provider_record_id="incomplete",
+        dataset_version="1",
+        name="Incomplete food",
+        basis_amount=100,
+        basis_unit="g",
+    )
+    db.add(food)
+    db.flush()
+    for code, amount, unit in (
+        ("energy_kcal", 100, "kcal"),
+        ("protein_g", 10, "g"),
+        ("carbohydrate_g", 20, "g"),
+    ):
+        db.add(FoodNutrient(food_record_id=food.id, code=code, amount=amount, unit=unit))
+    db.flush()
+
+    result = resolve_recipe_nutrition(
+        db,
+        yield_servings=Decimal("1"),
+        household_id=household.id,
+        ingredients=[
+            {
+                "client_id": "incomplete",
+                "quantity": Decimal("100"),
+                "unit": "g",
+                "included": True,
+                "food_record_id": food.id,
+            }
+        ],
+    )
+
+    assert result.complete is False
+    assert result.ingredients[0].status == "incomplete_nutrients"
+    assert [issue.code for issue in result.issues] == ["INCOMPLETE_FOOD_NUTRIENTS"]

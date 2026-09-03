@@ -20,6 +20,7 @@ from ..discovery.errors import DiscoveryError
 from ..models import (
     FoodNutrient,
     FoodRecord,
+    HouseholdFoodUnitConversion,
     Job,
     JobStatus,
     NutritionCalculation,
@@ -39,7 +40,10 @@ from ..schemas import (
     ImportRequest,
     JobOut,
     NutritionCalculationOut,
+    NutritionPreviewOut,
+    NutritionPreviewRequest,
     RecipeCreate,
+    RecipeCustomUpdate,
     RecipeDetail,
     RecipeIngredientIn,
     RecipeNutritionIn,
@@ -63,21 +67,30 @@ from ..services.ingredient_names import (
 )
 from ..services.ingredients import PARSER_VERSION, parse_ingredient
 from ..services.integration_credentials import effective_usda_key
+from ..services.measurement_conversion import measurement_dimension
+from ..services.quantities import canonical_quantity_unit
 from ..services.regional_ingredients import convert_ingredient_text, equivalent_terms, query_for_locale
-from ..services.nutrition import calculate_recipe, latest_calculation, publisher_values
+from ..services.nutrition import (
+    calculate_recipe,
+    latest_calculation,
+    publisher_values,
+    resolve_recipe_nutrition,
+)
 from ..services.recipe_plan_sync import sync_recipe_versions_to_current_plans
 from ..services.recipe_methods import clone_method_snapshot, snapshot_values
+from ..services.recipe_versions import (
+    latest_complete_custom_recipe_version,
+    latest_editor_recipe_version,
+    latest_planning_recipe_version,
+    next_recipe_version_number,
+)
 from ..services.saved_foods import accessible_food_record
 
 router = APIRouter(tags=["recipes and food data"])
 
 
 def _latest_version(db: Session, recipe_id: str) -> RecipeVersion | None:
-    return db.scalar(
-        select(RecipeVersion)
-        .where(RecipeVersion.recipe_id == recipe_id)
-        .order_by(RecipeVersion.version_number.desc())
-    )
+    return latest_editor_recipe_version(db, recipe_id)
 
 
 def _meal_types(db: Session, recipe: Recipe) -> list[RecipeTag]:
@@ -127,12 +140,66 @@ def _review_nutrition_values(value: RecipeNutritionIn | None) -> dict | None:
     }
 
 
+def _normalised_custom_instructions(value: str | None) -> str | None:
+    return value.strip() or None if value else None
+
+
+def _require_method_editor_for_instruction_change(
+    previous: RecipeVersion,
+    custom_instructions: str | None,
+    fields_set: set[str],
+) -> None:
+    """Keep an authored method snapshot and its recipe wording in lockstep."""
+
+    if (
+        previous.method_snapshot is not None
+        and "custom_instructions" in fields_set
+        and _normalised_custom_instructions(custom_instructions)
+        != _normalised_custom_instructions(previous.custom_instructions)
+    ):
+        raise DomainError(
+            "METHOD_EDITOR_REQUIRED",
+            "Edit the cooking method on its dedicated page so its versioned method snapshot stays in sync.",
+            409,
+        )
+
+
+def _metadata_decimal(metadata: dict, key: str) -> Decimal | None:
+    value = metadata.get(key)
+    if value in {None, ""}:
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _food_record_out(food: FoodRecord) -> FoodRecordOut:
+    metadata = food.metadata_json if isinstance(food.metadata_json, dict) else {}
+    return FoodRecordOut(
+        **{column.name: getattr(food, column.name) for column in food.__table__.columns},
+        nutrients=[
+            {column.name: getattr(nutrient, column.name) for column in nutrient.__table__.columns}
+            for nutrient in food.nutrients
+        ],
+        brand=str(metadata.get("brands") or "") or None,
+        barcode=str(metadata.get("barcode") or "") or None,
+        package_amount=_metadata_decimal(metadata, "package_amount"),
+        package_unit=str(metadata.get("package_unit") or "") or None,
+        package_description=str(metadata.get("quantity") or "") or None,
+        serving_amount=_metadata_decimal(metadata, "serving_amount"),
+        serving_unit=str(metadata.get("serving_unit") or "") or None,
+        serving_description=str(metadata.get("serving_size") or "") or None,
+    )
+
+
 def _ingredient_values(
     db: Session,
     household_id: str,
     row: RecipeIngredientIn,
     *,
     reviewed: bool,
+    source_type: str = "custom",
 ) -> dict:
     if row.food_record_id:
         accessible_food_record(db, row.food_record_id, household_id)
@@ -160,7 +227,15 @@ def _ingredient_values(
         values["quantity"] = parsed.quantity
         values["unit"] = parsed.unit
     if values["quantity_grams"] is None:
-        values["quantity_grams"] = parsed.quantity_grams
+        # Imported recipes retain parser-derived gram amounts for legacy
+        # compatibility. A new custom count/package row must instead carry an
+        # explicit nutrition conversion; do not turn parser convenience data
+        # into an implicit nutrition confirmation.
+        unit = values.get("unit")
+        if source_type != "custom" or (
+            unit is not None and measurement_dimension(canonical_quantity_unit(unit)) == "mass"
+        ):
+            values["quantity_grams"] = parsed.quantity_grams
     values.update(
         food_phrase=display_name,
         parsed_food_phrase=automatic_name,
@@ -178,6 +253,131 @@ def _ingredient_values(
         needs_review=False if reviewed or remembered else parsed.needs_review,
     )
     return values
+
+
+def _preview_out(resolution) -> NutritionPreviewOut:
+    return NutritionPreviewOut(
+        complete=resolution.complete,
+        yield_servings=resolution.yield_servings,
+        batch_values=resolution.batch_values,
+        total_values=resolution.batch_values,
+        per_serving_values=resolution.per_serving_values,
+        issues=[
+            {
+                "code": issue.code,
+                "message": issue.message,
+                "client_id": issue.client_id,
+            }
+            for issue in resolution.issues
+        ],
+        ingredients=[
+            {
+                "client_id": item.client_id,
+                "status": item.status,
+                "food_record_id": item.food_record_id,
+                "food_name": item.food_name,
+                "label_basis": item.label_basis,
+                "effective_amount": item.effective_amount,
+                "effective_unit": item.effective_unit,
+                "formula": item.formula,
+                "contribution": item.contribution,
+                "assumptions": item.assumptions,
+                "conversion_options": [
+                    {
+                        "kind": option.kind,
+                        "source": option.source,
+                        "input_unit": option.input_unit,
+                        "basis_amount_per_unit": option.basis_amount_per_unit,
+                        "basis_unit": option.basis_unit,
+                        "description": option.description,
+                        "requires_confirmation": option.requires_confirmation,
+                    }
+                    for option in item.conversion_options
+                ],
+                "issues": [
+                    {
+                        "code": issue.code,
+                        "message": issue.message,
+                        "client_id": issue.client_id,
+                    }
+                    for issue in item.issues
+                ],
+            }
+            for item in resolution.ingredients
+        ],
+    )
+
+
+def _remember_confirmed_conversions(
+    db: Session,
+    household_id: str,
+    ingredients: list[RecipeIngredient],
+) -> None:
+    """Append a preference only when it differs from the latest memory."""
+
+    candidates = [
+        item
+        for item in ingredients
+        if item.food_record_id
+        and item.nutrition_input_unit
+        and item.nutrition_basis_amount_per_unit is not None
+        and item.nutrition_basis_unit in {"g", "ml"}
+        and item.nutrition_conversion_source in {"package", "serving", "manual"}
+    ]
+    if not candidates:
+        return
+    food_ids = {item.food_record_id for item in candidates if item.food_record_id}
+    input_units = {item.nutrition_input_unit for item in candidates if item.nutrition_input_unit}
+    rows = db.scalars(
+        select(HouseholdFoodUnitConversion)
+        .where(
+            HouseholdFoodUnitConversion.household_id == household_id,
+            HouseholdFoodUnitConversion.food_record_id.in_(food_ids),
+            HouseholdFoodUnitConversion.nutrition_input_unit.in_(input_units),
+        )
+        .order_by(
+            HouseholdFoodUnitConversion.created_at.desc(),
+            HouseholdFoodUnitConversion.id.desc(),
+        )
+    ).all()
+    latest: dict[tuple[str, str], HouseholdFoodUnitConversion] = {}
+    for row in rows:
+        latest.setdefault((row.food_record_id, row.nutrition_input_unit), row)
+    for item in candidates:
+        key = (item.food_record_id or "", item.nutrition_input_unit or "")
+        previous = latest.get(key)
+        unchanged = (
+            previous is not None
+            and Decimal(previous.nutrition_basis_amount_per_unit)
+            == Decimal(item.nutrition_basis_amount_per_unit)
+            and previous.nutrition_basis_unit == item.nutrition_basis_unit
+            and previous.nutrition_conversion_source == item.nutrition_conversion_source
+        )
+        if unchanged:
+            continue
+        remembered = HouseholdFoodUnitConversion(
+            household_id=household_id,
+            food_record_id=item.food_record_id,
+            nutrition_input_unit=item.nutrition_input_unit,
+            nutrition_basis_amount_per_unit=item.nutrition_basis_amount_per_unit,
+            nutrition_basis_unit=item.nutrition_basis_unit,
+            nutrition_conversion_source=item.nutrition_conversion_source,
+        )
+        db.add(remembered)
+        latest[key] = remembered
+
+
+def _sync_out(sync) -> RecipePlanSyncOut:
+    return RecipePlanSyncOut(
+        plans_updated=sync.plans_updated,
+        shopping_list_rebuilt=sync.shopping_list_rebuilt,
+        shopping_list_id=sync.shopping_list_id,
+        cooked_batches_unchanged=sync.cooked_batches_unchanged,
+    )
+
+
+def _last_complete_custom_version(db: Session, recipe_id: str) -> RecipeVersion | None:
+    return latest_complete_custom_recipe_version(db, recipe_id)
 
 
 def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -> RecipeDetail:
@@ -258,7 +458,12 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         item["parsed_food_phrase"] = convert_ingredient_text(
             db, item.get("parsed_food_phrase"), ingredient_locale
         )
-        for field in ("quantity", "quantity_grams", "name_confidence"):
+        for field in (
+            "quantity",
+            "quantity_grams",
+            "nutrition_basis_amount_per_unit",
+            "name_confidence",
+        ):
             if isinstance(item.get(field), Decimal):
                 plain = format(item[field], "f")
                 if "." in plain:
@@ -282,11 +487,19 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
         else ("complete" if calculation is not None and calculation.status == "complete" else None)
     )
     effective_eligibility = (
-        RecipeEligibility.PLANNER_READY
-        if reported_values is not None and version.yield_servings
-        else recipe.eligibility
+        RecipeEligibility.DRAFT
+        if recipe.source_type == "custom" and nutrition_method != "complete"
+        else (
+            RecipeEligibility.PLANNER_READY
+            if reported_values is not None and version.yield_servings
+            else recipe.eligibility
+        )
     )
-    meal_types = _meal_types(db, recipe)
+    meal_types = (
+        sorted((RecipeTag(value) for value in version.meal_types), key=lambda value: value.value)
+        if version.meal_types is not None
+        else _meal_types(db, recipe)
+    )
     planner_warnings = []
     if not meal_types:
         planner_warnings.append(
@@ -307,7 +520,7 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
     publisher_tags, publisher_categories = _publisher_tag_data(db, recipe)
     summary = RecipeSummary(
         id=recipe.id,
-        title=recipe.title,
+        title=version.title,
         eligibility=effective_eligibility,
         source_type=recipe.source_type,
         source_url=recipe.source_url,
@@ -362,6 +575,16 @@ def list_recipes(
         raise DomainError("TOO_MANY_RECIPE_CATEGORIES", str(exc), 422) from exc
     except KeyError as exc:
         raise DomainError("UNKNOWN_RECIPE_CATEGORY", f"Unknown recipe category: {exc.args[0]}", 422) from exc
+    editor_title = (
+        select(RecipeVersion.title)
+        .where(
+            RecipeVersion.recipe_id == Recipe.id,
+            RecipeVersion.is_shopping_snapshot.is_(False),
+        )
+        .order_by(RecipeVersion.version_number.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
     conditions = [Recipe.household_id == context.user.household_id, Recipe.archived_at.is_(None)]
     if not include_food:
         conditions.append(Recipe.source_type != "food")
@@ -385,7 +608,7 @@ def list_recipes(
         )
         conditions.append(
             or_(
-                *(func.lower(Recipe.title).contains(term) for term in search_terms),
+                *(func.lower(editor_title).contains(term) for term in search_terms),
                 ingredient_match,
                 exists(
                     select(RecipePublisherTag.id).where(
@@ -429,7 +652,7 @@ def list_recipes(
     recipes = db.scalars(
         select(Recipe)
         .where(*conditions)
-        .order_by(Recipe.title)
+        .order_by(editor_title)
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
@@ -505,6 +728,24 @@ def list_recipe_ingredients(
     return {"items": items, "total": len(items)}
 
 
+@router.post("/recipes/nutrition-preview", response_model=NutritionPreviewOut)
+def preview_recipe_nutrition(
+    payload: NutritionPreviewRequest,
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    """Resolve editor nutrition from saved food records without writes or I/O."""
+
+    resolution = resolve_recipe_nutrition(
+        db,
+        yield_servings=payload.yield_servings,
+        ingredients=payload.ingredients,
+        household_id=context.user.household_id,
+        allow_legacy_quantity_grams=False,
+    )
+    return _preview_out(resolution)
+
+
 @router.post("/recipes", response_model=RecipeDetail, status_code=201)
 def create_recipe(
     payload: RecipeCreate,
@@ -517,6 +758,7 @@ def create_recipe(
             context.user.household_id,
             item,
             reviewed=False,
+            source_type=payload.source_type,
         )
         for item in payload.ingredients
     ]
@@ -547,7 +789,10 @@ def create_recipe(
         minimum_servings=payload.minimum_servings,
         serving_increment=payload.serving_increment,
         custom_instructions=instruction_text,
-        publisher_nutrition=payload.publisher_nutrition,
+        publisher_nutrition=(
+            payload.publisher_nutrition if payload.source_type == "url" else None
+        ),
+        meal_types=[meal_type.value for meal_type in payload.meal_types],
     )
     db.add(version)
     db.flush()
@@ -578,9 +823,11 @@ def create_recipe(
                 ),
             )
         )
+    calculation_complete = False
     if payload.source_type == "custom":
         try:
             calculate_recipe(db, version.id)
+            calculation_complete = True
         except DomainError as exc:
             if exc.code not in {
                 "MISSING_YIELD",
@@ -591,6 +838,12 @@ def create_recipe(
             recipe.eligibility = RecipeEligibility.DRAFT.value
     elif publisher_values(version) is not None and version.yield_servings:
         recipe.eligibility = RecipeEligibility.PLANNER_READY.value
+    if payload.source_type == "custom" and calculation_complete:
+        _remember_confirmed_conversions(
+            db,
+            context.user.household_id,
+            created_ingredients,
+        )
     db.commit()
     db.refresh(recipe)
     return _recipe_detail(db, recipe, context.user.ingredient_locale)
@@ -658,14 +911,26 @@ def save_recipe_review(
     previous = _latest_version(db, recipe.id)
     if previous is None:
         raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+    submitted_nutrition = _review_nutrition_values(payload.publisher_nutrition)
     reviewed_nutrition = (
-        _review_nutrition_values(payload.publisher_nutrition)
-        if "publisher_nutrition" in payload.model_fields_set
-        else previous.publisher_nutrition
+        submitted_nutrition or previous.publisher_nutrition
+        if recipe.source_type == "url"
+        else None
+    )
+    if recipe.source_type == "custom":
+        _require_method_editor_for_instruction_change(
+            previous,
+            payload.custom_instructions,
+            payload.model_fields_set,
+        )
+    previous_complete = (
+        _last_complete_custom_version(db, recipe.id)
+        if recipe.source_type == "custom"
+        else None
     )
     next_version = RecipeVersion(
         recipe_id=recipe.id,
-        version_number=previous.version_number + 1,
+        version_number=next_recipe_version_number(db, recipe.id),
         title=payload.title,
         yield_servings=payload.yield_servings,
         minimum_servings=(
@@ -678,9 +943,18 @@ def save_recipe_review(
             if "serving_increment" in payload.model_fields_set
             else previous.serving_increment
         ),
-        custom_instructions=previous.custom_instructions,
+        custom_instructions=(
+            _normalised_custom_instructions(payload.custom_instructions)
+            if "custom_instructions" in payload.model_fields_set
+            else previous.custom_instructions
+        ),
         source_checksum=previous.source_checksum,
         publisher_nutrition=reviewed_nutrition,
+        meal_types=(
+            [meal_type.value for meal_type in payload.meal_types]
+            if payload.meal_types is not None
+            else previous.meal_types
+        ),
     )
     db.add(next_version)
     db.flush()
@@ -691,6 +965,7 @@ def save_recipe_review(
             context.user.household_id,
             item,
             reviewed=True,
+            source_type=recipe.source_type,
         )
         if "lineage_id" not in values and position < len(previous.ingredients):
             values["lineage_id"] = previous.ingredients[position].lineage_id
@@ -718,14 +993,17 @@ def save_recipe_review(
                 force_needs_review=old_lineages != new_lineages,
             )
         )
-    if payload.meal_types is not None:
-        _replace_meal_types(db, recipe, payload.meal_types)
-    recipe.title = payload.title
-    recipe.eligibility = RecipeEligibility.DRAFT.value
+    if recipe.source_type != "custom":
+        if payload.meal_types is not None:
+            _replace_meal_types(db, recipe, payload.meal_types)
+        recipe.title = payload.title
+        recipe.eligibility = RecipeEligibility.DRAFT.value
     db.flush()
+    calculation_complete = False
     if recipe.source_type == "custom":
         try:
             calculate_recipe(db, next_version.id)
+            calculation_complete = True
         except DomainError as exc:
             if exc.code not in {
                 "MISSING_YIELD",
@@ -735,25 +1013,179 @@ def save_recipe_review(
                 raise
     elif publisher_values(next_version) is not None:
         recipe.eligibility = RecipeEligibility.PLANNER_READY.value
+    if recipe.source_type == "custom" and calculation_complete:
+        if payload.meal_types is not None:
+            _replace_meal_types(db, recipe, payload.meal_types)
+        recipe.title = payload.title
+        _remember_confirmed_conversions(
+            db,
+            context.user.household_id,
+            new_ingredients,
+        )
     recipe.version += 1
+    replacements = {previous.id: next_version.id}
+    if recipe.source_type == "custom" and not calculation_complete:
+        replacements = {}
+    elif previous_complete is not None:
+        replacements[previous_complete.id] = next_version.id
     sync = sync_recipe_versions_to_current_plans(
         db,
         context.user.household_id,
-        {previous.id: next_version.id},
+        replacements,
     )
     db.commit()
     db.refresh(recipe)
     detail = _recipe_detail(db, recipe, context.user.ingredient_locale)
     return detail.model_copy(
         update={
-            "plan_sync": RecipePlanSyncOut(
-                plans_updated=sync.plans_updated,
-                shopping_list_rebuilt=sync.shopping_list_rebuilt,
-                shopping_list_id=sync.shopping_list_id,
-                cooked_batches_unchanged=sync.cooked_batches_unchanged,
-            )
+            "plan_sync": _sync_out(sync)
         }
     )
+
+
+@router.put("/recipes/{recipe_id}", response_model=RecipeDetail)
+def save_custom_recipe(
+    recipe_id: str,
+    payload: RecipeCustomUpdate,
+    context: AuthContext = Depends(require_csrf),
+    db: Session = Depends(get_db),
+):
+    """Save a custom editor revision, including incomplete draft revisions."""
+
+    recipe = db.scalar(select(Recipe).where(Recipe.id == recipe_id).with_for_update())
+    if (
+        recipe is None
+        or recipe.household_id != context.user.household_id
+        or recipe.archived_at is not None
+    ):
+        raise NotFoundError("Recipe")
+    if recipe.source_type != "custom":
+        raise DomainError(
+            "CUSTOM_RECIPE_REQUIRED",
+            "Imported recipes are reviewed through their publisher review flow.",
+            409,
+        )
+    if recipe.version != payload.expected_version:
+        raise DomainError(
+            "VERSION_CONFLICT",
+            "This recipe changed while you were editing it. Reload before saving.",
+            409,
+        )
+    previous = _latest_version(db, recipe.id)
+    if previous is None:
+        raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
+    previous_complete = _last_complete_custom_version(db, recipe.id)
+    _require_method_editor_for_instruction_change(
+        previous,
+        payload.custom_instructions,
+        payload.model_fields_set,
+    )
+    instructions = (
+        _normalised_custom_instructions(payload.custom_instructions)
+        if "custom_instructions" in payload.model_fields_set
+        else previous.custom_instructions
+    )
+    next_version = RecipeVersion(
+        recipe_id=recipe.id,
+        version_number=next_recipe_version_number(db, recipe.id),
+        title=payload.title,
+        yield_servings=payload.yield_servings,
+        minimum_servings=(
+            payload.minimum_servings
+            if "minimum_servings" in payload.model_fields_set
+            else previous.minimum_servings
+        ),
+        serving_increment=(
+            payload.serving_increment
+            if "serving_increment" in payload.model_fields_set
+            else previous.serving_increment
+        ),
+        custom_instructions=instructions,
+        source_checksum=previous.source_checksum,
+        publisher_nutrition=None,
+        meal_types=(
+            [meal_type.value for meal_type in payload.meal_types]
+            if payload.meal_types is not None
+            else previous.meal_types
+        ),
+    )
+    db.add(next_version)
+    db.flush()
+    ingredient_values: list[dict] = []
+    used_lineages: set[str] = set()
+    for position, item in enumerate(payload.ingredients):
+        values = _ingredient_values(
+            db,
+            context.user.household_id,
+            item,
+            reviewed=True,
+            source_type="custom",
+        )
+        if "lineage_id" not in values and position < len(previous.ingredients):
+            candidate = previous.ingredients[position].lineage_id
+            if candidate not in used_lineages:
+                values["lineage_id"] = candidate
+        if values.get("lineage_id"):
+            used_lineages.add(values["lineage_id"])
+        ingredient_values.append(values)
+    new_ingredients: list[RecipeIngredient] = []
+    for position, values in enumerate(ingredient_values):
+        ingredient = RecipeIngredient(
+            recipe_version_id=next_version.id,
+            position=position,
+            **values,
+        )
+        db.add(ingredient)
+        new_ingredients.append(ingredient)
+    db.flush()
+    if previous.method_snapshot is not None:
+        old_lineages = {item.lineage_id for item in previous.ingredients}
+        new_lineages = {item.lineage_id for item in new_ingredients}
+        db.add(
+            clone_method_snapshot(
+                previous.method_snapshot,
+                recipe_version_id=next_version.id,
+                created_by_user_id=context.user.id,
+                force_needs_review=old_lineages != new_lineages,
+            )
+        )
+    db.flush()
+
+    calculation_complete = False
+    try:
+        calculate_recipe(db, next_version.id)
+        calculation_complete = True
+    except DomainError as exc:
+        if exc.code not in {
+            "MISSING_YIELD",
+            "MISSING_INGREDIENTS",
+            "NUTRITION_REVIEW_REQUIRED",
+        }:
+            raise
+    if calculation_complete:
+        if payload.meal_types is not None:
+            _replace_meal_types(db, recipe, payload.meal_types)
+        recipe.title = payload.title
+        _remember_confirmed_conversions(
+            db,
+            context.user.household_id,
+            new_ingredients,
+        )
+    recipe.version += 1
+    replacements: dict[str, str] = {}
+    if calculation_complete:
+        replacements[previous.id] = next_version.id
+        if previous_complete is not None:
+            replacements[previous_complete.id] = next_version.id
+    sync = sync_recipe_versions_to_current_plans(
+        db,
+        context.user.household_id,
+        replacements,
+    )
+    db.commit()
+    db.refresh(recipe)
+    detail = _recipe_detail(db, recipe, context.user.ingredient_locale)
+    return detail.model_copy(update={"plan_sync": _sync_out(sync)})
 
 
 @router.put("/recipes/{recipe_id}/serving-constraints", response_model=RecipeDetail)
@@ -780,13 +1212,13 @@ def save_recipe_serving_constraints(
             "This recipe changed while you were editing its serving limits. Reload before saving.",
             409,
         )
-    previous = _latest_version(db, recipe.id)
+    previous = latest_planning_recipe_version(db, recipe)
     if previous is None:
         raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
 
     next_version = RecipeVersion(
         recipe_id=recipe.id,
-        version_number=previous.version_number + 1,
+        version_number=next_recipe_version_number(db, recipe.id),
         title=previous.title,
         yield_servings=previous.yield_servings,
         minimum_servings=payload.minimum_servings,
@@ -794,6 +1226,7 @@ def save_recipe_serving_constraints(
         custom_instructions=previous.custom_instructions,
         source_checksum=previous.source_checksum,
         publisher_nutrition=previous.publisher_nutrition,
+        meal_types=previous.meal_types,
     )
     db.add(next_version)
     db.flush()
@@ -972,13 +1405,7 @@ def search_foods(
     ).all()
     items = []
     for food in rows:
-        item = FoodRecordOut(
-                **{column.name: getattr(food, column.name) for column in food.__table__.columns},
-                nutrients=[
-                    {column.name: getattr(n, column.name) for column in n.__table__.columns}
-                    for n in food.nutrients
-                ],
-            ).model_dump(mode="json")
+        item = _food_record_out(food).model_dump(mode="json")
         item["name"] = convert_ingredient_text(db, item["name"], context.user.ingredient_locale)
         items.append(item)
     return {
@@ -1011,10 +1438,4 @@ def create_food(
         db.add(FoodNutrient(food_record_id=food.id, **nutrient.model_dump()))
     db.commit()
     db.refresh(food)
-    return FoodRecordOut(
-        **{column.name: getattr(food, column.name) for column in food.__table__.columns},
-        nutrients=[
-            {column.name: getattr(n, column.name) for column in n.__table__.columns}
-            for n in food.nutrients
-        ],
-    )
+    return _food_record_out(food)

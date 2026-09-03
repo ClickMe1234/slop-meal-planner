@@ -306,6 +306,16 @@ export const api = {
       body: JSON.stringify({ url }),
     }),
   calculateRecipe: (id: string) => request<{ per_serving_values: Record<string, number> }>(`/recipes/${id}/calculate`, { method: 'POST' }),
+  previewRecipeNutrition: (payload: BackendRecipeNutritionPreviewRequest) =>
+    request<BackendRecipeNutritionPreview>('/recipes/nutrition-preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateCustomRecipe: (id: string, payload: BackendCustomRecipeUpdate) =>
+    request<BackendRecipeDetail>(`/recipes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
   job: (id: string) => request<JobStatus>(`/jobs/${id}`),
   searchFoods: (query: string) =>
     request<{
@@ -555,6 +565,100 @@ export interface BackendRecipeNutrition {
   fibre_g?: ApiDecimal | null
 }
 
+export type NutritionBasisUnit = 'g' | 'ml'
+export type NutritionConversionSource = 'package' | 'serving' | 'manual'
+export type NutritionConversionOptionKind = 'remembered' | NutritionConversionSource
+
+/**
+ * The draft rows sent to the side-effect-free custom-recipe nutrition
+ * preview. `quantity` and `unit` remain the recipe/shopping measurement;
+ * the nutrition fields are a separately confirmed mapping to g or ml.
+ */
+export interface BackendRecipeNutritionPreviewIngredient {
+  client_id: string
+  original_text?: string
+  quantity?: ApiDecimal | null
+  unit?: string | null
+  included?: boolean
+  food_record_id?: string | null
+  nutrition_input_unit?: string | null
+  nutrition_basis_amount_per_unit?: ApiDecimal | null
+  nutrition_basis_unit?: NutritionBasisUnit | null
+  nutrition_conversion_source?: NutritionConversionSource | null
+}
+
+export interface BackendRecipeNutritionPreviewRequest {
+  yield_servings?: ApiDecimal | null
+  ingredients: BackendRecipeNutritionPreviewIngredient[]
+}
+
+export interface BackendRecipeNutritionPreviewIssue {
+  code: 'missing_yield' | 'missing_quantity' | 'missing_match' | 'missing_conversion' | 'incomplete_food_nutrients' | 'incompatible_units' | string
+  message: string
+  client_id?: string
+}
+
+export interface BackendRecipeNutritionConversionOption {
+  kind: NutritionConversionOptionKind
+  source?: string
+  input_unit: string
+  basis_amount_per_unit?: ApiDecimal | null
+  basis_unit?: NutritionBasisUnit | null
+  description: string
+  requires_confirmation: boolean
+}
+
+export interface BackendRecipeNutritionPreviewIngredientResult {
+  client_id: string
+  status: string
+  food_record_id?: string
+  food_name?: string
+  label_basis?: { amount: ApiDecimal; unit: NutritionBasisUnit }
+  effective_amount?: ApiDecimal | null
+  effective_unit?: NutritionBasisUnit | null
+  formula?: string
+  contribution?: Partial<Record<NutrientCode, ApiDecimal | null>>
+  assumptions?: string[]
+  conversion_options: BackendRecipeNutritionConversionOption[]
+  issues?: BackendRecipeNutritionPreviewIssue[]
+}
+
+export interface BackendRecipeNutritionPreview {
+  complete: boolean
+  yield_servings?: ApiDecimal | null
+  batch_values: BackendRecipeNutrition
+  per_serving_values: BackendRecipeNutrition
+  issues: BackendRecipeNutritionPreviewIssue[]
+  ingredients: BackendRecipeNutritionPreviewIngredientResult[]
+}
+
+export interface BackendCustomRecipeUpdate {
+  expected_version: number
+  title: string
+  yield_servings: number | null
+  minimum_servings?: number | null
+  serving_increment?: number | null
+  custom_instructions?: string | null
+  meal_types?: BackendMealType[]
+  ingredients: Array<{
+    lineage_id?: string
+    original_text: string
+    quantity?: ApiDecimal | null
+    unit?: string | null
+    food_phrase?: string
+    quantity_grams?: number | null
+    food_record_id?: string | null
+    nutrition_input_unit?: string | null
+    nutrition_basis_amount_per_unit?: ApiDecimal | null
+    nutrition_basis_unit?: NutritionBasisUnit | null
+    nutrition_conversion_source?: NutritionConversionSource | null
+    included: boolean
+    optional: boolean
+    needs_review: boolean
+    shopping_excluded: boolean
+  }>
+}
+
 export interface BackendRecipe {
   id: string
   title: string
@@ -585,6 +689,7 @@ export interface BackendRecipeDetail extends BackendRecipe {
   recipe_version_id: string
   version_number: number
   yield_servings?: number
+  custom_instructions?: string | null
   ingredients: Array<{
     id: string
     lineage_id?: string
@@ -603,6 +708,10 @@ export interface BackendRecipeDetail extends BackendRecipe {
     shopping_measurement_overridden?: boolean
     shopping_group_key?: string
     food_record_id?: string
+    nutrition_input_unit?: string | null
+    nutrition_basis_amount_per_unit?: ApiDecimal | null
+    nutrition_basis_unit?: NutritionBasisUnit | null
+    nutrition_conversion_source?: NutritionConversionSource | null
   }>
   plan_sync?: {
     plans_updated: number
@@ -770,6 +879,14 @@ export interface BackendFood {
   basis_amount: ApiDecimal
   basis_unit: string
   nutrients: Array<{ code: NutrientCode; amount?: ApiDecimal; unit: string }>
+  brand?: string
+  barcode?: string
+  package_amount?: ApiDecimal
+  package_unit?: NutritionBasisUnit
+  package_description?: string
+  serving_amount?: ApiDecimal
+  serving_unit?: NutritionBasisUnit
+  serving_description?: string
 }
 
 export type NutrientCode = 'energy_kcal' | 'protein_g' | 'carbohydrate_g' | 'fat_g'
@@ -787,8 +904,10 @@ export interface BackendFoodLookup {
   complete: boolean
   package_amount?: ApiDecimal
   package_unit?: 'g' | 'ml'
+  package_description?: string
   serving_amount?: ApiDecimal
   serving_unit?: 'g' | 'ml'
+  serving_description?: string
   source_url?: string
   image_url?: string
   attribution?: string
@@ -809,6 +928,7 @@ export interface BackendSavedFood extends Omit<BackendFoodLookup, 'name' | 'comp
   dataset_version: string
   serving_amount?: ApiDecimal
   serving_unit?: 'g' | 'ml'
+  serving_description?: string
   planner_enabled: boolean
   planner_recipe_id?: string
   meal_types: BackendMealType[]

@@ -70,10 +70,15 @@ export function nutritionFormValues(nutrition?: BackendRecipeNutrition | null): 
   return values
 }
 
-type NutritionReviewRecipe = Pick<BackendRecipeDetail, 'publisher_nutrition' | 'calculated_nutrition' | 'nutrition_method'>
+type NutritionReviewRecipe = Pick<BackendRecipeDetail, 'source_type' | 'publisher_nutrition' | 'calculated_nutrition' | 'nutrition_method'>
 
 export function nutritionReviewValues(recipe: NutritionReviewRecipe): NutritionFormValues {
-  const nutrition = recipe.nutrition_method === 'complete'
+  // URL imports are always planned from publisher values. A legacy
+  // ingredient calculation may still be attached to an imported recipe, but
+  // it must not replace or clear the publisher snapshot in the review form.
+  const nutrition = recipe.source_type === 'url'
+    ? recipe.publisher_nutrition
+    : recipe.nutrition_method === 'complete'
     ? recipe.calculated_nutrition ?? recipe.publisher_nutrition
     : recipe.publisher_nutrition
   return nutritionFormValues(nutrition)
@@ -1010,7 +1015,9 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
     setYieldServings(String(recipe.data.yield_servings ?? ''))
     setMinimumServings(String(recipe.data.minimum_servings ?? ''))
     setServingIncrement(String(recipe.data.serving_increment ?? ''))
-    const calculated = recipe.data.nutrition_method === 'complete' && Boolean(recipe.data.calculated_nutrition)
+    const calculated = recipe.data.source_type !== 'url'
+      && recipe.data.nutrition_method === 'complete'
+      && Boolean(recipe.data.calculated_nutrition)
     setNutritionOrigin(calculated ? 'calculated' : 'publisher')
     setNutritionValues(nutritionReviewValues(recipe.data))
     setNutritionRefreshError('')
@@ -1113,7 +1120,9 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
         minimum_servings: minimumServings ? Number(minimumServings) : null,
         serving_increment: servingIncrement ? Number(servingIncrement) : null,
         meal_types: mealTypes,
-        publisher_nutrition: nutritionOrigin === 'calculated' ? null : nutritionReviewPayload(nutritionValues),
+        publisher_nutrition: recipe.data.source_type === 'url' || nutritionOrigin !== 'calculated'
+          ? nutritionReviewPayload(nutritionValues)
+          : null,
         ingredients: rows.map((row) => {
           const quantityGrams = row.quantity_grams || gramsFor(row.amount, row.unit)
           return {

@@ -327,6 +327,14 @@ class RecipeVersion(IdMixin, Base):
     custom_instructions: Mapped[str | None] = mapped_column(Text)
     source_checksum: Mapped[str | None] = mapped_column(String(64))
     publisher_nutrition: Mapped[dict | None] = mapped_column(JSON)
+    # Keep editor meal-type choices with the immutable revision. The
+    # recipe-level tags remain the last complete/planner-safe choice.
+    meal_types: Mapped[list[str] | None] = mapped_column(JSON)
+    # A shopping-list edit creates a plan-only immutable snapshot. It must not
+    # displace the revision a person continues to edit in the recipe library.
+    is_shopping_snapshot: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     ingredients: Mapped[list[RecipeIngredient]] = relationship(
@@ -339,7 +347,17 @@ class RecipeVersion(IdMixin, Base):
 
 class RecipeIngredient(IdMixin, Base):
     __tablename__ = "recipe_ingredient"
-    __table_args__ = (UniqueConstraint("recipe_version_id", "lineage_id"),)
+    __table_args__ = (
+        UniqueConstraint("recipe_version_id", "lineage_id"),
+        CheckConstraint(
+            "(nutrition_input_unit IS NULL AND nutrition_basis_amount_per_unit IS NULL "
+            "AND nutrition_basis_unit IS NULL AND nutrition_conversion_source IS NULL) OR "
+            "(nutrition_input_unit IS NOT NULL AND nutrition_basis_amount_per_unit > 0 "
+            "AND nutrition_basis_unit IN ('g', 'ml') "
+            "AND nutrition_conversion_source IN ('package', 'serving', 'manual'))",
+            name="ck_recipe_ingredient_nutrition_conversion_complete",
+        ),
+    )
 
     recipe_version_id: Mapped[str] = mapped_column(ForeignKey("recipe_version.id", ondelete="CASCADE"), index=True)
     lineage_id: Mapped[str] = mapped_column(String(36), default=new_id, nullable=False, index=True)
@@ -348,6 +366,13 @@ class RecipeIngredient(IdMixin, Base):
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     unit: Mapped[str | None] = mapped_column(String(40))
     quantity_grams: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    # These fields deliberately do not replace ``quantity`` / ``unit``.  They
+    # snapshot how a user confirmed a recipe-facing count or package measure
+    # maps onto a food label's mass or volume basis for nutrition only.
+    nutrition_input_unit: Mapped[str | None] = mapped_column(String(40))
+    nutrition_basis_amount_per_unit: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    nutrition_basis_unit: Mapped[str | None] = mapped_column(String(20))
+    nutrition_conversion_source: Mapped[str | None] = mapped_column(String(20))
     food_phrase: Mapped[str | None] = mapped_column(String(240))
     parsed_food_phrase: Mapped[str | None] = mapped_column(String(240))
     preparation: Mapped[str | None] = mapped_column(String(160))
@@ -455,6 +480,49 @@ class SavedFood(IdMixin, AuditMixin, Base):
         ForeignKey("recipe.id", ondelete="SET NULL"), nullable=True, index=True
     )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HouseholdFoodUnitConversion(IdMixin, Base):
+    """An append-only, household-local memory of a confirmed label mapping.
+
+    Recipe ingredients retain an independent immutable copy so correcting a
+    remembered mapping never changes a historical recipe version.
+    """
+
+    __tablename__ = "household_food_unit_conversion"
+    __table_args__ = (
+        CheckConstraint(
+            "nutrition_basis_amount_per_unit > 0",
+            name="ck_household_food_unit_conversion_amount_positive",
+        ),
+        CheckConstraint(
+            "nutrition_basis_unit IN ('g', 'ml')",
+            name="ck_household_food_unit_conversion_basis_unit",
+        ),
+        CheckConstraint(
+            "nutrition_conversion_source IN ('package', 'serving', 'manual')",
+            name="ck_household_food_unit_conversion_source",
+        ),
+        Index(
+            "ix_household_food_unit_conversion_lookup",
+            "household_id",
+            "food_record_id",
+            "nutrition_input_unit",
+            "created_at",
+        ),
+    )
+
+    household_id: Mapped[str] = mapped_column(
+        ForeignKey("household.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    food_record_id: Mapped[str] = mapped_column(
+        ForeignKey("food_record.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    nutrition_input_unit: Mapped[str] = mapped_column(String(40), nullable=False)
+    nutrition_basis_amount_per_unit: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    nutrition_basis_unit: Mapped[str] = mapped_column(String(20), nullable=False)
+    nutrition_conversion_source: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class FoodAlias(IdMixin, Base):

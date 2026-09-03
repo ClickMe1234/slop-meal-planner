@@ -367,6 +367,146 @@ def test_shopping_sources_combine_and_recipe_unit_preview(client, owner, session
         assert all(row.shopping_measurement_overridden for row in rows)
 
 
+def test_shopping_change_keeps_incomplete_custom_draft_as_current_editor_revision(
+    client, owner, session_factory
+):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id, calorie_target=100)
+    food = _create_food(client, owner, "Carrots")
+    headers = _headers(owner)
+    created = client.post(
+        "/api/v1/recipes",
+        headers=headers,
+        json={
+            "title": "Custom carrots",
+            "source_type": "custom",
+            "yield_servings": 1,
+            "meal_types": ["dinner"],
+            "ingredients": [{
+                "original_text": "1 can carrots",
+                "quantity": 1,
+                "unit": "can",
+                "food_phrase": "carrots",
+                "food_record_id": food["id"],
+                "nutrition_input_unit": "can",
+                "nutrition_basis_amount_per_unit": 100,
+                "nutrition_basis_unit": "g",
+                "nutrition_conversion_source": "manual",
+                "included": True,
+            }],
+        },
+    )
+    assert created.status_code == 201, created.text
+    recipe = created.json()
+    assert recipe["nutrition_method"] == "complete"
+    complete_version_id = recipe["recipe_version_id"]
+
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [{
+            "meal_date": "2026-08-03",
+            "meal_type": "dinner",
+            "participant_member_ids": [member_id],
+        }],
+    )
+    accepted = client.post(f"/api/v1/meal-plans/{plan['id']}/accept", headers=headers)
+    assert accepted.status_code == 200, accepted.text
+    shopping = client.get("/api/v1/shopping-lists/active").json()
+    assert len(shopping["items"]) == 1
+
+    draft = client.put(
+        f"/api/v1/recipes/{recipe['id']}",
+        headers=headers,
+        json={
+            "expected_version": recipe["version"],
+            "title": "Custom carrots draft correction",
+            "yield_servings": None,
+            "meal_types": [],
+            "ingredients": [{
+                "original_text": "1 can carrots",
+                "quantity": 1,
+                "unit": "can",
+                "food_phrase": "carrots",
+                "food_record_id": food["id"],
+                "nutrition_input_unit": "can",
+                "nutrition_basis_amount_per_unit": 100,
+                "nutrition_basis_unit": "g",
+                "nutrition_conversion_source": "manual",
+                "included": True,
+            }],
+        },
+    )
+    assert draft.status_code == 200, draft.text
+    assert draft.json()["nutrition_method"] is None
+
+    regenerated = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [{
+            "meal_date": "2026-08-04",
+            "meal_type": "dinner",
+            "participant_member_ids": [member_id],
+        }],
+    )
+    with session_factory() as db:
+        generated_batch = db.scalar(
+            select(MealBatch).where(MealBatch.meal_plan_id == regenerated["id"])
+        )
+        assert generated_batch.recipe_version_id == complete_version_id
+
+    preview = client.post(
+        f"/api/v1/shopping-lists/{shopping['id']}/ingredient-change/preview",
+        json={
+            "item_ids": [shopping["items"][0]["id"]],
+            "target_name": "trimmed carrots",
+            "target_unit": "g",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    conversion = preview.json()["conversions"][0]
+    assert conversion["manual_quantity_required"] is True
+
+    changed = client.post(
+        f"/api/v1/shopping-lists/{shopping['id']}/ingredient-change",
+        headers=headers,
+        json={
+            "expected_list_version": shopping["version"],
+            "item_ids": [shopping["items"][0]["id"]],
+            "target_name": "trimmed carrots",
+            "target_unit": "g",
+            "manual_conversions": [{
+                "recipe_ingredient_id": conversion["recipe_ingredient_id"],
+                "quantity": 100,
+            }],
+        },
+    )
+    assert changed.status_code == 200, changed.text
+
+    with session_factory() as db:
+        versions = db.scalars(
+            select(RecipeVersion)
+            .where(RecipeVersion.recipe_id == recipe["id"])
+            .order_by(RecipeVersion.version_number)
+        ).all()
+        assert [version.version_number for version in versions] == [1, 2, 3]
+        assert versions[1].title == "Custom carrots draft correction"
+        assert versions[1].is_shopping_snapshot is False
+        assert versions[-1].is_shopping_snapshot is True
+        assert versions[-1].ingredients[0].food_phrase == "trimmed carrots"
+        assert versions[-1].ingredients[0].unit == "g"
+        assert versions[-1].ingredients[0].nutrition_input_unit is None
+        assert versions[-1].ingredients[0].nutrition_basis_amount_per_unit is None
+
+    current = client.get(f"/api/v1/recipes/{recipe['id']}")
+    assert current.status_code == 200, current.text
+    assert current.json()["version_number"] == 2
+    assert current.json()["title"] == "Custom carrots draft correction"
+    assert current.json()["ingredients"][0]["unit"] == "can"
+
+
 def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list(
     client, owner, session_factory
 ):

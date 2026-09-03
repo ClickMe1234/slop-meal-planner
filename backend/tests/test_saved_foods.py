@@ -167,8 +167,10 @@ def test_open_food_facts_barcode_can_be_previewed_and_saved(client, owner, monke
             "image_url": "https://images.openfoodfacts.org/example-beans.jpg",
             "package_amount": "400",
             "package_unit": "g",
+            "quantity": "400 g can",
             "serving_amount": "200",
             "serving_unit": "g",
+            "serving_size": "200 g (half can)",
         },
     )
     monkeypatch.setattr(food_routes, "_lookup_barcode", lambda _: food)
@@ -176,6 +178,8 @@ def test_open_food_facts_barcode_can_be_previewed_and_saved(client, owner, monke
     preview = client.get("/api/v1/food-lookups/barcode/5000123456789")
     assert preview.status_code == 200, preview.text
     assert Decimal(preview.json()["package_amount"]) == 400
+    assert preview.json()["package_description"] == "400 g can"
+    assert preview.json()["serving_description"] == "200 g (half can)"
     assert preview.json()["complete"] is True
     assert preview.json()["image_url"] == "https://images.openfoodfacts.org/example-beans.jpg"
 
@@ -187,6 +191,8 @@ def test_open_food_facts_barcode_can_be_previewed_and_saved(client, owner, monke
     assert saved.status_code == 201, saved.text
     assert saved.json()["barcode"] == "5000123456789"
     assert Decimal(saved.json()["serving_amount"]) == 200
+    assert saved.json()["package_description"] == "400 g can"
+    assert saved.json()["serving_description"] == "200 g (half can)"
     assert saved.json()["attribution"] == "Product data from Open Food Facts (ODbL)"
     assert saved.json()["image_url"] == "https://images.openfoodfacts.org/example-beans.jpg"
 

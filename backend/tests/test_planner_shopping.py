@@ -351,6 +351,65 @@ def test_shopping_keeps_readable_required_amount_but_rounds_purchase_up(db):
     assert item.purchase_quantity == Decimal("431")
 
 
+def test_shopping_keeps_recipe_cans_when_nutrition_uses_a_gram_snapshot(db):
+    household = Household(name="Home")
+    db.add(household)
+    db.flush()
+    food = FoodRecord(
+        provider="test", provider_record_id="beans-cans", dataset_version="1", name="Beans"
+    )
+    recipe = Recipe(household_id=household.id, title="Bean chilli", source_type="custom")
+    db.add_all([food, recipe])
+    db.flush()
+    version = RecipeVersion(
+        recipe_id=recipe.id, version_number=1, title=recipe.title, yield_servings=2
+    )
+    db.add(version)
+    db.flush()
+    db.add(
+        RecipeIngredient(
+            recipe_version_id=version.id,
+            position=0,
+            original_text="2 cans beans",
+            quantity=2,
+            unit="can",
+            quantity_grams=800,
+            nutrition_input_unit="can",
+            nutrition_basis_amount_per_unit=400,
+            nutrition_basis_unit="g",
+            nutrition_conversion_source="package",
+            food_phrase="Beans",
+            food_record_id=food.id,
+        )
+    )
+    plan = MealPlan(
+        household_id=household.id,
+        name="Week",
+        start_date=date(2026, 7, 20),
+        end_date=date(2026, 7, 20),
+    )
+    db.add(plan)
+    db.flush()
+    db.add(
+        MealBatch(
+            meal_plan_id=plan.id,
+            recipe_version_id=version.id,
+            servings=2,
+            planned_cook_date=plan.start_date,
+        )
+    )
+    db.flush()
+
+    shopping = build_shopping_list(db, household.id, plan.id, "Week shopping")
+    item = db.scalar(
+        select(ShoppingItem).where(ShoppingItem.shopping_list_id == shopping.id)
+    )
+
+    assert item.exact_quantity == Decimal("2")
+    assert item.purchase_quantity == Decimal("2")
+    assert item.unit == "can"
+
+
 def test_shopping_combines_reviewed_name_with_stale_parser_identity(db):
     household = Household(name="Home")
     db.add(household)

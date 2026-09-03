@@ -6,8 +6,9 @@ from difflib import SequenceMatcher
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import FoodRecord, PantryLot, Recipe, RecipeVersion
+from ..models import FoodRecord, PantryLot, Recipe
 from .regional_ingredients import canonical_ingredient_key, convert_ingredient_text
+from .recipe_versions import latest_editor_recipe_version
 
 
 def pantry_name_similarity(db: Session, pantry_name: str, ingredient_name: str) -> float:
@@ -48,12 +49,7 @@ def pantry_match_candidates(
     ).all()
     by_food: dict[str, dict[str, object]] = {}
     for recipe in recipes:
-        version = db.scalar(
-            select(RecipeVersion)
-            .where(RecipeVersion.recipe_id == recipe.id)
-            .order_by(RecipeVersion.version_number.desc())
-            .limit(1)
-        )
+        version = latest_editor_recipe_version(db, recipe.id)
         if version is None:
             continue
         for ingredient in version.ingredients:

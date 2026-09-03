@@ -99,6 +99,32 @@ describe('recipe nutrition preview', () => {
 
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/recipe-discovery/nutrition-preview?url=https%3A%2F%2Fexample.org%2Frecipe&refresh=true')
   })
+
+  it('sends transient custom-recipe rows to the side-effect-free preview endpoint', async () => {
+    sessionStorage.setItem('slop-csrf', 'current-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({
+      complete: false,
+      batch_values: {},
+      per_serving_values: {},
+      issues: [{ code: 'missing_match', message: 'Choose a food record.', client_id: 'beans' }],
+      ingredients: [],
+    }))
+    const { api } = await import('./client')
+
+    await api.previewRecipeNutrition({
+      yield_servings: 4,
+      ingredients: [{ client_id: 'beans', original_text: '2 cans chickpeas', quantity: 2, unit: 'can', included: true }],
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/recipes/nutrition-preview', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({ 'X-CSRF-Token': 'current-token' }),
+      body: JSON.stringify({
+        yield_servings: 4,
+        ingredients: [{ client_id: 'beans', original_text: '2 cans chickpeas', quantity: 2, unit: 'can', included: true }],
+      }),
+    }))
+  })
 })
 
 describe('recipe deletion', () => {

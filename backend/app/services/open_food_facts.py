@@ -172,7 +172,10 @@ def lookup_product(
     finally:
         if owns_client:
             http.close()
-    if payload.get("status") not in {"success", 1, "1"} or not isinstance(payload.get("product"), Mapping):
+    # The v3 product endpoint returns the product object directly without the
+    # legacy `status` field used by the older API.  A product mapping is the
+    # authoritative success signal for both response shapes.
+    if not isinstance(payload.get("product"), Mapping):
         raise OpenFoodFactsNotFound("No Open Food Facts product matched that barcode")
     product = payload["product"]
     version = f"Open Food Facts product {product.get('last_modified_t') or 'live'}"
