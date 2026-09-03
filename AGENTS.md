@@ -11,6 +11,18 @@
 - Use the current Codex agent directly for implementation work unless the user explicitly requests delegation or a multi-agent workflow.
 - Do not require the `sol-luna-router` skill or a separate reasoning-level confirmation before starting implementation.
 
+## Versioning and releases
+
+- Treat a requested application release or version bump as a SemVer release.
+  The `VERSION` file is the source of truth; use `MAJOR.MINOR.PATCH` (so this
+  requested 1.4 release is `1.4.0`).
+- For every application release, update `VERSION`, frontend `package.json` and
+  lockfile, backend `pyproject.toml`, backend default API/user-agent versions,
+  README, CHANGELOG, and immutable deployment-image references together. Add a
+  dated release entry that describes the user-visible change.
+- Run the release-metadata test before opening the PR. Do not leave a version
+  bump only in a package manifest or rely on a container tag to imply it.
+
 ## UI implementation
 
 - Match the existing visual language before inventing a new pattern. Reuse the

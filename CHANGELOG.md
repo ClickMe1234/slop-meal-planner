@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.0 - 2026-09-03
+
+- Add editable per-serving nutrition for imported recipes and a draft-friendly,
+  unit-aware nutrition editor for custom recipes.
+- Let custom-recipe ingredients retain their selected branded food match,
+  calculate live nutrition from confirmed package/count equivalents, and keep
+  incomplete nutrition revisions safely as drafts.
+- Restore Open Food Facts v3 barcode lookups and simplify resolved ingredient
+  rows to the matched product and selected-amount calories.
+
 ## 1.3.4 - 2026-08-21
 
 - Add an explicit recovery action for cooked batches whose historical method

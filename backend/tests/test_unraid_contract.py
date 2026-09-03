@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "deploy" / "unraid-template.xml"
+VERSION = Path(__file__).resolve().parents[2] / "VERSION"
 
 
 def test_unraid_template_matches_production_runtime_contract():
@@ -12,7 +13,8 @@ def test_unraid_template_matches_production_runtime_contract():
     configs = {config.attrib["Target"]: config for config in root.findall("Config")}
 
     assert root.findtext("Name") == "Slop Meal Planner"
-    assert root.findtext("Repository") == "ghcr.io/clickme1234/slop-meal-planner:1.3.4"
+    version = VERSION.read_text(encoding="utf-8").strip()
+    assert root.findtext("Repository") == f"ghcr.io/clickme1234/slop-meal-planner:{version}"
     assert root.findtext("Network") == "Bridge"
     assert root.findtext("PostArgs") == ""
     assert root.findtext("WebUI") == "https://[IP]:[PORT:8000]/"
