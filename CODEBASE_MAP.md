@@ -2,7 +2,7 @@
 
 This is the orientation guide for developers and agents working in Slop Meal
 Planner. It describes the repository as inspected on 15 August 2026, at
-release 1.3.2. The source files and tests are authoritative when this guide
+release 1.4.0. The source files and tests are authoritative when this guide
 and an implementation disagree; update this document when a structural
 change makes it misleading.
 
@@ -1011,6 +1011,10 @@ only tests are not sufficient for new controls.
 - .github/workflows/container.yml verifies pull-request images and publishes
   immutable release/SHA or latest images to GHCR on main/release events.
 - .github/workflows/dev.yml builds/publishes the dev image on the dev branch.
+- `VERSION` is the release source of truth. A release bump keeps it aligned
+  with the frontend and backend package versions, default API/user-agent
+  versions, deployment image references, README, and CHANGELOG; the backend
+  release-metadata test enforces that contract.
 
 The expected local validation for a normal change is:
 
