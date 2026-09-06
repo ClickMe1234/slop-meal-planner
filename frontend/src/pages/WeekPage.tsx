@@ -1,7 +1,7 @@
 import { BookOpenText, Check, ChefHat, ChevronLeft, ChevronRight, Clock3, ExternalLink, PencilLine, RefreshCw, Scale } from 'lucide-react'
 import { useMemo, useState, type CSSProperties } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { NutritionRings } from '../components/Nutrition'
 import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader } from '../components/ui'
 import { demoRecipes, demoWeek } from '../data/demo'

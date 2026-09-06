@@ -1,4 +1,5 @@
 import type { JobStatus } from '../types'
+import { setOfflineShoppingScope } from '../lib/offlineShopping'
 
 const baseUrl = import.meta.env.VITE_API_URL ?? ''
 const csrfStorageKey = 'slop-csrf'
@@ -39,6 +40,12 @@ export interface ApiNutritionIssue {
   violations: ApiNutritionViolation[]
 }
 
+export interface ApiFieldError {
+  loc: Array<string | number>
+  msg: string
+  type?: string
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -46,6 +53,7 @@ export class ApiError extends Error {
     public code?: string,
     public actions: ApiAction[] = [],
     public issues: ApiNutritionIssue[] = [],
+    public fieldErrors: ApiFieldError[] = [],
   ) {
     super(message)
   }
@@ -83,11 +91,12 @@ function send(path: string, options: RequestInit | undefined, method: string, to
 
 async function readProblem(response: Response) {
   return response.json().catch(() => null) as Promise<{
-    detail?: string
+    detail?: string | ApiFieldError[]
     code?: string
     action?: ApiAction
     actions?: ApiAction[]
     issues?: ApiNutritionIssue[]
+    field_errors?: ApiFieldError[]
   } | null>
 }
 
@@ -107,7 +116,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     problem = response.ok ? null : await readProblem(response)
   }
   if (!response.ok) {
-    throw new ApiError(response.status, problem?.detail ?? 'The request could not be completed.', problem?.code, problem?.actions ?? (problem?.action ? [problem.action] : []), problem?.issues ?? [])
+    const fieldErrors = problem?.field_errors ?? (Array.isArray(problem?.detail) ? problem.detail : [])
+    const detail = typeof problem?.detail === 'string'
+      ? problem.detail
+      : fieldErrors.map(error => error.msg).filter(Boolean).join(' ')
+    throw new ApiError(response.status, detail || 'The request could not be completed.', problem?.code, problem?.actions ?? (problem?.action ? [problem.action] : []), problem?.issues ?? [], fieldErrors)
   }
   return response.status === 204 ? (undefined as T) : (response.json() as Promise<T>)
 }
@@ -154,6 +167,7 @@ export const api = {
     }>('/auth/setup', { method: 'POST', body: JSON.stringify(payload) })
     csrfToken = result.csrf_token
     sessionStorage.setItem(csrfStorageKey, csrfToken)
+    setOfflineShoppingScope(result.user.id)
     return result
   },
   login: async (username: string, password: string, rememberMe = true) => {
@@ -171,6 +185,7 @@ export const api = {
     })
     csrfToken = result.csrf_token
     sessionStorage.setItem(csrfStorageKey, csrfToken)
+    setOfflineShoppingScope(result.user.id)
     return result
   },
   logout: async () => {
@@ -182,8 +197,8 @@ export const api = {
     csrfToken = null
     sessionStorage.removeItem(csrfStorageKey)
   },
-  me: () =>
-    request<{
+  me: async () => {
+    const result = await request<{
       id: string
       username: string
       role: 'owner' | 'collaborator'
@@ -193,7 +208,10 @@ export const api = {
   method_view_preference?: MethodViewPreference
   measurement_system?: MeasurementSystem
   method_tutorial_version_seen?: number
-    }>('/auth/me'),
+    }>('/auth/me')
+    setOfflineShoppingScope(result.id)
+    return result
+  },
   updateMe: (preferences: IngredientLocale | UserPreferenceUpdate) =>
     request('/auth/me', {
       method: 'PATCH',
@@ -439,13 +457,20 @@ export const api = {
       purchase_quantity: number
       unit: string
       category: string
+      operation_id?: string
     },
   ) =>
     request<BackendShoppingItem>(`/shopping-lists/${listId}/items`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  addPurchasedToPantry: (listId: string) => request<BackendPantryItem[]>(`/shopping-lists/${listId}/add-purchased-to-pantry`, { method: 'POST' }),
+  addPurchasedToPantry: (
+    listId: string,
+    payload: { expected_list_version: number; operation_id: string },
+  ) => request<BackendPantryItem[]>(`/shopping-lists/${listId}/add-purchased-to-pantry`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   generatePlan: (payload: Record<string, unknown>) =>
     request<BackendPlan>('/meal-plans/generate', {
       method: 'POST',
@@ -718,6 +743,13 @@ export interface BackendRecipeDetail extends BackendRecipe {
     shopping_list_rebuilt: boolean
     shopping_list_id?: string
     cooked_batches_unchanged: number
+    warnings: Array<{
+      plan_id: string
+      code: string
+      detail: string
+      actions?: ApiAction[]
+      issues?: ApiNutritionIssue[]
+    }>
   }
 }
 
