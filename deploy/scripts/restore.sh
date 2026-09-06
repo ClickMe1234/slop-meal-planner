@@ -2,8 +2,13 @@
 set -eu
 umask 077
 
-if [ "${1:-}" != "--confirm" ] || [ -z "${2:-}" ]; then
-  echo "Usage: restore.sh --confirm /backups/<daily|weekly|monthly>/<timestamp>" >&2
+if [ "${1:-}" != "--confirm" ] && [ "${1:-}" != "--preflight" ]; then
+  echo "Usage: restore.sh --preflight|--confirm /backups/<daily|weekly|monthly>/<timestamp>" >&2
+  exit 64
+fi
+
+if [ -z "${2:-}" ]; then
+  echo "A backup directory is required" >&2
   exit 64
 fi
 
@@ -12,6 +17,18 @@ backup_dir="$2"
 : "${PGUSER:?PGUSER is required}"
 : "${PGDATABASE:?PGDATABASE is required}"
 : "${DATA_DIR:?DATA_DIR is required}"
+
+lock_file="${BACKUP_LOCK_FILE:-/backups/.backup.lock}"
+case "$lock_file" in
+  /*) ;;
+  *) echo "BACKUP_LOCK_FILE must be an absolute path" >&2; exit 64 ;;
+esac
+mkdir -p "$(dirname "$lock_file")"
+exec 9>"$lock_file"
+if ! flock -n 9; then
+  echo "Another backup or restore is already running" >&2
+  exit 75
+fi
 
 case "$PGDATABASE:$PGUSER" in
   *[!A-Za-z0-9_:]*) echo "Database and role names may contain only letters, numbers, and underscores" >&2; exit 64 ;;
@@ -50,6 +67,14 @@ pg_restore --list "$backup_dir/database.dump" >/dev/null
 # data.  Backups created by Slop use paths below `.`; the validator rejects
 # traversal, absolute paths, unsafe links, and special files.
 python -m app.restore_validation "$backup_dir/data.tar.gz"
+
+if [ "$1" = "--preflight" ]; then
+  # Keep this check destructive-operation free.  restore-stack.sh invokes it
+  # while the application is still serving so an invalid archive cannot cause
+  # unnecessary downtime.
+  echo "Restore preflight completed successfully"
+  exit 0
+fi
 
 echo "Restoring database $PGDATABASE from $backup_dir"
 psql --dbname=postgres --set=ON_ERROR_STOP=1 --command="

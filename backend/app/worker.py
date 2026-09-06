@@ -5,12 +5,13 @@ import asyncio
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import hashlib
 import os
 from urllib.parse import urlparse
 
 import httpx
 from celery import Celery
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from .db import SessionLocal
 from .discovery import canonicalize_url, default_registry, extract_recipe
@@ -52,6 +53,10 @@ celery_app.conf.update(
         "backfill-recipe-publisher-metadata": {
             "task": "app.worker.backfill_recipe_publisher_metadata",
             "schedule": 10 * 60,
+        },
+        "recover-stale-recipe-imports": {
+            "task": "app.worker.recover_stale_recipe_imports",
+            "schedule": 5 * 60,
         },
     },
 )
@@ -190,7 +195,69 @@ def backfill_recipe_publisher_metadata(batch_size: int = 10) -> dict[str, int]:
     }
 
 
-@celery_app.task(bind=True, autoretry_for=(httpx.TransportError,), retry_backoff=True, max_retries=3)
+def _import_transient(exc: BaseException) -> bool:
+    """Return whether an import failure is safe to replay.
+
+    Discovery fetches are the only external side effect in an import.  Parser
+    and database errors must not be replayed automatically: doing so can hide
+    malformed publisher data and, more importantly, makes it much harder to
+    reason about an import which has already committed part of its work.
+    """
+
+    return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
+
+
+def _import_lock_key(household_id: str, canonical_url: str) -> int:
+    """Produce a stable signed PostgreSQL advisory-lock key for one URL."""
+
+    digest = hashlib.blake2b(
+        f"recipe-import:{household_id}:{canonical_url}".encode("utf-8"),
+        digest_size=8,
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+def _lock_import_if_supported(db, household_id: str, canonical_url: str) -> None:
+    """Serialise duplicate imports on PostgreSQL without changing the schema.
+
+    SQLite is deliberately left alone because its test fixtures and local demo
+    mode do not expose PostgreSQL advisory locks.  The duplicate query remains
+    correct there for sequential/retried deliveries.
+    """
+
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": _import_lock_key(household_id, canonical_url)},
+        )
+
+
+def _mark_import_failure(job_id: str, exc: BaseException, *, retrying: bool) -> None:
+    """Record failure in a clean transaction after rolling back recipe work."""
+
+    with SessionLocal() as failure_db:
+        failed_job = failure_db.get(Job, job_id)
+        if failed_job is None:
+            return
+        if retrying:
+            failed_job.status = JobStatus.QUEUED.value
+            failed_job.stage = "retrying"
+            failed_job.error_code = "IMPORT_RETRYING"
+            failed_job.error_detail = "The publisher could not be reached; retrying automatically."
+            failed_job.progress = 10
+        else:
+            failed_job.status = JobStatus.FAILED.value
+            failed_job.stage = "failed"
+            failed_job.error_code = "IMPORT_FAILED"
+            failed_job.error_detail = (
+                "The recipe could not be imported. Check the source and retry; "
+                "operators can inspect worker logs for the underlying error."
+            )
+        failure_db.commit()
+
+
+@celery_app.task(bind=True, autoretry_for=(httpx.TransportError, TimeoutError, ConnectionError), retry_backoff=True, retry_jitter=True, max_retries=4)
 def process_recipe_import(self, job_id: str) -> dict:
     with SessionLocal() as db:
         job = db.get(Job, job_id)
@@ -208,6 +275,10 @@ def process_recipe_import(self, job_id: str) -> dict:
             job.progress = 45
             db.commit()
 
+            # Hold a transaction-scoped lock across the duplicate check and
+            # recipe creation.  Without this, two deliveries for the same URL
+            # can both observe an empty library and create two versions.
+            _lock_import_if_supported(db, job.household_id, extracted.canonical_url)
             existing = db.scalar(
                 select(Recipe).where(
                     Recipe.household_id == job.household_id,
@@ -315,9 +386,73 @@ def process_recipe_import(self, job_id: str) -> dict:
             db.commit()
             return job.result
         except Exception as exc:
-            job.status = JobStatus.FAILED.value
-            job.stage = "failed"
-            job.error_code = "IMPORT_FAILED"
-            job.error_detail = str(exc)[:1000]
-            db.commit()
+            # Recipe/version/ingredient work is intentionally uncommitted at
+            # this point.  Roll it back before recording the job outcome in a
+            # fresh session; otherwise a parser failure leaves a partial
+            # recipe beside a failed job.
+            db.rollback()
+            retrying = _import_transient(exc) and getattr(self.request, "retries", 0) < self.max_retries
+            _mark_import_failure(job_id, exc, retrying=retrying)
             raise
+
+
+@celery_app.task
+def recover_stale_recipe_imports(
+    stale_minutes: int = 30,
+    max_recoveries: int = 3,
+) -> dict[str, int]:
+    """Requeue imports abandoned by a worker or broker outage.
+
+    The job payload is the only persisted metadata available without a schema
+    migration, so recovery count is kept under a private key.  A job is only
+    submitted after its status has been committed as queued.  If the broker is
+    still unavailable it remains visible and will be picked up by the next
+    scheduler pass rather than being lost.
+    """
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max(1, stale_minutes))
+    recovered = failed = submitted = 0
+    job_ids: list[str] = []
+    with SessionLocal() as db:
+        jobs = db.scalars(
+            select(Job)
+            .where(
+                Job.kind == "recipe_import",
+                Job.status.in_((JobStatus.QUEUED.value, JobStatus.RUNNING.value)),
+                Job.updated_at < cutoff,
+            )
+            .order_by(Job.updated_at, Job.id)
+            .limit(100)
+            .with_for_update(skip_locked=True)
+        ).all()
+        for job in jobs:
+            payload = dict(job.payload or {})
+            attempts = int(payload.get("_stale_recovery_count", 0))
+            if attempts >= max_recoveries:
+                job.status = JobStatus.FAILED.value
+                job.stage = "failed"
+                job.error_code = "IMPORT_STALE"
+                job.error_detail = "The import worker did not complete this job. Start a new import."
+                failed += 1
+                continue
+            payload["_stale_recovery_count"] = attempts + 1
+            job.payload = payload
+            job.status = JobStatus.QUEUED.value
+            job.stage = "requeued"
+            job.error_code = "IMPORT_REQUEUED"
+            job.error_detail = "The import worker was unavailable; the job is being retried."
+            job.progress = 0
+            job_ids.append(job.id)
+            recovered += 1
+        db.commit()
+
+    for job_id in job_ids:
+        try:
+            process_recipe_import.delay(job_id)
+            submitted += 1
+        except Exception:
+            # The persisted queued job is the recovery record.  Do not raise
+            # here: one broker outage must not prevent other stale jobs from
+            # being inspected on the next scheduler pass.
+            continue
+    return {"recovered": recovered, "submitted": submitted, "failed": failed}

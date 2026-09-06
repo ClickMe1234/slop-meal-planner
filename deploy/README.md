@@ -161,6 +161,9 @@ matching records already present. Active sessions and encrypted integration
 credentials are never imported, so the target installation's login and secret
 configuration remain in place. The feature can inspect older database archives;
 the imported copy is migrated inside a temporary database before it is read.
+Restored plans and shopping lists are kept as inactive history. Live pantry
+reservations are never copied into the target installation, and omitted
+optional links are cleared during the merge.
 
 The PostgreSQL account used by Slop must be allowed to create and drop a
 temporary database for this operation. If the target uses a restricted
@@ -216,7 +219,10 @@ docker compose --env-file deploy/.env -f deploy/compose.yaml --profile maintenan
 ```
 
 For a restore, use `deploy/scripts/restore-stack.sh <tier>/<timestamp>`. It
-stops web, worker, and scheduler, validates the archive, restores the database
-and `/data`, and starts the application only after a successful restore. Keep an
-additional backup copy on another physical device; Unraid parity is not a
+first runs a non-destructive preflight while the application is available,
+then stops web, worker, and scheduler, restores the database and `/data`, and
+starts the application only after a successful restore. The maintenance role
+runs from the application image so its Python archive validator and matching
+PostgreSQL clients are present. Backup and restore share an advisory lock. Keep
+an additional backup copy on another physical device; Unraid parity is not a
 backup.

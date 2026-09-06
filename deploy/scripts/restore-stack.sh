@@ -22,6 +22,9 @@ compose() {
   docker compose --env-file "$deploy_dir/.env" -f "$deploy_dir/compose.yaml" "$@"
 }
 
+echo "Running restore preflight while application services are still available"
+compose --profile maintenance run --rm restore --preflight "/backups/$relative_backup"
+
 echo "Stopping application services before destructive restore"
 compose stop web worker scheduler
 

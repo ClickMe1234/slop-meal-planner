@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import hashlib
+import logging
 import secrets
 import subprocess
 import threading
@@ -32,6 +33,7 @@ from ..config import get_settings
 from ..discovery.errors import InvalidUrlError
 from ..discovery.urls import canonicalize_url
 from ..errors import DomainError
+from .backups import _backup_lock
 from ..models import (
     FoodAlias,
     FoodNutrient,
@@ -50,6 +52,7 @@ from ..models import (
     PantryLot,
     PantryReservation,
     PantryTransaction,
+    PlanStatus,
     PortionAllocation,
     Recipe,
     RecipeIngredient,
@@ -68,6 +71,7 @@ from ..models import (
 
 ARCHIVE_RE = re.compile(r"^(daily|weekly|monthly)/([0-9]{8}-[0-9]{6})$")
 RESTORE_LOCK = threading.Lock()
+LOGGER = logging.getLogger(__name__)
 
 COMPONENTS = (
     "household",
@@ -177,6 +181,12 @@ class ArchiveFiles:
 class SourceBundle:
     household: dict[str, Any]
     tables: dict[str, list[dict[str, Any]]]
+
+
+def _trace_id() -> str:
+    """Return a short non-sensitive identifier for operator diagnostics."""
+
+    return uuid.uuid4().hex[:12]
 
 
 def _backup_root() -> Path:
@@ -306,6 +316,8 @@ class _TemporaryDatabase:
         self.url = _postgres_url()
         self.engine = None
         self.session_factory = None
+        self.session: Session | None = None
+        self.created = False
 
     def __enter__(self) -> Session:
         maintenance_url = self.url.set(database="postgres")
@@ -314,6 +326,7 @@ class _TemporaryDatabase:
             with maintenance_engine.connect() as connection:
                 connection = connection.execution_options(isolation_level="AUTOCOMMIT")
                 connection.execute(text(f'CREATE DATABASE "{self.name}"'))
+                self.created = True
         except Exception as exc:
             raise DomainError(
                 "RESTORE_DATABASE_PERMISSION",
@@ -321,75 +334,112 @@ class _TemporaryDatabase:
                 503,
             ) from exc
         finally:
-            maintenance_engine.dispose()
-
-        result = subprocess.run(
-            [
-                "pg_restore",
-                "--dbname",
-                self.name,
-                "--no-owner",
-                "--no-privileges",
-                "--exit-on-error",
-                str(self.dump),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            env=_postgres_environment(self.url, self.name),
-        )
-        if result.returncode != 0:
-            self.close()
-            detail = (result.stderr or result.stdout).strip().splitlines()
-            raise DomainError(
-                "RESTORE_ARCHIVE_INVALID",
-                (detail[-1] if detail else "The database archive could not be opened.")[:500],
-                422,
-            )
-
-        backend_dir = Path(__file__).resolve().parents[2]
-        migration_environment = _postgres_environment(self.url, self.name)
-        migration_environment["MEAL_PLANNER_DATABASE_URL"] = self.url.set(
-            database=self.name
-        ).render_as_string(hide_password=False)
-        migration = subprocess.run(
-            ["alembic", "-c", "alembic.ini", "upgrade", "head"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=180,
-            cwd=backend_dir,
-            env=migration_environment,
-        )
-        if migration.returncode != 0:
-            self.close()
-            detail = (migration.stderr or migration.stdout).strip().splitlines()
-            raise DomainError(
-                "RESTORE_SCHEMA_UNSUPPORTED",
-                (detail[-1] if detail else "The backup schema could not be upgraded for inspection.")[:500],
-                422,
-            )
-
-        self.engine = create_engine(self.url.set(database=self.name), pool_pre_ping=True)
-        self.session_factory = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False)
-        return self.session_factory()
-
-    def close(self) -> None:
-        if self.engine is not None:
-            self.engine.dispose()
-            self.engine = None
+            try:
+                maintenance_engine.dispose()
+            except Exception:
+                if self.created:
+                    self.close()
+                raise
         try:
-            subprocess.run(
-                ["dropdb", "--if-exists", "--force", self.name],
+            result = subprocess.run(
+                [
+                    "pg_restore",
+                    "--dbname",
+                    self.name,
+                    "--no-owner",
+                    "--no-privileges",
+                    "--exit-on-error",
+                    str(self.dump),
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=60,
-                env=_postgres_environment(self.url, "postgres"),
+                timeout=300,
+                env=_postgres_environment(self.url, self.name),
             )
-        except OSError:
-            pass
+            if result.returncode != 0:
+                raise DomainError(
+                    "RESTORE_ARCHIVE_INVALID",
+                    "The database archive could not be opened.",
+                    422,
+                )
+
+            backend_dir = Path(__file__).resolve().parents[2]
+            migration_environment = _postgres_environment(self.url, self.name)
+            migration_environment["MEAL_PLANNER_DATABASE_URL"] = self.url.set(
+                database=self.name
+            ).render_as_string(hide_password=False)
+            migration = subprocess.run(
+                ["alembic", "-c", "alembic.ini", "upgrade", "head"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                cwd=backend_dir,
+                env=migration_environment,
+            )
+            if migration.returncode != 0:
+                raise DomainError(
+                    "RESTORE_SCHEMA_UNSUPPORTED",
+                    "The backup schema could not be upgraded for inspection.",
+                    422,
+                )
+
+            self.engine = create_engine(self.url.set(database=self.name), pool_pre_ping=True)
+            self.session_factory = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False)
+            self.session = self.session_factory()
+            return self.session
+        except subprocess.TimeoutExpired as exc:
+            raise DomainError(
+                "RESTORE_TIMEOUT",
+                "The backup inspection timed out before it completed.",
+                504,
+            ) from exc
+        except DomainError:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DomainError(
+                "RESTORE_UNAVAILABLE",
+                "The backup inspection runtime is unavailable.",
+                503,
+            ) from exc
+        except Exception as exc:
+            raise DomainError(
+                "RESTORE_UNAVAILABLE",
+                "The backup inspection could not be prepared.",
+                503,
+            ) from exc
+        finally:
+            # __enter__ is not paired with __exit__ when setup raises.  Always
+            # drop a database which has already been created, including a
+            # timeout during pg_restore or migration.
+            if self.session is None and self.created:
+                self.close()
+
+    def close(self) -> None:
+        if self.session is not None:
+            try:
+                self.session.rollback()
+            finally:
+                self.session.close()
+                self.session = None
+        if self.engine is not None:
+            self.engine.dispose()
+            self.engine = None
+        if self.created:
+            try:
+                subprocess.run(
+                    ["dropdb", "--if-exists", "--force", self.name],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=_postgres_environment(self.url, "postgres"),
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                LOGGER.warning("Temporary restore database cleanup failed", extra={"restore_db": self.name})
+            finally:
+                self.created = False
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.close()
@@ -568,6 +618,7 @@ def preview_archive(archive_value: str, source_household_id: str | None = None) 
         households = source_db.scalars(select(Household).order_by(Household.created_at, Household.id)).all()
         bundle = _load_source_bundle(source_db, source_household_id)
         selected_household = bundle.household
+        selected_components = set(COMPONENTS)
         return {
             **archive.as_dict(),
             "households": [
@@ -587,9 +638,11 @@ def preview_archive(archive_value: str, source_household_id: str | None = None) 
                 }
                 for key in COMPONENTS
             ],
+            "dependencies": _restore_dependencies(selected_components, bundle.tables),
             "excluded": [
                 {"key": "sessions", "label": "Active sessions", "reason": "Never imported; sign in with the target installation."},
                 {"key": "integrations", "label": "API credentials", "reason": "Never imported; encrypted secrets stay on the target installation."},
+                {"key": "pantry_reservations", "label": "Live pantry reservations", "reason": "Never imported; reservations belong to the target plan and inventory."},
             ],
         }
 
@@ -610,11 +663,57 @@ def _component_tables(components: set[str], tables: dict[str, list[dict[str, Any
         include.update({"shopping_list", "shopping_item", "food_record", "food_nutrient"})
     if "plans" in components:
         include.update({
-            "meal_plan", "meal_batch", "meal_occurrence", "portion_allocation", "pantry_reservation",
+            "meal_plan", "meal_batch", "meal_occurrence", "portion_allocation",
             "recipe", "recipe_meal_type", "recipe_publisher_tag", "recipe_version", "recipe_ingredient", "recipe_method_snapshot", "nutrition_calculation",
             "household_member", "food_record", "food_nutrient",
         })
     return {table for table in include if tables.get(table)}
+
+
+def _restore_dependencies(components: set[str], tables: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Describe dependencies and explicit clearing performed by a restore.
+
+    A preview must make partial component selection understandable.  Required
+    parents are included automatically by the selected component; nullable
+    references are deliberately cleared when their source component is not
+    selected.  Reservations are never included in a plan restore because they
+    describe live target inventory rather than portable history.
+    """
+
+    dependencies: list[dict[str, Any]] = []
+
+    def add(component: str, required_by: str, *, selected: bool, action: str) -> None:
+        dependencies.append(
+            {
+                "component": component,
+                "required_by": required_by,
+                "selected": selected,
+                "action": action,
+            }
+        )
+
+    if "users" in components:
+        add("household", "users", selected=True, action="target household is used")
+        add(
+            "household members",
+            "users.member_id",
+            selected="household" in components,
+            action="kept when selected; otherwise nullable member links are cleared",
+        )
+    if "recipes" in components:
+        add("household", "recipes", selected=True, action="target household is used")
+        add("ingredients", "recipes", selected="ingredients" in components, action="food links are retained when selected; otherwise nullable links are cleared")
+    if "ingredients" in components:
+        add("household", "ingredients", selected=True, action="target household is used")
+    if "pantry" in components:
+        add("ingredients", "pantry", selected="ingredients" in components, action="food links are retained when selected; otherwise nullable links are cleared")
+    if "shopping" in components:
+        add("ingredients", "shopping", selected="ingredients" in components, action="food links are retained when selected; otherwise nullable links are cleared")
+    if "plans" in components:
+        add("recipes", "plans", selected=True, action="recipe history is included")
+        add("household members", "plans", selected=True, action="member allocations are included")
+        add("pantry reservations", "plans", selected=False, action="never imported; target inventory remains authoritative")
+    return dependencies
 
 
 def _as_target_value(value: Any) -> Any:
@@ -630,8 +729,28 @@ NUMERIC_COLUMNS = {
 }
 
 
-def _mapped_data(data: dict[str, Any], id_map: dict[str, dict[str, str]]) -> dict[str, Any]:
-    result = {key: _as_target_value(value) for key, value in data.items()}
+def _remap_embedded(value: Any, id_map: dict[str, dict[str, str]]) -> Any:
+    """Remap UUID references inside JSON snapshots without changing prose."""
+
+    if isinstance(value, dict):
+        return {key: _remap_embedded(item, id_map) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_remap_embedded(item, id_map) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_remap_embedded(item, id_map) for item in value)
+    if isinstance(value, str):
+        for mapping in id_map.values():
+            if value in mapping:
+                return mapping[value]
+    return value
+
+
+def _mapped_data(
+    data: dict[str, Any],
+    id_map: dict[str, dict[str, str]],
+    model: Any | None = None,
+) -> dict[str, Any]:
+    result = {key: _remap_embedded(_as_target_value(value), id_map) for key, value in data.items()}
     foreign_keys = {
         "household_id": "household",
         "member_id": "household_member",
@@ -655,6 +774,15 @@ def _mapped_data(data: dict[str, Any], id_map: dict[str, dict[str, str]]) -> dic
         mapping = id_map.get(map_name, {})
         if foreign_key in result and result[foreign_key] in mapping:
             result[foreign_key] = mapping[result[foreign_key]]
+        elif (
+            model is not None
+            and foreign_key in result
+            and result[foreign_key] is not None
+            and any(column.name == foreign_key and column.nullable for column in model.__table__.columns)
+        ):
+            # The source component was not selected.  Nullable links must not
+            # leak source IDs into the target household or violate FK checks.
+            result[foreign_key] = None
     return result
 
 
@@ -671,11 +799,77 @@ def _convert_model_values(model: Any, data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _find_existing(db: Session, model: Any, data: dict[str, Any], maps: dict[str, dict[str, str]]) -> Any | None:
+def _belongs_to_target(model: Any, existing: Any, data: dict[str, Any], maps: dict[str, dict[str, str]]) -> bool:
+    """Reject an ID match that belongs to another household.
+
+    A global UUID collision is possible when two installations are merged.  A
+    matching primary key is only reusable when its household/owner or mapped
+    parent proves that it is the same target record.
+    """
+
+    for field in ("household_id", "owner_household_id"):
+        value = getattr(existing, field, None)
+        expected = data.get(field)
+        if value is not None and expected is not None and value != expected:
+            return False
+    identity_fields = {
+        "household_member": ("name",),
+        "app_user": ("username",),
+        "recipe": ("title", "source_url"),
+        "food_record": ("provider", "provider_record_id"),
+        "saved_food": ("food_record_id",),
+        "food_alias": ("phrase", "food_record_id"),
+        "pantry_lot": ("display_name", "unit"),
+        "shopping_list": ("name", "meal_plan_id"),
+        "meal_plan": ("name", "start_date", "end_date"),
+    }
+    for field in identity_fields.get(model.__tablename__, ()):
+        source_value = data.get(field)
+        existing_value = getattr(existing, field, None)
+        if source_value is not None and existing_value != source_value:
+            return False
+    table = model.__tablename__
+    parent_fields = {
+        "recipe_version": ("recipe_id", "recipe"),
+        "recipe_ingredient": ("recipe_version_id", "recipe_version"),
+        "recipe_method_snapshot": ("recipe_version_id", "recipe_version"),
+        "recipe_meal_type": ("recipe_id", "recipe"),
+        "recipe_publisher_tag": ("recipe_id", "recipe"),
+        "nutrition_calculation": ("recipe_version_id", "recipe_version"),
+        "food_nutrient": ("food_record_id", "food_record"),
+        "meal_batch": ("meal_plan_id", "meal_plan"),
+        "meal_occurrence": ("meal_plan_id", "meal_plan"),
+        "portion_allocation": ("meal_occurrence_id", "meal_occurrence"),
+        "pantry_transaction": ("pantry_lot_id", "pantry_lot"),
+        "pantry_reservation": ("meal_batch_id", "meal_batch"),
+        "shopping_item": ("shopping_list_id", "shopping_list"),
+        "meal_allocation": ("target_profile_id", "target_profile"),
+        "restriction": ("member_id", "household_member"),
+        "household_meal_group_assignment": ("member_id", "household_member"),
+    }
+    parent = parent_fields.get(table)
+    if parent:
+        field, map_name = parent
+        expected_parent = maps.get(map_name, {}).get(data.get(field))
+        if expected_parent is not None and getattr(existing, field, None) != expected_parent:
+            return False
+    return True
+
+
+def _find_existing(
+    db: Session,
+    model: Any,
+    data: dict[str, Any],
+    maps: dict[str, dict[str, str]],
+) -> Any | None:
     existing = db.get(model, data["id"])
-    if existing is not None:
+    if existing is not None and _belongs_to_target(model, existing, data, maps):
         maps[model.__tablename__][data["id"]] = existing.id
         return existing
+    if existing is not None:
+        # Do not accidentally reuse an ID from an unrelated household.  The
+        # caller will allocate a new target ID before insertion.
+        existing = None
     unique_filters: list[Any] = []
     table = model.__tablename__
     if table == "household_member":
@@ -720,7 +914,7 @@ def _find_existing(db: Session, model: Any, data: dict[str, Any], maps: dict[str
         unique_filters = [model.meal_plan_id == data["meal_plan_id"], model.meal_date == data["meal_date"], model.meal_type == data["meal_type"], model.meal_group_key == data.get("meal_group_key", "shared"), model.component_slot == data["component_slot"]]
     if unique_filters:
         existing = db.scalar(select(model).where(*unique_filters))
-        if existing is not None:
+        if existing is not None and _belongs_to_target(model, existing, data, maps):
             maps[table][data["id"]] = existing.id
             return existing
     return None
@@ -732,16 +926,36 @@ def _insert_rows(db: Session, model: Any, rows: list[dict[str, Any]], maps: dict
     if table == "food_record":
         rows = sorted(rows, key=lambda row: bool(row.get("source_food_record_id")))
     for source in rows:
+        source_id = source["id"]
         data = _convert_model_values(model, source)
         if "household_id" in data:
             data["household_id"] = household_id
         if "owner_household_id" in data and data["owner_household_id"] == source_household_id:
             data["owner_household_id"] = household_id
         if table == "household":
-            maps[table][source["id"]] = household_id
+            maps[table][source_id] = household_id
             continue
         if table == "meal_batch":
             data["parent_batch_id"] = None
+        if table == "meal_plan":
+            # A restored plan is historical evidence, never an active plan
+            # whose reservations can affect the current household.  The
+            # source status is retained in diagnostics for auditability.
+            source_status = data.get("status")
+            data["status"] = PlanStatus.SUPERSEDED.value
+            diagnostics = list(data.get("diagnostics") or [])
+            diagnostics.append(
+                {
+                    "kind": "restore_history",
+                    "source_status": source_status,
+                    "message": "Restored as inactive history; pantry reservations were not imported.",
+                }
+            )
+            data["diagnostics"] = diagnostics
+            data["accepted_at"] = None
+        if table == "shopping_list":
+            data["active"] = False
+            data["rebuild_recommended"] = True
         if table == "recipe_method_snapshot":
             data["created_by_user_id"] = None
             data["reviewed_by_user_id"] = None
@@ -751,14 +965,32 @@ def _insert_rows(db: Session, model: Any, rows: list[dict[str, Any]], maps: dict
                     data[field] = canonicalize_url(data[field]) if data.get(field) else None
                 except InvalidUrlError:
                     data[field] = None
-        data = _mapped_data(data, maps)
+        data = _mapped_data(data, maps, model)
+        if table == "app_user":
+            # Usernames are globally unique.  A source account whose name is
+            # already owned by another household cannot be imported under the
+            # same identity; skip it rather than linking or overwriting that
+            # household's account.  Method snapshots clear author links and do
+            # not depend on this optional row.
+            conflicting_user = db.scalar(
+                select(User).where(func.lower(User.username) == str(data.get("username", "")).lower())
+            )
+            if conflicting_user is not None and conflicting_user.household_id != household_id:
+                continue
         existing = _find_existing(db, model, data, maps)
         if existing is not None:
             continue
-        data["id"] = source["id"]
+        # A source UUID may already exist in another target household.  Never
+        # attach the imported row to that record; allocate a fresh ID and keep
+        # the source->target mapping for all child rows.
+        target_id = source_id
+        collision = db.get(model, target_id)
+        if collision is not None:
+            target_id = str(uuid.uuid4())
+        data["id"] = target_id
         db.add(model(**data))
         db.flush()
-        maps[table][source["id"]] = data["id"]
+        maps[table][source_id] = data["id"]
         imported += 1
     return imported
 
@@ -777,7 +1009,14 @@ def restore_archive(
     if not RESTORE_LOCK.acquire(blocking=False):
         raise DomainError("RESTORE_IN_PROGRESS", "Another restore is already running.", 409)
 
+    shared_lock = _backup_lock()
+    shared_lock_entered = False
     try:
+        try:
+            shared_lock.__enter__()
+            shared_lock_entered = True
+        except Exception:
+            raise
         archive = resolve_archive(archive_value)
         if not archive.database_dump:
             raise DomainError("BACKUP_INCOMPLETE", "This backup has no database.dump file.", 422)
@@ -816,7 +1055,6 @@ def restore_archive(
                 "portion_allocation",
                 "pantry_lot",
                 "pantry_transaction",
-                "pantry_reservation",
                 "shopping_list",
                 "shopping_item",
             )
@@ -851,9 +1089,11 @@ def restore_archive(
                 "source_household": bundle.household["name"],
                 "components": sorted(requested),
                 "imported": {key: value for key, value in counts.items() if value},
+                "dependencies": _restore_dependencies(requested, bundle.tables),
                 "excluded": [
                     "Active sessions were not imported.",
                     "Encrypted integration credentials were not imported.",
+                    "Live pantry reservations were not imported; restored plans are inactive history.",
                 ],
             }
     except DomainError:
@@ -861,10 +1101,16 @@ def restore_archive(
         raise
     except Exception as exc:
         target_db.rollback()
+        trace_id = _trace_id()
+        LOGGER.exception("Selective restore failed", extra={"trace_id": trace_id})
         raise DomainError(
             "RESTORE_FAILED",
-            f"The selected data could not be imported: {exc}",
+            f"The selected data could not be imported (trace id {trace_id}).",
             422,
         ) from exc
     finally:
-        RESTORE_LOCK.release()
+        try:
+            if shared_lock_entered:
+                shared_lock.__exit__(None, None, None)
+        finally:
+            RESTORE_LOCK.release()

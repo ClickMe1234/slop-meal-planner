@@ -8,6 +8,22 @@ umask 077
 : "${BACKUP_ROOT:?BACKUP_ROOT is required}"
 : "${DATA_DIR:?DATA_DIR is required}"
 
+lock_file="${BACKUP_LOCK_FILE:-$BACKUP_ROOT/.backup.lock}"
+case "$lock_file" in
+  /*) ;;
+  *) echo "BACKUP_LOCK_FILE must be an absolute path" >&2; exit 64 ;;
+esac
+mkdir -p "$(dirname "$lock_file")"
+# API-triggered backups use the same POSIX advisory lock.  Maintenance jobs
+# must not race a backup (or another restore) against the live database/files.
+if [ "${BACKUP_LOCK_HELD:-0}" != "1" ]; then
+  exec 9>"$lock_file"
+  if ! flock -n 9; then
+    echo "Another backup or restore is already running" >&2
+    exit 75
+  fi
+fi
+
 case "$PGDATABASE:$PGUSER" in
   *[!A-Za-z0-9_:]*) echo "Database and role names may contain only letters, numbers, and underscores" >&2; exit 64 ;;
 esac
