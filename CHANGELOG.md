@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Make pantry reservations, cooking, shopping mutations, and purchase intake
+  concurrency-safe and idempotent; preserve manual and compatible checked
+  shopping work through rebuilds and offline synchronization.
+- Keep reviewed recipe quantities and accepted plans safe when parser or recipe
+  nutrition changes, returning plan-resolution warnings instead of silently
+  invalidating current plans.
+- Make imports atomic, selective restore dependency-aware and failure-safe, and
+  Compose maintenance use the complete application runtime under a shared lock.
+- Gate image promotion on same-commit tests, migrations, dependency policy, and
+  scanning; move the frontend directly to React Router 8.
+- Correct authentication outage handling, target round-tripping, dialog and
+  scanner lifecycles, short-height navigation, and planner responsiveness.
+
 ## 1.4.0 - 2026-09-03
 
 - Add editable per-serving nutrition for imported recipes and a draft-friendly,
