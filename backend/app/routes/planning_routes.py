@@ -16,6 +16,7 @@ from ..errors import ConflictError, DomainError, NotFoundError
 from ..models import (
     HouseholdMember,
     Household,
+    InventoryOperation,
     MealAllocation,
     MealBatch,
     MealOccurrence,
@@ -40,9 +41,10 @@ from ..schemas import (
     PlanRecipeReplaceRequest,
     PlanSideCreateRequest,
     PlanSideRemoveRequest,
+    BatchCookRequest,
 )
 from ..services.nutrition import planning_values
-from ..services.pantry import reserve_plan_batches
+from ..services.pantry import lock_household, reserve_plan_batches
 from ..services.planner import (
     ParticipantTarget,
     PlanPortionVariable,
@@ -64,6 +66,23 @@ router = APIRouter(prefix="/meal-plans", tags=["meal planning"])
 _generation_lock = threading.Lock()
 _active_generation_households: set[str] = set()
 _generation_attempts: dict[str, deque[float]] = defaultdict(deque)
+
+
+def _existing_inventory_operation(
+    db: Session,
+    household_id: str,
+    operation_type: str,
+    operation_id: str | None,
+) -> InventoryOperation | None:
+    if not operation_id:
+        return None
+    return db.scalar(
+        select(InventoryOperation).where(
+            InventoryOperation.household_id == household_id,
+            InventoryOperation.operation_type == operation_type,
+            InventoryOperation.operation_id == operation_id,
+        )
+    )
 
 
 def limit_plan_generation(
@@ -1974,6 +1993,7 @@ def edit_plan_preserving_recipes(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
+    lock_household(db, context.user.household_id)
     plan = db.scalar(
         select(MealPlan).where(MealPlan.id == plan_id).with_for_update()
     )
@@ -2581,16 +2601,12 @@ def accept_plan(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
+    lock_household(db, context.user.household_id)
     plan = db.scalar(
         select(MealPlan).where(MealPlan.id == plan_id).with_for_update()
     )
     if plan is None or plan.household_id != context.user.household_id:
         raise NotFoundError("Meal plan")
-    # Serialise shopping-list activation across different plans belonging to
-    # the same household, not only concurrent operations on this plan row.
-    db.scalar(
-        select(Household).where(Household.id == plan.household_id).with_for_update()
-    )
     if plan.status not in {PlanStatus.READY.value, PlanStatus.ACCEPTED.value}:
         raise DomainError("PLAN_NOT_READY", "Only a ready plan can be accepted")
     existing_list = db.scalar(
@@ -2642,11 +2658,13 @@ def accept_plan(
 def mark_batch_cooked(
     plan_id: str,
     batch_id: str,
+    payload: BatchCookRequest | None = None,
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    plan = db.get(MealPlan, plan_id)
-    batch = db.get(MealBatch, batch_id)
+    lock_household(db, context.user.household_id)
+    plan = db.scalar(select(MealPlan).where(MealPlan.id == plan_id).with_for_update())
+    batch = db.scalar(select(MealBatch).where(MealBatch.id == batch_id).with_for_update())
     if (
         plan is None
         or plan.household_id != context.user.household_id
@@ -2654,21 +2672,39 @@ def mark_batch_cooked(
         or batch.meal_plan_id != plan.id
     ):
         raise NotFoundError("Meal batch")
+    operation_id = payload.operation_id if payload is not None else None
+    existing_operation = _existing_inventory_operation(
+        db,
+        context.user.household_id,
+        "meal_batch_cook",
+        operation_id,
+    )
+    if existing_operation is not None:
+        return None
+    if (
+        payload is not None
+        and payload.expected_version is not None
+        and batch.version != payload.expected_version
+    ):
+        raise ConflictError()
     root_batch_id = batch.parent_batch_id or batch.id
     cooking_batches = db.scalars(
         select(MealBatch).where(
             (MealBatch.id == root_batch_id)
             | (MealBatch.parent_batch_id == root_batch_id)
         )
+        .order_by(MealBatch.id)
+        .with_for_update()
     ).all()
     cooked_at = datetime.now(timezone.utc)
     for cooking_batch in cooking_batches:
         if cooking_batch.cooked_at:
             continue
         reservations = db.scalars(
-            select(PantryReservation).where(
-                PantryReservation.meal_batch_id == cooking_batch.id
-            )
+            select(PantryReservation)
+            .where(PantryReservation.meal_batch_id == cooking_batch.id)
+            .order_by(PantryReservation.id)
+            .with_for_update()
         ).all()
         for reservation in reservations:
             db.add(
@@ -2682,6 +2718,20 @@ def mark_batch_cooked(
             )
             db.delete(reservation)
         cooking_batch.cooked_at = cooked_at
+        cooking_batch.version += 1
+    if operation_id:
+        db.add(
+            InventoryOperation(
+                household_id=context.user.household_id,
+                operation_type="meal_batch_cook",
+                operation_id=operation_id,
+                result={
+                    "plan_id": plan.id,
+                    "batch_id": batch.id,
+                    "cooked_batch_ids": [value.id for value in cooking_batches],
+                },
+            )
+        )
     db.commit()
 
 
@@ -2693,8 +2743,9 @@ def update_batch_cooked_weight(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    plan = db.get(MealPlan, plan_id)
-    batch = db.get(MealBatch, batch_id)
+    lock_household(db, context.user.household_id)
+    plan = db.scalar(select(MealPlan).where(MealPlan.id == plan_id).with_for_update())
+    batch = db.scalar(select(MealBatch).where(MealBatch.id == batch_id).with_for_update())
     if (
         plan is None
         or plan.household_id != context.user.household_id
@@ -2707,7 +2758,10 @@ def update_batch_cooked_weight(
             "BATCH_NOT_COOKED",
             "Mark this batch cooked before recording its finished weight",
         )
+    if payload.expected_version is not None and batch.version != payload.expected_version:
+        raise ConflictError()
     batch.cooked_weight_grams = payload.cooked_weight_grams
+    batch.version += 1
     db.commit()
 
 
@@ -2715,11 +2769,13 @@ def update_batch_cooked_weight(
 def unmark_batch_cooked(
     plan_id: str,
     batch_id: str,
+    payload: BatchCookRequest | None = None,
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    plan = db.get(MealPlan, plan_id)
-    batch = db.get(MealBatch, batch_id)
+    lock_household(db, context.user.household_id)
+    plan = db.scalar(select(MealPlan).where(MealPlan.id == plan_id).with_for_update())
+    batch = db.scalar(select(MealBatch).where(MealBatch.id == batch_id).with_for_update())
     if (
         plan is None
         or plan.household_id != context.user.household_id
@@ -2727,24 +2783,44 @@ def unmark_batch_cooked(
         or batch.meal_plan_id != plan.id
     ):
         raise NotFoundError("Meal batch")
+    operation_id = payload.operation_id if payload is not None else None
+    existing_operation = _existing_inventory_operation(
+        db,
+        context.user.household_id,
+        "meal_batch_uncook",
+        operation_id,
+    )
+    if existing_operation is not None:
+        return None
+    if (
+        payload is not None
+        and payload.expected_version is not None
+        and batch.version != payload.expected_version
+    ):
+        raise ConflictError()
     root_batch_id = batch.parent_batch_id or batch.id
     cooking_batches = db.scalars(
         select(MealBatch).where(
             (MealBatch.id == root_batch_id)
             | (MealBatch.parent_batch_id == root_batch_id)
         )
+        .order_by(MealBatch.id)
+        .with_for_update()
     ).all()
     for cooking_batch in cooking_batches:
         if not cooking_batch.cooked_at:
             continue
         transactions = db.scalars(
-            select(PantryTransaction).where(
+            select(PantryTransaction)
+            .where(
                 PantryTransaction.reference_type == "meal_batch",
                 PantryTransaction.reference_id == cooking_batch.id,
                 PantryTransaction.reason.in_(
                     ("meal_batch_cooked", "meal_batch_uncooked")
                 ),
             )
+            .order_by(PantryTransaction.id)
+            .with_for_update()
         ).all()
         net_by_lot: dict[str, Decimal] = defaultdict(Decimal)
         for transaction in transactions:
@@ -2766,10 +2842,12 @@ def unmark_batch_cooked(
                 )
             )
             reservation = db.scalar(
-                select(PantryReservation).where(
+                select(PantryReservation)
+                .where(
                     PantryReservation.pantry_lot_id == pantry_lot_id,
                     PantryReservation.meal_batch_id == cooking_batch.id,
                 )
+                .with_for_update()
             )
             if reservation is None:
                 db.add(
@@ -2784,4 +2862,18 @@ def unmark_batch_cooked(
                 reservation.quantity = Decimal(reservation.quantity) + restore_quantity
         cooking_batch.cooked_at = None
         cooking_batch.cooked_weight_grams = None
+        cooking_batch.version += 1
+    if operation_id:
+        db.add(
+            InventoryOperation(
+                household_id=context.user.household_id,
+                operation_type="meal_batch_uncook",
+                operation_id=operation_id,
+                result={
+                    "plan_id": plan.id,
+                    "batch_id": batch.id,
+                    "uncooked_batch_ids": [value.id for value in cooking_batches],
+                },
+            )
+        )
     db.commit()

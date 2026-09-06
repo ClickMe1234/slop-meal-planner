@@ -420,15 +420,32 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner, session_f
         json={"expected_version": item["version"], "checked": True},
     )
     assert checked.status_code == 200, checked.text
+    current_list = client.get("/api/v1/shopping-lists/active")
+    assert current_list.status_code == 200, current_list.text
 
     purchased = client.post(
         f"/api/v1/shopping-lists/{shopping_data['id']}/add-purchased-to-pantry",
         headers=headers,
+        json={
+            "expected_list_version": current_list.json()["version"],
+            "operation_id": "intake-retry-regression",
+        },
     )
     assert purchased.status_code == 200, purchased.text
     assert purchased.json()[0]["reserved_quantity"] == "100"
     assert purchased.json()[0]["reserved_quantity_display"] == "100 g"
     assert purchased.json()[0]["usable_quantity"] == "0"
+
+    retried = client.post(
+        f"/api/v1/shopping-lists/{shopping_data['id']}/add-purchased-to-pantry",
+        headers=headers,
+        json={
+            "expected_list_version": current_list.json()["version"],
+            "operation_id": "intake-retry-regression",
+        },
+    )
+    assert retried.status_code == 200, retried.text
+    assert [lot["id"] for lot in retried.json()] == [lot["id"] for lot in purchased.json()]
 
     plan = client.get(f"/api/v1/meal-plans/{plan_id}").json()
     batch_id = plan["occurrences"][0]["batch_id"]

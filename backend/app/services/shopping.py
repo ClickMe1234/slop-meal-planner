@@ -18,7 +18,7 @@ from ..models import (
     ShoppingItem,
     ShoppingList,
 )
-from .pantry import balances
+from .pantry import balances, lock_household
 from .quantities import (
     canonical_quantity_unit,
     format_quantity,
@@ -44,23 +44,59 @@ def round_purchase(quantity: Decimal, unit: str) -> Decimal:
     return round_purchase_quantity(quantity, unit)
 
 
+def _source_identity(sources: list[dict], display_name: str, unit: str) -> tuple:
+    """Return a stable identity for a generated shopping requirement.
+
+    The reviewed source text is stable when a recipe version is cloned and its
+    ingredient rows receive new IDs; the row ID is used only when historical
+    data has no source text.  The unit is part of the identity because a grams
+    and a count requirement must never reuse one another's checked state.
+    """
+
+    tokens = []
+    for source in sources:
+        recipe_id = str(source.get("recipe_id") or "")
+        original_text = " ".join(str(source.get("original_text") or "").casefold().split())
+        ingredient_id = str(source.get("recipe_ingredient_id") or "")
+        stable_source = original_text or ingredient_id
+        if recipe_id or stable_source:
+            tokens.append(f"{recipe_id}:{stable_source}")
+    if tokens:
+        return ("source", tuple(sorted(tokens)), canonical_quantity_unit(unit))
+    return (
+        "fallback",
+        " ".join(display_name.casefold().split()),
+        canonical_quantity_unit(unit),
+    )
+
+
 def build_shopping_list(
     db: Session, household_id: str, meal_plan_id: str, name: str
 ) -> ShoppingList:
+    # Shopping, pantry reservations, and active-list selection are one
+    # household-wide transaction.  Acquire the parent lock before touching a
+    # plan/list/lot so concurrent accepts, purchase intake, and rebuilds share
+    # a deterministic lock order on PostgreSQL.
+    lock_household(db, household_id)
+    db.flush()
     plan = db.get(MealPlan, meal_plan_id)
     if plan is None or plan.household_id != household_id:
         raise NotFoundError("Meal plan")
+    plan = db.scalar(
+        select(MealPlan).where(MealPlan.id == meal_plan_id).with_for_update()
+    )
     previous_lists = db.scalars(
         select(ShoppingList)
         .where(ShoppingList.household_id == household_id, ShoppingList.active.is_(True))
-        .order_by(ShoppingList.updated_at.desc())
+        .order_by(ShoppingList.updated_at.desc(), ShoppingList.id)
+        .with_for_update()
     ).all()
     name_overrides = household_name_overrides(db, household_id)
-    for previous_list in previous_lists:
-        previous_list.active = False
-        previous_list.version += 1
     batches = db.scalars(
-        select(MealBatch).where(MealBatch.meal_plan_id == plan.id)
+        select(MealBatch)
+        .where(MealBatch.meal_plan_id == plan.id)
+        .order_by(MealBatch.id)
+        .with_for_update()
     ).all()
     meal_dates_by_batch: dict[str, list[str]] = defaultdict(list)
     for occurrence in db.scalars(
@@ -265,7 +301,10 @@ def build_shopping_list(
     batch_ids = [batch.id for batch in batches]
     if batch_ids:
         reservations = db.scalars(
-            select(PantryReservation).where(PantryReservation.meal_batch_id.in_(batch_ids))
+            select(PantryReservation)
+            .where(PantryReservation.meal_batch_id.in_(batch_ids))
+            .order_by(PantryReservation.id)
+            .with_for_update()
         ).all()
         for reservation in reservations:
             lot = db.get(PantryLot, reservation.pantry_lot_id)
@@ -275,11 +314,56 @@ def build_shopping_list(
                     reservation.quantity
                 )
 
-    shopping_list = ShoppingList(
-        household_id=household_id, meal_plan_id=plan.id, name=name, active=True
+    # Reuse the current household list whenever possible.  This keeps manual
+    # additions and generated row identities across rebuilds.  If the active
+    # list belongs to a superseded plan, it is still the user's current list;
+    # move its plan pointer forward and reconcile its generated rows below.
+    shopping_list = next(
+        (candidate for candidate in previous_lists if candidate.meal_plan_id == plan.id),
+        None,
     )
-    db.add(shopping_list)
-    db.flush()
+    if shopping_list is None and previous_lists:
+        shopping_list = previous_lists[0]
+    if shopping_list is None:
+        shopping_list = ShoppingList(
+            household_id=household_id, meal_plan_id=plan.id, name=name, active=True
+        )
+        db.add(shopping_list)
+        db.flush()
+    else:
+        list_changed = False
+        if shopping_list.meal_plan_id != plan.id:
+            shopping_list.meal_plan_id = plan.id
+            list_changed = True
+        if shopping_list.name != name:
+            shopping_list.name = name
+            list_changed = True
+        if not shopping_list.active:
+            shopping_list.active = True
+            list_changed = True
+        for previous_list in previous_lists:
+            if previous_list.id == shopping_list.id:
+                continue
+            # Preserve manual work even if old data contains more than one
+            # active list.  Generated rows on an inactive list are historical
+            # and are intentionally not copied into the new reconciliation.
+            manual_items = db.scalars(
+                select(ShoppingItem)
+                .where(
+                    ShoppingItem.shopping_list_id == previous_list.id,
+                    ShoppingItem.manual.is_(True),
+                )
+                .order_by(ShoppingItem.id)
+                .with_for_update()
+            ).all()
+            for manual_item in manual_items:
+                manual_item.shopping_list_id = shopping_list.id
+                list_changed = True
+            previous_list.active = False
+            previous_list.version += 1
+        if list_changed:
+            shopping_list.version += 1
+        db.flush()
 
     for requirement in requirements.values():
         food_id = requirement["food_id"]
@@ -345,25 +429,123 @@ def build_shopping_list(
             remaining -= min(max(converted, Decimal("0")), remaining)
             if remaining <= 0:
                 break
-        if remaining > 0:
-            display_unit = str(requirement["display_unit"])
+        requirement["remaining_raw"] = remaining
+        requirement["remaining"] = round_quantity(remaining, unit)
+        requirement["purchase"] = round_purchase(remaining, unit)
+        requirement["display"] = display
+        requirement["source_keys"] = source_keys
+        requirement["unit"] = unit
+        requirement["display_unit"] = str(requirement["display_unit"])
+        requirement["density"] = default_density
+        requirement["pantry_unit_conflicts"] = pantry_unit_conflicts
+
+    existing_items = db.scalars(
+        select(ShoppingItem)
+        .where(ShoppingItem.shopping_list_id == shopping_list.id)
+        .order_by(ShoppingItem.id)
+        .with_for_update()
+    ).all()
+    existing_generated: dict[tuple, list[ShoppingItem]] = defaultdict(list)
+    for item in existing_items:
+        if not item.manual:
+            existing_generated[
+                _source_identity(item.source_ingredients or [], item.display_name, item.unit)
+            ].append(item)
+
+    used_item_ids: set[str] = set()
+    list_changed = False
+    for requirement in requirements.values():
+        remaining = Decimal(requirement.get("remaining") or 0)
+        sources = list(requirement["sources"])
+        display = str(requirement["display"])
+        unit = canonical_quantity_unit(str(requirement["unit"]))
+        identity = _source_identity(sources, display, unit)
+        candidate = next(
+            (
+                item
+                for item in existing_generated.get(identity, [])
+                if item.id not in used_item_ids
+            ),
+            None,
+        )
+        if remaining <= 0:
+            if candidate is not None:
+                db.delete(candidate)
+                used_item_ids.add(candidate.id)
+                list_changed = True
+            continue
+
+        exact = round_quantity(remaining, unit)
+        purchase = Decimal(requirement["purchase"])
+        source_keys = sorted(str(value) for value in requirement["source_keys"])
+        conflicts = list(requirement["pantry_unit_conflicts"])
+        if candidate is None:
             db.add(
                 ShoppingItem(
                     shopping_list_id=shopping_list.id,
-                    food_record_id=food_id,
+                    food_record_id=requirement["food_id"],
                     display_name=display,
-                    exact_quantity=round_quantity(remaining, unit),
-                    purchase_quantity=round_purchase(remaining, unit),
+                    exact_quantity=exact,
+                    purchase_quantity=purchase,
                     unit=unit,
-                    density_g_per_ml=default_density,
-                    display_unit=display_unit,
+                    density_g_per_ml=requirement["density"],
+                    display_unit=str(requirement["display_unit"]),
                     category="Other",
                     checked=False,
                     manual=False,
-                    source_name_keys=sorted(source_keys),
-                    source_ingredients=list(requirement["sources"]),
-                    pantry_unit_conflicts=pantry_unit_conflicts,
+                    source_name_keys=source_keys,
+                    source_ingredients=sources,
+                    pantry_unit_conflicts=conflicts,
                 )
             )
+            list_changed = True
+            continue
+
+        used_item_ids.add(candidate.id)
+        requirement_unchanged = (
+            canonical_quantity_unit(candidate.unit) == unit
+            and Decimal(candidate.exact_quantity) == exact
+            and candidate.display_name == display
+        )
+        item_changed = False
+        for field, value in (
+            ("food_record_id", requirement["food_id"]),
+            ("display_name", display),
+            ("exact_quantity", exact),
+            ("unit", unit),
+            ("density_g_per_ml", requirement["density"]),
+            ("display_unit", str(requirement["display_unit"])),
+            ("source_name_keys", source_keys),
+            ("source_ingredients", sources),
+            ("pantry_unit_conflicts", conflicts),
+        ):
+            if getattr(candidate, field) != value:
+                setattr(candidate, field, value)
+                item_changed = True
+        # A changed exact requirement must be explicitly reviewed again.  If
+        # it is unchanged, retain the user's purchase quantity and checked
+        # state rather than replacing their work with a fresh snapshot.
+        if requirement_unchanged:
+            if candidate.checked != bool(candidate.checked):
+                candidate.checked = bool(candidate.checked)
+        else:
+            if candidate.purchase_quantity != purchase:
+                candidate.purchase_quantity = purchase
+                item_changed = True
+            if candidate.checked:
+                candidate.checked = False
+                item_changed = True
+        if item_changed:
+            candidate.version += 1
+            list_changed = True
+
+    for item in existing_items:
+        if item.manual or item.id in used_item_ids:
+            continue
+        # Any generated requirement not present in the rebuilt plan is stale.
+        db.delete(item)
+        list_changed = True
+    if list_changed:
+        shopping_list.version += 1
     db.flush()
     return shopping_list

@@ -345,7 +345,7 @@ def test_shopping_sources_combine_and_recipe_unit_preview(client, owner, session
     )
     assert changed.status_code == 200, changed.text
     result = changed.json()
-    assert result["shopping_list"]["id"] != shopping["id"]
+    assert result["shopping_list"]["id"] == shopping["id"]
     assert len(result["shopping_list"]["items"]) == 1
     assert result["shopping_list"]["items"][0]["display_name"] == "root vegetables"
     assert result["shopping_list"]["items"][0]["source_count"] == 2
@@ -585,7 +585,7 @@ def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list
     assert detail["occurrences"][0]["portions"][0]["servings"] == 1
     assert detail["occurrences"][0]["batch_servings"] == 1
     active = client.get("/api/v1/shopping-lists/active").json()
-    assert active["id"] != previous_list["id"]
+    assert active["id"] == previous_list["id"]
     assert active["items"][0]["exact_quantity"] == "200"
 
     with session_factory() as db:
@@ -629,8 +629,8 @@ def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list
     )
     assert cleared.status_code == 200, cleared.text
     detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
-    assert detail["occurrences"][0]["portions"][0]["servings"] == 0.5
-    assert detail["occurrences"][0]["batch_servings"] == 0.5
+    assert detail["occurrences"][0]["portions"][0]["servings"] == 1
+    assert detail["occurrences"][0]["batch_servings"] == 1
 
     with session_factory() as db:
         allocation = db.scalar(
@@ -671,9 +671,95 @@ def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list
         },
     )
     assert constrained.status_code == 200, constrained.text
+    assert constrained.json()["plan_sync"]["plans_updated"] == 0
+    assert constrained.json()["plan_sync"]["warnings"][0]["code"] == "NUTRITION_TARGET_INFEASIBLE"
     detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
-    assert detail["occurrences"][0]["portions"][0]["servings"] == 0.25
-    assert detail["occurrences"][0]["batch_servings"] == 0.25
+    assert detail["occurrences"][0]["portions"][0]["servings"] == 2
+    assert detail["occurrences"][0]["batch_servings"] == 2
+
+
+def test_recipe_nutrition_change_cannot_silently_invalidate_accepted_plan(
+    client, owner, session_factory
+):
+    member_id = client.get("/api/v1/auth/me").json()["member_id"]
+    _set_dinner_target(client, owner, member_id, calorie_target=500)
+    recipe = _create_recipe(
+        client,
+        owner,
+        "Nutrition sync dinner",
+        ["dinner"],
+        ingredients=[{
+            "original_text": "100 g spinach",
+            "quantity": 100,
+            "unit": "g",
+            "quantity_grams": 100,
+            "food_phrase": "spinach",
+        }],
+    )
+    plan = _generate(
+        client,
+        owner,
+        [recipe["id"]],
+        [{
+            "meal_date": "2026-08-14",
+            "meal_type": "dinner",
+            "participant_member_ids": [member_id],
+        }],
+    )
+    assert client.post(
+        f"/api/v1/meal-plans/{plan['id']}/accept", headers=_headers(owner)
+    ).status_code == 200
+    before = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
+    before_occurrence = before["occurrences"][0]
+    with session_factory() as db:
+        before_version_id = db.get(
+            MealBatch, before_occurrence["batch_id"]
+        ).recipe_version_id
+    current = client.get(f"/api/v1/recipes/{recipe['id']}").json()
+    ingredient = current["ingredients"][0]
+
+    reviewed = client.put(
+        f"/api/v1/recipes/{recipe['id']}/review",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "meal_types": current["meal_types"],
+            "publisher_nutrition": {
+                "basis": "per serving",
+                "energy_kcal": 1500,
+                "protein_g": 30,
+                "carbohydrate_g": 55,
+                "fat_g": 18,
+            },
+            "ingredients": [{
+                "lineage_id": ingredient["lineage_id"],
+                "original_text": ingredient["original_text"],
+                "quantity": ingredient["quantity"],
+                "unit": ingredient["unit"],
+                "quantity_grams": ingredient["quantity_grams"],
+                "food_phrase": ingredient["food_phrase"],
+                "included": True,
+                "optional": False,
+                "needs_review": False,
+                "shopping_excluded": False,
+            }],
+        },
+    )
+
+    assert reviewed.status_code == 200, reviewed.text
+    sync = reviewed.json()["plan_sync"]
+    assert sync["plans_updated"] == 0
+    assert sync["shopping_list_rebuilt"] is False
+    assert sync["warnings"][0]["code"] == "NUTRITION_TARGET_INFEASIBLE"
+    assert sync["warnings"][0]["plan_id"] == plan["id"]
+    after_occurrence = client.get(
+        f"/api/v1/meal-plans/{plan['id']}"
+    ).json()["occurrences"][0]
+    assert after_occurrence["portions"] == before_occurrence["portions"]
+    with session_factory() as db:
+        assert db.get(MealBatch, after_occurrence["batch_id"]).recipe_version_id == before_version_id
 
 
 def test_planner_serving_constraints_update_only_the_rule_and_refresh_ready_plan(
@@ -1426,6 +1512,54 @@ def test_recipe_ingredient_search_uses_current_saved_recipe_ingredients(client, 
         ],
         "total": 1,
     }
+
+
+def test_recipe_catalogue_search_ignores_historical_ingredients(client, owner):
+    recipe = _create_recipe(
+        client,
+        owner,
+        "Changing soup",
+        ["dinner"],
+        ingredients=[{
+            "original_text": "200 g spinach",
+            "food_phrase": "spinach",
+            "quantity": 200,
+            "quantity_grams": 200,
+            "unit": "g",
+        }],
+    )
+    current = client.get(f"/api/v1/recipes/{recipe['id']}").json()
+    updated = client.put(
+        f"/api/v1/recipes/{recipe['id']}/review",
+        headers=_headers(owner),
+        json={
+            "expected_version": current["version"],
+            "title": current["title"],
+            "yield_servings": current["yield_servings"],
+            "meal_types": current["meal_types"],
+            "publisher_nutrition": current["publisher_nutrition"],
+            "ingredients": [{
+                "lineage_id": current["ingredients"][0]["lineage_id"],
+                "original_text": "200 g broccoli",
+                "food_phrase": "broccoli",
+                "quantity": 200,
+                "quantity_grams": 200,
+                "unit": "g",
+                "included": True,
+                "optional": False,
+                "needs_review": False,
+                "shopping_excluded": False,
+            }],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+
+    historical = client.get("/api/v1/recipes?q=spinach")
+    current_search = client.get("/api/v1/recipes?q=broccoli")
+
+    assert historical.status_code == 200
+    assert historical.json()["items"] == []
+    assert [item["id"] for item in current_search.json()["items"]] == [recipe["id"]]
 
 
 def test_plan_specific_ingredient_terms_prefer_matching_saved_recipe(client, owner):
@@ -2265,19 +2399,20 @@ def test_accept_replaces_a_legacy_pre_accept_shopping_list(
     )
     assert accepted.status_code == 200, accepted.text
     active = client.get("/api/v1/shopping-lists/active").json()
-    assert active["id"] != stale_id
+    assert active["id"] == stale_id
+    assert any(item["manual"] for item in active["items"])
     assert active["meal_plan_id"] == plan["id"]
-    assert len(active["items"]) == 1
-    assert active["items"][0]["display_name"] == "rice"
-    assert active["items"][0]["exact_quantity"] == "100"
-    assert active["items"][0]["exact_quantity_display"] == "100 g"
-    assert active["items"][0]["checked"] is False
-    assert {item["display_name"] for item in active["items"]}.isdisjoint(
-        {"spinach", "old manual item"}
-    )
+    assert len(active["items"]) == 2
+    by_name = {item["display_name"]: item for item in active["items"]}
+    assert by_name["rice"]["exact_quantity"] == "100"
+    assert by_name["rice"]["exact_quantity_display"] == "100 g"
+    assert by_name["rice"]["checked"] is False
+    assert by_name["old manual item"]["manual"] is True
+    assert by_name["old manual item"]["checked"] is True
+    assert "spinach" not in by_name
 
     with session_factory() as db:
-        assert db.get(ShoppingList, stale_id).active is False
+        assert db.get(ShoppingList, stale_id).active is True
 
 
 def test_legacy_accepted_plan_without_list_can_be_recovered(client, owner, session_factory):

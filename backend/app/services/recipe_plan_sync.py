@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from ..errors import DomainError
@@ -34,6 +35,28 @@ class PlanSyncResult:
     shopping_list_rebuilt: bool = False
     shopping_list_id: str | None = None
     cooked_batches_unchanged: int = 0
+    warnings: tuple[dict[str, Any], ...] = ()
+
+
+def _sync_warning(plan: MealPlan, error: DomainError) -> dict[str, Any]:
+    return {
+        "plan_id": plan.id,
+        "code": error.code,
+        "detail": error.detail,
+        "actions": [
+            *(error.actions or []),
+            {
+                "kind": "resolve_plan",
+                "label": "Review affected plan",
+                "href": f"/plan/{plan.id}/edit",
+                "suggestion": (
+                    "The recipe was saved, but this plan was left unchanged because "
+                    "the replacement version would make it invalid."
+                ),
+            },
+        ],
+        "issues": list(error.issues or []),
+    }
 
 
 def _reconcile_batch_servings(
@@ -226,25 +249,112 @@ def sync_recipe_versions_to_current_plans(
     changed_plan_ids: set[str] = set()
     accepted_changed_ids: set[str] = set()
     cooked_unchanged = 0
+    warnings: list[dict[str, Any]] = []
+    batches_by_plan: dict[str, list[MealBatch]] = {}
     for batch in batches:
-        plan = plans.get(batch.meal_plan_id)
+        batches_by_plan.setdefault(batch.meal_plan_id, []).append(batch)
+    for plan_id in plan_ids:
+        plan = plans.get(plan_id)
         if plan is None:
             continue
-        if batch.cooked_at is not None:
-            cooked_unchanged += 1
+        plan_batches = batches_by_plan.get(plan_id, [])
+        mutable = [batch for batch in plan_batches if batch.cooked_at is None]
+        cooked_unchanged += len(plan_batches) - len(mutable)
+        if not mutable:
             continue
-        replacement = replacements.get(batch.recipe_version_id)
-        if replacement is None:
-            continue
-        batch.recipe_version_id = replacement
-        replacement_version = db.get(RecipeVersion, replacement)
-        if replacement_version is None:
-            raise DomainError(
-                "INVALID_RECIPE_VERSION",
-                "A replacement recipe version no longer exists",
-                409,
+        allocation_rows = db.scalars(
+            select(PortionAllocation)
+            .join(
+                MealOccurrence,
+                MealOccurrence.id == PortionAllocation.meal_occurrence_id,
             )
-        _reconcile_batch_servings(db, plan, batch, replacement_version)
+            .where(MealOccurrence.meal_plan_id == plan.id)
+        ).all()
+        occurrence_rows = db.scalars(
+            select(MealOccurrence).where(MealOccurrence.meal_plan_id == plan.id)
+        ).all()
+        original_batch_values = {
+            batch.id: (batch.recipe_version_id, Decimal(batch.servings))
+            for batch in mutable
+        }
+        original_allocations = {
+            allocation.id: Decimal(allocation.servings)
+            for allocation in allocation_rows
+        }
+        original_guests = {
+            occurrence.id: Decimal(occurrence.guest_servings)
+            for occurrence in occurrence_rows
+        }
+        try:
+            for batch in mutable:
+                replacement = replacements.get(batch.recipe_version_id)
+                if replacement is None:
+                    continue
+                replacement_version = db.get(RecipeVersion, replacement)
+                if replacement_version is None:
+                    raise DomainError(
+                        "INVALID_RECIPE_VERSION",
+                        "A replacement recipe version no longer exists",
+                        409,
+                    )
+                batch.recipe_version_id = replacement
+                _reconcile_batch_servings(db, plan, batch, replacement_version)
+            db.flush()
+            # Keep the mutation rules in one place until they are moved from
+            # the route module into their dedicated domain service.
+            from ..routes.planning_routes import (  # local import avoids a module cycle
+                _rebalance_plan,
+                _validate_mutable_plan_constraints,
+            )
+
+            _validate_mutable_plan_constraints(db, plan)
+            acknowledged_best_effort = any(
+                item.get("code") == "NUTRITION_TOLERANCE_RELAXED"
+                for item in (plan.diagnostics or [])
+                if isinstance(item, dict)
+            )
+            try:
+                _rebalance_plan(
+                    db,
+                    plan,
+                    ignore_nutrition_tolerances=False,
+                    infeasible_detail=(
+                        "The updated recipe would make this current plan miss its "
+                        "nutrition targets."
+                    ),
+                )
+            except DomainError as exc:
+                if not acknowledged_best_effort or exc.code != "NUTRITION_TARGET_INFEASIBLE":
+                    raise
+                warnings.append(_sync_warning(plan, exc))
+                _rebalance_plan(
+                    db,
+                    plan,
+                    ignore_nutrition_tolerances=True,
+                )
+        except DomainError as exc:
+            for batch in mutable:
+                recipe_version_id, servings = original_batch_values[batch.id]
+                db.execute(
+                    update(MealBatch)
+                    .where(MealBatch.id == batch.id)
+                    .values(recipe_version_id=recipe_version_id, servings=servings)
+                )
+            for allocation in allocation_rows:
+                db.execute(
+                    update(PortionAllocation)
+                    .where(PortionAllocation.id == allocation.id)
+                    .values(servings=original_allocations[allocation.id])
+                )
+            for occurrence in occurrence_rows:
+                db.execute(
+                    update(MealOccurrence)
+                    .where(MealOccurrence.id == occurrence.id)
+                    .values(guest_servings=original_guests[occurrence.id])
+                )
+            db.flush()
+            warnings.append(_sync_warning(plan, exc))
+            continue
         changed_plan_ids.add(plan.id)
         if plan.status == PlanStatus.ACCEPTED.value:
             accepted_changed_ids.add(plan.id)
@@ -255,6 +365,7 @@ def sync_recipe_versions_to_current_plans(
         return PlanSyncResult(
             plans_updated=len(changed_plan_ids),
             cooked_batches_unchanged=cooked_unchanged,
+            warnings=tuple(warnings),
         )
     if len(accepted_changed_ids) > 1:
         raise DomainError(
@@ -277,6 +388,7 @@ def sync_recipe_versions_to_current_plans(
         return PlanSyncResult(
             plans_updated=len(changed_plan_ids),
             cooked_batches_unchanged=cooked_unchanged,
+            warnings=tuple(warnings),
         )
     plan_batches = db.scalars(
         select(MealBatch)
@@ -308,4 +420,5 @@ def sync_recipe_versions_to_current_plans(
         shopping_list_rebuilt=True,
         shopping_list_id=rebuilt.id,
         cooked_batches_unchanged=cooked_unchanged,
+        warnings=tuple(warnings),
     )
