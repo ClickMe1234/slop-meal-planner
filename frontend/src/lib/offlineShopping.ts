@@ -348,8 +348,11 @@ export async function queueShoppingNameMutation(
     baseDisplayName: existing?.baseDisplayName ?? mutation.baseDisplayName,
     desiredDisplayName: mutation.desiredDisplayName,
     createdAt: existing?.createdAt ?? Date.now(),
-    status: 'pending',
+    status: existing?.status ?? 'pending',
     attempts: existing?.attempts ?? 0,
+    nextAttemptAt: existing?.nextAttemptAt,
+    lastError: existing?.lastError,
+    serverDisplayName: existing?.serverDisplayName,
   }
   await saveShoppingNameMutation(queued)
   return queued
@@ -361,9 +364,15 @@ export async function queueShoppingItemMutation(
   const existing = (await loadShoppingItemMutations()).find(item => item.id === mutation.id)
   const queued: ShoppingItemMutation = {
     ...mutation,
+    operationId: existing?.operationId ?? mutation.operationId,
+    expectedVersion: existing?.expectedVersion ?? mutation.expectedVersion,
+    baseChecked: existing?.baseChecked ?? mutation.baseChecked,
+    baseUnit: existing?.baseUnit ?? mutation.baseUnit,
     createdAt: existing?.createdAt ?? Date.now(),
     attempts: existing?.attempts ?? 0,
-    status: 'pending',
+    status: existing?.status ?? 'pending',
+    nextAttemptAt: existing?.nextAttemptAt,
+    lastError: existing?.lastError,
   }
   await saveShoppingItemMutation(queued)
   return queued

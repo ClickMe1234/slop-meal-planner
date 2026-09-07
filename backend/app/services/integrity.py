@@ -131,9 +131,6 @@ def repair_household_derived_state(db: Session, household_id: str) -> dict[str, 
         .order_by(ShoppingList.created_at.desc(), ShoppingList.id)
         .with_for_update()
     ).all()
-    for stale in active_lists[1:]:
-        stale.active = False
-        stale.version += 1
     accepted_plans = db.scalars(
         select(MealPlan)
         .where(
@@ -173,6 +170,14 @@ def repair_household_derived_state(db: Session, household_id: str) -> dict[str, 
         )
         active_name = active_lists[0].name if active_lists else "Current shopping list"
         rebuilt_list_id = build_shopping_list(db, household_id, plan.id, active_name).id
+    else:
+        # With an accepted plan, build_shopping_list must see every active
+        # duplicate so it can move manual rows onto the authoritative list
+        # before deactivating the others. Without a plan there is no rebuild,
+        # so retain the newest list and deactivate stale duplicates here.
+        for stale in active_lists[1:]:
+            stale.active = False
+            stale.version += 1
     db.flush()
     return {
         "before": before,

@@ -4,8 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   activeShoppingList: vi.fn(),
+  addShoppingItem: vi.fn(),
   addPurchasedToPantry: vi.fn(),
+  me: vi.fn(),
   patchShoppingItem: vi.fn(),
+  itemMutations: [] as Array<Record<string, unknown>>,
   removeShoppingItemMutation: vi.fn(),
   saveShoppingItemMutation: vi.fn(),
 }))
@@ -13,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../lib/offlineShopping', async importOriginal => ({
   ...await importOriginal<typeof import('../lib/offlineShopping')>(),
   loadOfflineShoppingContext: () => null,
-  loadShoppingItemMutations: async () => [],
+  loadShoppingItemMutations: async () => mocks.itemMutations,
   loadShoppingItems: async <T,>(seed: T) => seed,
   loadShoppingNameMutations: async () => [],
   queueShoppingItemMutation: async (mutation: Record<string, unknown>) => ({
@@ -36,7 +39,9 @@ vi.mock('../api/client', async importOriginal => {
     api: {
       ...original.api,
       activeShoppingList: mocks.activeShoppingList,
+      addShoppingItem: mocks.addShoppingItem,
       addPurchasedToPantry: mocks.addPurchasedToPantry,
+      me: mocks.me,
       patchShoppingItem: mocks.patchShoppingItem,
     },
   }
@@ -81,6 +86,7 @@ describe('ShoppingPage synchronization', () => {
     listVersion = 3
     checked = false
     unit = 'g'
+    mocks.itemMutations = []
     mocks.activeShoppingList.mockImplementation(async () => ({
       id: 'list-1',
       meal_plan_id: 'plan-1',
@@ -98,6 +104,19 @@ describe('ShoppingPage synchronization', () => {
       return shoppingItem(itemVersion, checked, unit)
     })
     mocks.addPurchasedToPantry.mockResolvedValue([])
+    mocks.me.mockResolvedValue({ id: 'user-1', username: 'shopper' })
+    mocks.addShoppingItem.mockImplementation(async (_listId: string, payload: { display_name: string }) => ({
+      ...shoppingItem(1),
+      id: 'manual-server-1',
+      display_name: payload.display_name,
+      exact_quantity: 1,
+      purchase_quantity: 1,
+      exact_quantity_display: '1',
+      purchase_quantity_display: '1',
+      unit: 'count',
+      category: 'Other',
+      manual: true,
+    }))
   })
 
   it('refreshes the authoritative list version before purchase intake', async () => {
@@ -136,5 +155,68 @@ describe('ShoppingPage synchronization', () => {
       kind: 'unit',
       expectedVersion: 2,
     }))
+  })
+
+  it('keeps an authentication-paused manual addition stopped until explicit retry', async () => {
+    mocks.itemMutations = [{
+      id: 'list-1:manual:operation-1',
+      kind: 'manual_add',
+      listId: 'list-1',
+      operationId: 'operation-1',
+      localItemId: 'manual:operation-1',
+      displayName: 'Oat milk',
+      exactQuantity: 1,
+      purchaseQuantity: 1,
+      unit: 'count',
+      category: 'Other',
+      createdAt: 1,
+      attempts: 1,
+      status: 'auth_paused',
+      lastError: 'Sign in required',
+    }]
+    const user = userEvent.setup()
+    render(<ShoppingPage />)
+
+    const recovery = await screen.findByRole('group', { name: 'Recovery options for Add “Oat milk”' })
+    expect(mocks.addShoppingItem).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Add purchased to pantry' })).toBeDisabled()
+
+    await user.click(within(recovery).getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(mocks.me).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mocks.addShoppingItem).toHaveBeenCalledWith('list-1', expect.objectContaining({
+      display_name: 'Oat milk',
+      operation_id: 'operation-1',
+    })))
+    await waitFor(() => expect(screen.queryByText('Shopping edits need attention')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Add purchased to pantry' })).toBeEnabled()
+  })
+
+  it('discards an exhausted checked-state edit and restores its server baseline', async () => {
+    mocks.itemMutations = [{
+      id: 'list-1:flour:checked',
+      kind: 'checked',
+      listId: 'list-1',
+      itemId: 'flour',
+      operationId: 'operation-2',
+      expectedVersion: 1,
+      baseChecked: false,
+      desiredChecked: true,
+      createdAt: 1,
+      attempts: 5,
+      status: 'failed',
+      lastError: 'Server unavailable',
+    }]
+    const user = userEvent.setup()
+    render(<ShoppingPage />)
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'Mark Flour not collected' })
+    expect(checkbox).toBeChecked()
+    const recovery = screen.getByRole('group', { name: 'Recovery options for Mark “Flour” as collected' })
+    await user.click(within(recovery).getByRole('button', { name: 'Discard local edit' }))
+
+    await waitFor(() => expect(mocks.removeShoppingItemMutation).toHaveBeenCalledWith('list-1:flour:checked'))
+    expect(screen.getByRole('checkbox', { name: 'Mark Flour collected' })).not.toBeChecked()
+    expect(screen.getByRole('button', { name: 'Add purchased to pantry' })).toBeEnabled()
   })
 })

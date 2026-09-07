@@ -385,7 +385,88 @@ export function ShoppingPage() {
   const currentListMutations = nameMutations.filter(mutation => mutation.listId === listId)
   const currentListItemMutations = itemMutations.filter(mutation => mutation.listId === listId)
   const conflicts = currentListMutations.filter(mutation => mutation.status === 'conflict')
+  const blockedNameMutations = currentListMutations.filter(mutation => mutation.status === 'failed' || mutation.status === 'auth_paused')
+  const blockedItemMutations = currentListItemMutations.filter(mutation => mutation.status === 'failed' || mutation.status === 'auth_paused')
+  const synchronizationBlocked = blockedNameMutations.length > 0 || blockedItemMutations.length > 0
   const completed = items.filter(item => item.checked).length
+
+  const retryNameMutation = async (mutation: ShoppingNameMutation) => {
+    if (mutation.status === 'auth_paused') {
+      try {
+        await api.me()
+      } catch {
+        setNotice('Your session could not be revalidated. Sign in again, then retry this edit.')
+        return
+      }
+    }
+    const pending: ShoppingNameMutation = {
+      ...mutation,
+      status: 'pending',
+      attempts: 0,
+      nextAttemptAt: undefined,
+      lastError: undefined,
+    }
+    await saveShoppingNameMutation(pending)
+    setNameMutations(all => all.map(item => item.id === pending.id ? pending : item))
+    setSyncTick(value => value + 1)
+  }
+
+  const retryItemMutation = async (mutation: ShoppingItemMutation) => {
+    if (mutation.status === 'auth_paused') {
+      try {
+        await api.me()
+      } catch {
+        setNotice('Your session could not be revalidated. Sign in again, then retry this edit.')
+        return
+      }
+    }
+    const pending: ShoppingItemMutation = {
+      ...mutation,
+      status: 'pending',
+      attempts: 0,
+      nextAttemptAt: undefined,
+      lastError: undefined,
+    }
+    await saveShoppingItemMutation(pending)
+    setItemMutations(all => all.map(item => item.id === pending.id ? pending : item))
+    setSyncTick(value => value + 1)
+  }
+
+  const discardNameMutation = async (mutation: ShoppingNameMutation) => {
+    await removeShoppingNameMutation(mutation.id)
+    setNameMutations(all => all.filter(item => item.id !== mutation.id))
+    setItems(all => all.map(item => item.id === mutation.itemId
+      ? { ...item, name: mutation.baseDisplayName, updatedAt: Date.now() }
+      : item))
+    setNotice('The local name edit was discarded.')
+  }
+
+  const discardItemMutation = async (mutation: ShoppingItemMutation) => {
+    await removeShoppingItemMutation(mutation.id)
+    setItemMutations(all => all.filter(item => item.id !== mutation.id))
+    if (mutation.kind === 'manual_add') {
+      setItems(all => all.filter(item => item.id !== mutation.localItemId))
+    } else if (mutation.itemId) {
+      setItems(all => all.map(item => {
+        if (item.id !== mutation.itemId) return item
+        if (mutation.kind === 'checked' && mutation.baseChecked !== undefined) {
+          return { ...item, checked: mutation.baseChecked, updatedAt: Date.now() }
+        }
+        if (mutation.kind === 'unit' && mutation.baseUnit) {
+          return { ...selectQuantityUnit(item, mutation.baseUnit), updatedAt: Date.now() }
+        }
+        return item
+      }))
+    }
+    setNotice(mutation.kind === 'manual_add' ? 'The unsynchronized manual item was removed.' : 'The local shopping edit was discarded.')
+  }
+
+  const mutationDescription = (mutation: ShoppingItemMutation) => {
+    const item = items.find(value => value.id === mutation.itemId || value.id === mutation.localItemId)
+    if (mutation.kind === 'manual_add') return `Add “${mutation.displayName ?? item?.name ?? 'manual item'}”`
+    if (mutation.kind === 'checked') return `${mutation.desiredChecked ? 'Mark' : 'Unmark'} “${item?.name ?? 'shopping item'}” as collected`
+    return `Show “${item?.name ?? 'shopping item'}” in ${unitLabel(mutation.desiredUnit ?? '')}`
+  }
 
   const toggle = async (id: string) => {
     const current = items.find(item => item.id === id)
@@ -797,8 +878,12 @@ export function ShoppingPage() {
     ? 'Working offline'
     : conflicts.length
       ? 'Name conflict'
+      : synchronizationBlocked
+        ? 'Sync needs attention'
       : currentListMutations.length
         ? 'Syncing edits'
+        : currentListItemMutations.length
+          ? 'Syncing edits'
         : 'Synced'
 
   return <div className="page">
@@ -838,11 +923,28 @@ export function ShoppingPage() {
         <div><ShoppingBasket/><span><strong>{completed} of {items.length}</strong><small>items collected</small></span></div>
         <div className="progress-bar"><span style={{ width: `${items.length ? completed / items.length * 100 : 0}%` }}/></div>
       </div>
-      <Badge tone={online && !currentListMutations.length ? 'green' : 'warning'}>
+      <Badge tone={online && !currentListMutations.length && !currentListItemMutations.length ? 'green' : 'warning'}>
         {online ? <Wifi size={14}/> : <WifiOff size={14}/>} {syncLabel}
       </Badge>
     </div>
     {notice && <button className="toast" onClick={() => setNotice('')}><Check/>{notice}</button>}
+    {synchronizationBlocked && <Notice tone="warning" title="Shopping edits need attention">
+      <p>These changes are kept on this device and will not retry until you choose what to do. Authentication-paused edits revalidate your session before synchronizing.</p>
+      <div className="stack-list">
+        {blockedNameMutations.map(mutation => <div key={mutation.id} className="button-row" role="group" aria-label={`Recovery options for renaming ${mutation.baseDisplayName}`}>
+          <span><strong>Rename “{mutation.baseDisplayName}” to “{mutation.desiredDisplayName}”</strong>{mutation.lastError && <small> — {mutation.lastError}</small>}</span>
+          {mutation.status === 'auth_paused' && <a className="button button--ghost" href="/login">Sign in</a>}
+          <Button type="button" variant="secondary" onClick={() => void retryNameMutation(mutation)}>Retry</Button>
+          <Button type="button" variant="ghost" onClick={() => void discardNameMutation(mutation)}>Discard local edit</Button>
+        </div>)}
+        {blockedItemMutations.map(mutation => <div key={mutation.id} className="button-row" role="group" aria-label={`Recovery options for ${mutationDescription(mutation)}`}>
+          <span><strong>{mutationDescription(mutation)}</strong>{mutation.lastError && <small> — {mutation.lastError}</small>}</span>
+          {mutation.status === 'auth_paused' && <a className="button button--ghost" href="/login">Sign in</a>}
+          <Button type="button" variant="secondary" onClick={() => void retryItemMutation(mutation)}>Retry</Button>
+          <Button type="button" variant="ghost" onClick={() => void discardItemMutation(mutation)}>{mutation.kind === 'manual_add' ? 'Remove item' : 'Discard local edit'}</Button>
+        </div>)}
+      </div>
+    </Notice>}
     <form className="quick-add" onSubmit={add}><Plus/><input value={newItem} onChange={event => setNewItem(event.target.value)} placeholder="Add something to the list…"/><Button type="submit">Add</Button></form>
     {items.length
       ? <div className="shopping-groups">{Object.entries(grouped).map(([category, group]) => <section key={category}>
