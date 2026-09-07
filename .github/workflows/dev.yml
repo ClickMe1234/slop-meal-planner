@@ -49,7 +49,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/pyproject.toml
 
-      - name: Verify backend, migration and dependency gates
+      - name: Verify backend migration and dependency gates
         working-directory: backend
         env:
           MEAL_PLANNER_DATABASE_URL: postgresql+psycopg://meal_planner:migration-test-password@127.0.0.1:5432/meal_planner_ci
@@ -60,7 +60,6 @@ jobs:
           python -m pip install --require-hashes --no-build-isolation -r requirements-dev.lock
           alembic -c alembic.ini upgrade head
           alembic -c alembic.ini check
-          python -m pytest
           set +e
           python -m pip_audit -r requirements.lock --format=json --output=/tmp/pip-audit.json
           audit_status=$?
@@ -70,6 +69,10 @@ jobs:
           policy_status=$?
           if [ "$audit_status" -ne 0 ] && [ "$policy_status" -eq 0 ]; then exit 0; fi
           exit "$policy_status"
+
+      - name: Run backend tests
+        working-directory: backend
+        run: python -m pytest
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
