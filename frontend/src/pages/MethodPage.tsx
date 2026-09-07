@@ -46,7 +46,7 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import {
   api,
   ApiError,
@@ -353,6 +353,24 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
   const [tutorialStep, setTutorialStep] = useState<number | null>(null)
   const [conflictLatest, setConflictLatest] = useState<BackendMethodView | null>(null)
   const [refreshCandidate, setRefreshCandidate] = useState<BackendMethodView | null>(null)
+
+  useEffect(() => {
+    document.body.dataset.unsavedDraft = dirty ? 'true' : 'false'
+    window.dispatchEvent(new Event('slop:draft-state'))
+    const warnBeforeDiscard = (event: BeforeUnloadEvent) => {
+      if (!dirty) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeDiscard)
+    return () => {
+      window.removeEventListener('beforeunload', warnBeforeDiscard)
+      if (dirty) {
+        delete document.body.dataset.unsavedDraft
+        window.dispatchEvent(new Event('slop:draft-state'))
+      }
+    }
+  }, [dirty])
 
   useEffect(() => {
     if ((session.data?.method_tutorial_version_seen ?? TUTORIAL_VERSION) < TUTORIAL_VERSION) setTutorialStep(0)

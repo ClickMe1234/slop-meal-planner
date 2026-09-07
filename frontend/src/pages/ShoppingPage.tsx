@@ -17,19 +17,24 @@ import {
   X,
 } from 'lucide-react'
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Badge, Button, Card, EmptyState, Notice, PageHeader } from '../components/ui'
 import { initialShopping } from '../data/demo'
 import {
   loadOfflineShoppingContext,
+  loadShoppingItemMutations,
   loadShoppingItems,
   loadShoppingNameMutations,
+  queueShoppingItemMutation,
   queueShoppingNameMutation,
+  removeShoppingItemMutation,
   removeShoppingNameMutation,
   saveOfflineShoppingContext,
+  saveShoppingItemMutation,
   saveShoppingItems,
   saveShoppingNameMutation,
   shoppingAsText,
+  type ShoppingItemMutation,
   type ShoppingNameMutation,
 } from '../lib/offlineShopping'
 import type { ShoppingItem } from '../types'
@@ -49,12 +54,15 @@ export function ShoppingPage() {
   const [newItem, setNewItem] = useState('')
   const [notice, setNotice] = useState('')
   const [listId, setListId] = useState('')
+  const [listVersion, setListVersion] = useState(0)
+  const [listVersionRefreshRequired, setListVersionRefreshRequired] = useState(false)
   const [mealPlanId, setMealPlanId] = useState('')
   const [rebuildRecommended, setRebuildRecommended] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
   const [rebuildProblem, setRebuildProblem] = useState<{ message: string; actions: ApiAction[] } | null>(null)
   const [versions, setVersions] = useState<Record<string, number>>({})
   const [nameMutations, setNameMutations] = useState<ShoppingNameMutation[]>([])
+  const [itemMutations, setItemMutations] = useState<ShoppingItemMutation[]>([])
   const [editingId, setEditingId] = useState('')
   const [editingName, setEditingName] = useState('')
   const [pantryReviewId, setPantryReviewId] = useState('')
@@ -63,13 +71,19 @@ export function ShoppingPage() {
   const [coveredAmount, setCoveredAmount] = useState('')
   const [pantryReviewSaving, setPantryReviewSaving] = useState(false)
   const [pantryMatchSavingId, setPantryMatchSavingId] = useState('')
-  const syncingNames = useRef(false)
+  const [purchaseSaving, setPurchaseSaving] = useState(false)
+  const purchaseOperationId = useRef('')
+  const syncingMutations = useRef(false)
+  const retryTimer = useRef<number | null>(null)
+  const [syncTick, setSyncTick] = useState(0)
 
   const applyServerList = (
     server: BackendShoppingList,
     nextItems = server.items.map(mapShoppingItem),
   ) => {
     setListId(server.id)
+    setListVersion(server.version)
+    setListVersionRefreshRequired(false)
     setMealPlanId(server.meal_plan_id ?? '')
     setRebuildRecommended(server.rebuild_recommended)
     setVersions(Object.fromEntries(server.items.map(item => [item.id, item.version])))
@@ -81,10 +95,23 @@ export function ShoppingPage() {
     })
   }
 
+  const applyServerListMetadata = (server: BackendShoppingList) => {
+    setListVersion(server.version)
+    setMealPlanId(server.meal_plan_id ?? '')
+    setRebuildRecommended(server.rebuild_recommended)
+    setVersions(Object.fromEntries(server.items.map(item => [item.id, item.version])))
+    saveOfflineShoppingContext({
+      listId: server.id,
+      mealPlanId: server.meal_plan_id ?? '',
+      rebuildRecommended: server.rebuild_recommended,
+    })
+  }
+
   useEffect(() => {
     let cancelled = false
     const load = async () => {
       const queuedNames = isDemoMode ? [] : await loadShoppingNameMutations()
+      const queuedItems = isDemoMode ? [] : await loadShoppingItemMutations()
       if (isDemoMode) {
         const value = await loadShoppingItems(initialShopping)
         if (!cancelled) {
@@ -97,63 +124,57 @@ export function ShoppingPage() {
         const server = await api.activeShoppingList()
         const serverItems = server.items.map(mapShoppingItem)
         const cached = await loadShoppingItems(serverItems)
-        const cachedById = new Map(cached.map(item => [item.id, item]))
         const queuedById = new Map(
           queuedNames
             .filter(mutation => mutation.listId === server.id)
             .map(mutation => [mutation.itemId, mutation]),
         )
         const merged = serverItems.map(item => {
-          const local = cachedById.get(item.id)
           const queued = queuedById.get(item.id)
+          const queuedItem = queuedItems
+            .filter(mutation => mutation.itemId === item.id)
+            .sort((left, right) => right.createdAt - left.createdAt)[0]
           const mergedItem = {
             ...item,
-            checked: local?.checked ?? item.checked,
-            updatedAt: local?.updatedAt ?? item.updatedAt,
+            checked: queuedItem?.kind === 'checked' && queuedItem.desiredChecked !== undefined ? queuedItem.desiredChecked : item.checked,
             name: queued?.desiredDisplayName ?? item.name,
           }
-          return local?.unit ? selectQuantityUnit(mergedItem, local.unit) : mergedItem
+          return queuedItem?.kind === 'unit' && queuedItem.desiredUnit ? selectQuantityUnit(mergedItem, queuedItem.desiredUnit) : mergedItem
         })
         const nextVersions = Object.fromEntries(server.items.map(item => [item.id, item.version]))
-        let checkedChangeConflict = false
-        for (const original of server.items) {
-          const local = cachedById.get(original.id)
-          const displayUnit = local?.unit && original.available_units?.includes(local.unit)
-            && local.unit !== original.unit
-            ? local.unit
-            : undefined
-          const checked = local && local.checked !== original.checked ? local.checked : undefined
-          if (checked !== undefined || displayUnit) {
-            try {
-              const updated = await api.patchShoppingItem(server.id, original.id, {
-                expected_version: nextVersions[original.id],
-                checked,
-                display_unit: displayUnit,
-              })
-              nextVersions[original.id] = updated.version
-            } catch {
-              if (checked !== undefined) {
-                checkedChangeConflict = true
-                const mergedItem = merged.find(item => item.id === original.id)
-                if (mergedItem) mergedItem.checked = original.checked
-              }
-            }
-          }
-        }
         if (!cancelled) {
           setNameMutations(queuedNames)
+          const hydratedMutations = queuedItems.map(mutation => mutation.expectedVersion === undefined && mutation.itemId && nextVersions[mutation.itemId]
+            ? { ...mutation, expectedVersion: nextVersions[mutation.itemId] }
+            : mutation)
+          setItemMutations(hydratedMutations)
+          await Promise.all(hydratedMutations.filter((mutation, index) => mutation !== queuedItems[index]).map(mutation => saveShoppingItemMutation(mutation)))
           applyServerList(server, merged)
           setVersions({ ...nextVersions })
           setLoaded(true)
-          if (checkedChangeConflict) {
-            setNotice('A checked item changed elsewhere, so the household value was kept.')
-          }
           await saveShoppingItems(merged)
         }
       } catch {
         const cached = await loadShoppingItems([])
         const context = loadOfflineShoppingContext()
         const queuedById = new Map(queuedNames.map(mutation => [mutation.itemId, mutation]))
+        const queuedItemById = new Map(
+          queuedItems
+            .filter(mutation => mutation.itemId)
+            .sort((left, right) => right.createdAt - left.createdAt)
+            .map(mutation => [mutation.itemId!, mutation]),
+        )
+        const offlineItems = cached.map(item => {
+          const mutation = queuedItemById.get(item.id)
+          const named = queuedById.get(item.id)
+          const withName = named ? { ...item, name: named.desiredDisplayName } : item
+          if (!mutation) return withName
+          return mutation.kind === 'checked' && mutation.desiredChecked !== undefined
+            ? { ...withName, checked: mutation.desiredChecked }
+            : mutation.kind === 'unit' && mutation.desiredUnit
+              ? selectQuantityUnit(withName, mutation.desiredUnit)
+              : withName
+        })
         if (!cancelled) {
           if (context) {
             setListId(context.listId)
@@ -161,10 +182,8 @@ export function ShoppingPage() {
             setRebuildRecommended(context.rebuildRecommended)
           }
           setNameMutations(queuedNames)
-          setItems(cached.map(item => ({
-            ...item,
-            name: queuedById.get(item.id)?.desiredDisplayName ?? item.name,
-          })))
+          setItemMutations(queuedItems)
+          setItems(offlineItems)
           setLoaded(true)
           setNotice('Working from the offline copy until the server is available.')
         }
@@ -194,54 +213,163 @@ export function ShoppingPage() {
   }, [items, loaded])
 
   useEffect(() => {
-    if (
-      isDemoMode
-      || !online
-      || !loaded
-      || syncingNames.current
-      || !nameMutations.some(mutation => mutation.status === 'pending')
-    ) return
+    if (retryTimer.current !== null) {
+      window.clearTimeout(retryTimer.current)
+      retryTimer.current = null
+    }
+    if (isDemoMode || !online || !loaded || syncingMutations.current) return
+    const now = Date.now()
+    const pendingNames = nameMutations.filter(mutation => mutation.status === 'pending')
+    const pendingItems = itemMutations.filter(mutation => mutation.status === 'pending')
+    const pending = [...pendingNames.map(mutation => ({ kind: 'name' as const, mutation })), ...pendingItems.map(mutation => ({ kind: 'item' as const, mutation }))]
+    if (!pending.length) return
+    const ready = pending.filter(entry => (entry.mutation.nextAttemptAt ?? 0) <= now)
+    const nextAttemptAt = pending.reduce((soonest, entry) => {
+      const attemptAt = entry.mutation.nextAttemptAt
+      return attemptAt && attemptAt > now ? Math.min(soonest, attemptAt) : soonest
+    }, Number.POSITIVE_INFINITY)
+    if (!ready.length && Number.isFinite(nextAttemptAt)) {
+      retryTimer.current = window.setTimeout(() => setSyncTick(value => value + 1), nextAttemptAt - now)
+      return () => {
+        if (retryTimer.current !== null) window.clearTimeout(retryTimer.current)
+        retryTimer.current = null
+      }
+    }
 
     let cancelled = false
-    syncingNames.current = true
+    syncingMutations.current = true
     const flush = async () => {
-      let next = [...nameMutations]
-      for (const mutation of nameMutations.filter(item => item.status === 'pending')) {
-        try {
-          const updated = await api.renameShoppingItem(mutation.listId, mutation.itemId, {
-            display_name: mutation.desiredDisplayName,
-            expected_display_name: mutation.baseDisplayName,
-          })
-          await removeShoppingNameMutation(mutation.id)
-          next = next.filter(item => item.id !== mutation.id)
-          if (!cancelled) {
-            setItems(all => all.map(item => item.id === mutation.itemId
-              ? { ...item, name: updated.display_name, updatedAt: Date.now() }
-              : item))
-            setVersions(all => ({ ...all, [mutation.itemId]: updated.version }))
-          }
-        } catch (reason) {
-          if (reason instanceof ApiError && reason.code === 'SHOPPING_NAME_CONFLICT') {
-            const conflict: ShoppingNameMutation = {
-              ...mutation,
-              status: 'conflict',
-              serverDisplayName: reason.actions[0]?.current_display_name ?? mutation.baseDisplayName,
-            }
-            await saveShoppingNameMutation(conflict)
-            next = next.map(item => item.id === conflict.id ? conflict : item)
-            continue
-          }
-          break
+      let nextNames = [...nameMutations]
+      let nextItems = [...itemMutations]
+      let serverMutationSucceeded = false
+      const authoritativeItemVersions = new Map<string, number>()
+      const retryAt = (attempts: number) => Date.now() + Math.min(60_000, 1000 * (2 ** Math.max(0, attempts - 1)))
+      const fail = async (entry: { kind: 'name'; mutation: ShoppingNameMutation } | { kind: 'item'; mutation: ShoppingItemMutation }, reason: unknown) => {
+        const attempts = (entry.mutation.attempts ?? 0) + 1
+        const message = reason instanceof Error ? reason.message : 'The change could not be synchronized.'
+        const authPaused = reason instanceof ApiError && (reason.status === 401 || reason.status === 403)
+        const status = authPaused ? 'auth_paused' : attempts >= 5 ? 'failed' : 'pending'
+        if (entry.kind === 'name') {
+          const updated: ShoppingNameMutation = { ...entry.mutation, attempts, status, lastError: message, nextAttemptAt: status === 'pending' ? retryAt(attempts) : undefined }
+          await saveShoppingNameMutation(updated)
+          nextNames = nextNames.map(item => item.id === updated.id ? updated : item)
+        } else {
+          const updated: ShoppingItemMutation = { ...entry.mutation, attempts, status, lastError: message, nextAttemptAt: status === 'pending' ? retryAt(attempts) : undefined }
+          await saveShoppingItemMutation(updated)
+          nextItems = nextItems.map(item => item.id === updated.id ? updated : item)
         }
       }
-      if (!cancelled) setNameMutations(next)
-      syncingNames.current = false
+
+      for (const queuedEntry of ready) {
+        if (cancelled) break
+        const entry = queuedEntry.kind === 'item' && queuedEntry.mutation.itemId && authoritativeItemVersions.has(queuedEntry.mutation.itemId)
+          ? {
+              ...queuedEntry,
+              mutation: {
+                ...queuedEntry.mutation,
+                expectedVersion: authoritativeItemVersions.get(queuedEntry.mutation.itemId),
+              },
+            }
+          : queuedEntry
+        try {
+          if (entry.kind === 'name') {
+            const mutation = entry.mutation
+            const updated = await api.renameShoppingItem(mutation.listId, mutation.itemId, {
+              display_name: mutation.desiredDisplayName,
+              expected_display_name: mutation.baseDisplayName,
+            })
+            await removeShoppingNameMutation(mutation.id)
+            nextNames = nextNames.filter(item => item.id !== mutation.id)
+            setItems(all => all.map(item => item.id === mutation.itemId ? { ...item, name: updated.display_name, updatedAt: Date.now() } : item))
+            setVersions(all => ({ ...all, [mutation.itemId]: updated.version }))
+            authoritativeItemVersions.set(mutation.itemId, updated.version)
+            serverMutationSucceeded = true
+          } else {
+            const mutation = entry.mutation
+            if (!mutation.listId) throw new Error('The shopping list is not available yet.')
+            if (mutation.kind === 'manual_add') {
+              const created = await api.addShoppingItem(mutation.listId, {
+                display_name: mutation.displayName ?? '',
+                exact_quantity: mutation.exactQuantity ?? 1,
+                purchase_quantity: mutation.purchaseQuantity ?? 1,
+                unit: mutation.unit ?? 'count',
+                category: mutation.category ?? 'Other',
+                operation_id: mutation.operationId,
+              })
+              await removeShoppingItemMutation(mutation.id)
+              nextItems = nextItems.filter(item => item.id !== mutation.id)
+              setItems(all => [...all.filter(item => item.id !== mutation.localItemId), mapShoppingItem(created)])
+              setVersions(all => ({ ...all, [created.id]: created.version }))
+              serverMutationSucceeded = true
+            } else {
+              if (!mutation.itemId || mutation.expectedVersion === undefined) throw new Error('Waiting for the current shopping-list version.')
+              const updated = await api.patchShoppingItem(mutation.listId, mutation.itemId, {
+                expected_version: mutation.expectedVersion,
+                checked: mutation.kind === 'checked' ? mutation.desiredChecked : undefined,
+                display_unit: mutation.kind === 'unit' ? mutation.desiredUnit : undefined,
+              })
+              await removeShoppingItemMutation(mutation.id)
+              nextItems = nextItems.filter(item => item.id !== mutation.id)
+              setItems(all => all.map(item => item.id === mutation.itemId ? mapShoppingItem(updated) : item))
+              setVersions(all => ({ ...all, [mutation.itemId!]: updated.version }))
+              authoritativeItemVersions.set(mutation.itemId, updated.version)
+              const rebased = nextItems.filter(candidate =>
+                candidate.id !== mutation.id
+                && candidate.itemId === mutation.itemId
+                && candidate.status === 'pending'
+                && candidate.expectedVersion !== updated.version,
+              )
+              for (const candidate of rebased) {
+                const updatedCandidate = { ...candidate, expectedVersion: updated.version }
+                await saveShoppingItemMutation(updatedCandidate)
+                nextItems = nextItems.map(item => item.id === updatedCandidate.id ? updatedCandidate : item)
+              }
+              serverMutationSucceeded = true
+            }
+          }
+        } catch (reason) {
+          if (reason instanceof ApiError && (reason.code === 'SHOPPING_NAME_CONFLICT' || reason.status === 409)) {
+            if (entry.kind === 'name' && reason.code === 'SHOPPING_NAME_CONFLICT') {
+              const conflict: ShoppingNameMutation = {
+                ...entry.mutation,
+                status: 'conflict',
+                serverDisplayName: reason.actions[0]?.current_display_name ?? entry.mutation.baseDisplayName,
+                nextAttemptAt: undefined,
+              }
+              await saveShoppingNameMutation(conflict)
+              nextNames = nextNames.map(item => item.id === conflict.id ? conflict : item)
+            } else {
+              await fail(entry, reason)
+            }
+          } else {
+            await fail(entry, reason)
+          }
+        }
+      }
+      if (serverMutationSucceeded && !cancelled) {
+        setListVersionRefreshRequired(true)
+        try {
+          const currentList = await api.activeShoppingList()
+          if (currentList.id === listId) {
+            applyServerListMetadata(currentList)
+            setListVersionRefreshRequired(false)
+          }
+        } catch {
+          setNotice('Your changes synchronized, but the current list version could not be refreshed. Reload before adding purchases to the pantry.')
+        }
+      }
+      if (!cancelled) {
+        setNameMutations(nextNames)
+        setItemMutations(nextItems)
+        setSyncTick(value => value + 1)
+      }
+      syncingMutations.current = false
     }
     void flush()
     return () => {
       cancelled = true
     }
-  }, [loaded, nameMutations, online])
+  }, [loaded, nameMutations, itemMutations, online, syncTick])
 
   const grouped = useMemo(
     () => items.reduce<Record<string, ShoppingItem[]>>((out, item) => {
@@ -255,8 +383,90 @@ export function ShoppingPage() {
     [nameMutations],
   )
   const currentListMutations = nameMutations.filter(mutation => mutation.listId === listId)
+  const currentListItemMutations = itemMutations.filter(mutation => mutation.listId === listId)
   const conflicts = currentListMutations.filter(mutation => mutation.status === 'conflict')
+  const blockedNameMutations = currentListMutations.filter(mutation => mutation.status === 'failed' || mutation.status === 'auth_paused')
+  const blockedItemMutations = currentListItemMutations.filter(mutation => mutation.status === 'failed' || mutation.status === 'auth_paused')
+  const synchronizationBlocked = blockedNameMutations.length > 0 || blockedItemMutations.length > 0
   const completed = items.filter(item => item.checked).length
+
+  const retryNameMutation = async (mutation: ShoppingNameMutation) => {
+    if (mutation.status === 'auth_paused') {
+      try {
+        await api.me()
+      } catch {
+        setNotice('Your session could not be revalidated. Sign in again, then retry this edit.')
+        return
+      }
+    }
+    const pending: ShoppingNameMutation = {
+      ...mutation,
+      status: 'pending',
+      attempts: 0,
+      nextAttemptAt: undefined,
+      lastError: undefined,
+    }
+    await saveShoppingNameMutation(pending)
+    setNameMutations(all => all.map(item => item.id === pending.id ? pending : item))
+    setSyncTick(value => value + 1)
+  }
+
+  const retryItemMutation = async (mutation: ShoppingItemMutation) => {
+    if (mutation.status === 'auth_paused') {
+      try {
+        await api.me()
+      } catch {
+        setNotice('Your session could not be revalidated. Sign in again, then retry this edit.')
+        return
+      }
+    }
+    const pending: ShoppingItemMutation = {
+      ...mutation,
+      status: 'pending',
+      attempts: 0,
+      nextAttemptAt: undefined,
+      lastError: undefined,
+    }
+    await saveShoppingItemMutation(pending)
+    setItemMutations(all => all.map(item => item.id === pending.id ? pending : item))
+    setSyncTick(value => value + 1)
+  }
+
+  const discardNameMutation = async (mutation: ShoppingNameMutation) => {
+    await removeShoppingNameMutation(mutation.id)
+    setNameMutations(all => all.filter(item => item.id !== mutation.id))
+    setItems(all => all.map(item => item.id === mutation.itemId
+      ? { ...item, name: mutation.baseDisplayName, updatedAt: Date.now() }
+      : item))
+    setNotice('The local name edit was discarded.')
+  }
+
+  const discardItemMutation = async (mutation: ShoppingItemMutation) => {
+    await removeShoppingItemMutation(mutation.id)
+    setItemMutations(all => all.filter(item => item.id !== mutation.id))
+    if (mutation.kind === 'manual_add') {
+      setItems(all => all.filter(item => item.id !== mutation.localItemId))
+    } else if (mutation.itemId) {
+      setItems(all => all.map(item => {
+        if (item.id !== mutation.itemId) return item
+        if (mutation.kind === 'checked' && mutation.baseChecked !== undefined) {
+          return { ...item, checked: mutation.baseChecked, updatedAt: Date.now() }
+        }
+        if (mutation.kind === 'unit' && mutation.baseUnit) {
+          return { ...selectQuantityUnit(item, mutation.baseUnit), updatedAt: Date.now() }
+        }
+        return item
+      }))
+    }
+    setNotice(mutation.kind === 'manual_add' ? 'The unsynchronized manual item was removed.' : 'The local shopping edit was discarded.')
+  }
+
+  const mutationDescription = (mutation: ShoppingItemMutation) => {
+    const item = items.find(value => value.id === mutation.itemId || value.id === mutation.localItemId)
+    if (mutation.kind === 'manual_add') return `Add “${mutation.displayName ?? item?.name ?? 'manual item'}”`
+    if (mutation.kind === 'checked') return `${mutation.desiredChecked ? 'Mark' : 'Unmark'} “${item?.name ?? 'shopping item'}” as collected`
+    return `Show “${item?.name ?? 'shopping item'}” in ${unitLabel(mutation.desiredUnit ?? '')}`
+  }
 
   const toggle = async (id: string) => {
     const current = items.find(item => item.id === id)
@@ -265,16 +475,19 @@ export function ShoppingPage() {
     setItems(all => all.map(item => item.id === id
       ? { ...item, checked, updatedAt: Date.now() }
       : item))
-    if (!isDemoMode && online && listId && versions[id]) {
-      try {
-        const updated = await api.patchShoppingItem(listId, id, {
-          expected_version: versions[id],
-          checked,
-        })
-        setVersions(all => ({ ...all, [id]: updated.version }))
-      } catch {
-        setNotice('Saved offline. This change will be reconciled when the list reloads.')
-      }
+    if (!isDemoMode && listId) {
+      const mutation = await queueShoppingItemMutation({
+        id: `${listId}:${id}:checked`,
+        kind: 'checked',
+        listId,
+        itemId: id,
+        operationId: crypto.randomUUID(),
+        expectedVersion: versions[id],
+        baseChecked: current.checked,
+        desiredChecked: checked,
+      })
+      setItemMutations(all => [...all.filter(item => item.id !== mutation.id), mutation])
+      if (!online) setNotice('Checked state saved offline. It will sync when this device reconnects.')
     }
   }
 
@@ -289,17 +502,19 @@ export function ShoppingPage() {
     setItems(all => all.map(item => item.id === id
       ? { ...selectQuantityUnit(item, unit), updatedAt: Date.now() }
       : item))
-    if (!isDemoMode && online && listId && versions[id]) {
-      try {
-        const updated = await api.patchShoppingItem(listId, id, {
-          expected_version: versions[id],
-          display_unit: unit,
-        })
-        setItems(all => all.map(item => item.id === id ? mapShoppingItem(updated) : item))
-        setVersions(all => ({ ...all, [id]: updated.version }))
-      } catch {
-        setNotice('Unit choice saved on this device. It will be reconciled when the list reloads.')
-      }
+    if (!isDemoMode && listId) {
+      const mutation = await queueShoppingItemMutation({
+        id: `${listId}:${id}:unit`,
+        kind: 'unit',
+        listId,
+        itemId: id,
+        operationId: crypto.randomUUID(),
+        expectedVersion: versions[id],
+        baseUnit: current.unit,
+        desiredUnit: unit,
+      })
+      setItemMutations(all => [...all.filter(item => item.id !== mutation.id), mutation])
+      if (!online) setNotice('Unit choice saved offline. It will sync when this device reconnects.')
     }
   }
 
@@ -522,39 +737,6 @@ export function ShoppingPage() {
 
     const existing = mutationsByItem.get(item.id)
     const baseDisplayName = existing?.baseDisplayName ?? item.name
-    if (online) {
-      try {
-        const updated = await api.renameShoppingItem(listId, item.id, {
-          display_name: desiredName,
-          expected_display_name: baseDisplayName,
-        })
-        if (existing) await removeShoppingNameMutation(existing.id)
-        setNameMutations(all => all.filter(mutation => mutation.itemId !== item.id))
-        setItems(all => all.map(value => value.id === item.id
-          ? { ...value, name: updated.display_name, updatedAt: Date.now() }
-          : value))
-        setVersions(all => ({ ...all, [item.id]: updated.version }))
-        setNotice('Ingredient name updated and remembered for this household.')
-        return
-      } catch (reason) {
-        if (reason instanceof ApiError && reason.code === 'SHOPPING_NAME_CONFLICT') {
-          const conflict: ShoppingNameMutation = {
-            id: `${listId}:${item.id}`,
-            listId,
-            itemId: item.id,
-            baseDisplayName,
-            desiredDisplayName: desiredName,
-            createdAt: existing?.createdAt ?? Date.now(),
-            status: 'conflict',
-            serverDisplayName: reason.actions[0]?.current_display_name ?? baseDisplayName,
-          }
-          await saveShoppingNameMutation(conflict)
-          setNameMutations(all => [...all.filter(mutation => mutation.id !== conflict.id), conflict])
-          return
-        }
-      }
-    }
-
     const queued = await queueShoppingNameMutation({
       listId,
       itemId: item.id,
@@ -562,7 +744,7 @@ export function ShoppingPage() {
       desiredDisplayName: desiredName,
     })
     setNameMutations(all => [...all.filter(mutation => mutation.id !== queued.id), queued])
-    setNotice('Name edit saved offline. It will sync when this device reconnects.')
+    setNotice(online ? 'Name edit queued for synchronization.' : 'Name edit saved offline. It will sync when this device reconnects.')
   }
 
   const useMyName = async (mutation: ShoppingNameMutation) => {
@@ -589,22 +771,24 @@ export function ShoppingPage() {
     event.preventDefault()
     if (!newItem.trim()) return
     const name = newItem.trim()
-    if (!isDemoMode && online && listId) {
-      try {
-        const item = await api.addShoppingItem(listId, {
-          display_name: name,
-          exact_quantity: 1,
-          purchase_quantity: 1,
-          unit: 'count',
-          category: 'Other',
-        })
-        setItems(all => [...all, mapShoppingItem(item)])
-        setVersions(all => ({ ...all, [item.id]: item.version }))
-      } catch {
-        setItems(all => [...all, manualShoppingItem(name)])
-      }
-    } else {
-      setItems(all => [...all, manualShoppingItem(name)])
+    const operationId = crypto.randomUUID()
+    const localItem = manualShoppingItem(name, `manual:${operationId}`)
+    setItems(all => [...all, localItem])
+    if (!isDemoMode && listId) {
+      const mutation = await queueShoppingItemMutation({
+        id: `${listId}:manual:${operationId}`,
+        kind: 'manual_add',
+        listId,
+        operationId,
+        localItemId: localItem.id,
+        displayName: name,
+        exactQuantity: 1,
+        purchaseQuantity: 1,
+        unit: 'count',
+        category: 'Other',
+      })
+      setItemMutations(all => [...all, mutation])
+      if (!online) setNotice('Manual item saved offline. It will sync when this device reconnects.')
     }
     setNewItem('')
   }
@@ -636,13 +820,33 @@ export function ShoppingPage() {
   }
 
   const addPurchased = async () => {
-    if (!listId) return
+    if (!listId || !listVersion || listVersionRefreshRequired || currentListMutations.length || currentListItemMutations.length || purchaseSaving) return
+    if (!purchaseOperationId.current) {
+      purchaseOperationId.current = globalThis.crypto?.randomUUID?.()
+        ?? `purchase-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    }
+    setPurchaseSaving(true)
     try {
-      await api.addPurchasedToPantry(listId)
-      setItems(all => all.map(item => ({ ...item, checked: false })))
+      await api.addPurchasedToPantry(listId, {
+        expected_list_version: listVersion,
+        operation_id: purchaseOperationId.current,
+      })
+      const updated = await api.activeShoppingList()
+      applyServerList(updated)
+      await saveShoppingItems(updated.items.map(mapShoppingItem))
+      purchaseOperationId.current = ''
       setNotice('Purchased items were added to the pantry.')
-    } catch {
-      setNotice('Tick at least one purchased item before adding it to the pantry.')
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.code === 'NO_PURCHASED_ITEMS') {
+        purchaseOperationId.current = ''
+        setNotice('Tick at least one purchased item before adding it to the pantry.')
+      } else if (reason instanceof ApiError && reason.status === 409) {
+        setNotice('The shopping list changed on another device. Reload it before adding purchases.')
+      } else {
+        setNotice('The purchase could not be confirmed. Retry safely when the connection is available.')
+      }
+    } finally {
+      setPurchaseSaving(false)
     }
   }
 
@@ -674,8 +878,12 @@ export function ShoppingPage() {
     ? 'Working offline'
     : conflicts.length
       ? 'Name conflict'
+      : synchronizationBlocked
+        ? 'Sync needs attention'
       : currentListMutations.length
         ? 'Syncing edits'
+        : currentListItemMutations.length
+          ? 'Syncing edits'
         : 'Synced'
 
   return <div className="page">
@@ -687,7 +895,9 @@ export function ShoppingPage() {
         <Button variant="secondary" onClick={share}><Share2/>Share</Button>
         <Button variant="ghost" onClick={copy}><Clipboard/>Copy</Button>
         <Button variant="ghost" onClick={download}><Download/>.txt</Button>
-        {!isDemoMode && <Button onClick={addPurchased}>Add purchased to pantry</Button>}
+        {!isDemoMode && <Button disabled={purchaseSaving || listVersionRefreshRequired || currentListMutations.length > 0 || currentListItemMutations.length > 0} onClick={addPurchased}>
+          {purchaseSaving ? 'Adding purchases…' : 'Add purchased to pantry'}
+        </Button>}
       </>}
     />
     {rebuildRecommended && <Notice tone="warning" title="Shopping list improvements are available">
@@ -713,11 +923,28 @@ export function ShoppingPage() {
         <div><ShoppingBasket/><span><strong>{completed} of {items.length}</strong><small>items collected</small></span></div>
         <div className="progress-bar"><span style={{ width: `${items.length ? completed / items.length * 100 : 0}%` }}/></div>
       </div>
-      <Badge tone={online && !currentListMutations.length ? 'green' : 'warning'}>
+      <Badge tone={online && !currentListMutations.length && !currentListItemMutations.length ? 'green' : 'warning'}>
         {online ? <Wifi size={14}/> : <WifiOff size={14}/>} {syncLabel}
       </Badge>
     </div>
     {notice && <button className="toast" onClick={() => setNotice('')}><Check/>{notice}</button>}
+    {synchronizationBlocked && <Notice tone="warning" title="Shopping edits need attention">
+      <p>These changes are kept on this device and will not retry until you choose what to do. Authentication-paused edits revalidate your session before synchronizing.</p>
+      <div className="stack-list">
+        {blockedNameMutations.map(mutation => <div key={mutation.id} className="button-row" role="group" aria-label={`Recovery options for renaming ${mutation.baseDisplayName}`}>
+          <span><strong>Rename “{mutation.baseDisplayName}” to “{mutation.desiredDisplayName}”</strong>{mutation.lastError && <small> — {mutation.lastError}</small>}</span>
+          {mutation.status === 'auth_paused' && <a className="button button--ghost" href="/login">Sign in</a>}
+          <Button type="button" variant="secondary" onClick={() => void retryNameMutation(mutation)}>Retry</Button>
+          <Button type="button" variant="ghost" onClick={() => void discardNameMutation(mutation)}>Discard local edit</Button>
+        </div>)}
+        {blockedItemMutations.map(mutation => <div key={mutation.id} className="button-row" role="group" aria-label={`Recovery options for ${mutationDescription(mutation)}`}>
+          <span><strong>{mutationDescription(mutation)}</strong>{mutation.lastError && <small> — {mutation.lastError}</small>}</span>
+          {mutation.status === 'auth_paused' && <a className="button button--ghost" href="/login">Sign in</a>}
+          <Button type="button" variant="secondary" onClick={() => void retryItemMutation(mutation)}>Retry</Button>
+          <Button type="button" variant="ghost" onClick={() => void discardItemMutation(mutation)}>{mutation.kind === 'manual_add' ? 'Remove item' : 'Discard local edit'}</Button>
+        </div>)}
+      </div>
+    </Notice>}
     <form className="quick-add" onSubmit={add}><Plus/><input value={newItem} onChange={event => setNewItem(event.target.value)} placeholder="Add something to the list…"/><Button type="submit">Add</Button></form>
     {items.length
       ? <div className="shopping-groups">{Object.entries(grouped).map(([category, group]) => <section key={category}>
@@ -795,9 +1022,9 @@ export function ShoppingPage() {
   </div>
 }
 
-function manualShoppingItem(name: string): ShoppingItem {
+function manualShoppingItem(name: string, id = crypto.randomUUID()): ShoppingItem {
   return {
-    id: crypto.randomUUID(),
+    id,
     name,
     buy: '1',
     exact: 'Manual item',

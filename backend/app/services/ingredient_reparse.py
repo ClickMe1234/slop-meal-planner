@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..models import MealBatch, Recipe, RecipeIngredient, RecipeVersion, ShoppingList
@@ -20,10 +20,27 @@ class ReparseResult:
 
 
 def reparse_stale_imported_ingredients(db: Session) -> ReparseResult:
+    latest_editor_versions = (
+        select(
+            RecipeVersion.recipe_id.label("recipe_id"),
+            func.max(RecipeVersion.version_number).label("version_number"),
+        )
+        .where(RecipeVersion.is_shopping_snapshot.is_(False))
+        .group_by(RecipeVersion.recipe_id)
+        .subquery()
+    )
     rows = db.scalars(
         select(RecipeIngredient)
         .join(RecipeVersion, RecipeVersion.id == RecipeIngredient.recipe_version_id)
         .join(Recipe, Recipe.id == RecipeVersion.recipe_id)
+        .join(
+            latest_editor_versions,
+            (latest_editor_versions.c.recipe_id == RecipeVersion.recipe_id)
+            & (
+                latest_editor_versions.c.version_number
+                == RecipeVersion.version_number
+            ),
+        )
         .where(
             Recipe.source_type == "url",
             or_(
@@ -51,7 +68,7 @@ def reparse_stale_imported_ingredients(db: Session) -> ReparseResult:
         name_changed = " ".join(previous_name.casefold().split()) != " ".join(
             parsed.food_phrase.casefold().split()
         )
-        amount_changed = parsed.quantity_calculated and (
+        parser_amount_differs = parsed.quantity_calculated and (
             row.quantity != parsed.quantity
             or row.unit != parsed.unit
             or row.quantity_grams != parsed.quantity_grams
@@ -64,21 +81,20 @@ def reparse_stale_imported_ingredients(db: Session) -> ReparseResult:
             else None
         )
         row.parser_name_keys = keys
-        if amount_changed:
-            # Only deterministic arithmetic (for example 2 x 55 g or four
-            # breast halves) is authoritative during automatic repair. This
-            # avoids replacing ordinary quantities that a user may have
-            # corrected while reviewing an imported recipe.
-            row.quantity = parsed.quantity
-            row.unit = parsed.unit
-            row.quantity_grams = parsed.quantity_grams
+        # Recipe versions are immutable user-visible history. A newer parser
+        # may disagree even when its arithmetic is deterministic, but startup
+        # repair must never replace a reviewed amount in-place. The parsed
+        # name metadata can still surface a review; applying a changed amount
+        # belongs in the normal review flow, which creates a new version.
         if not row.name_overridden:
             row.food_phrase = parsed.food_phrase
             row.preparation = parsed.preparation
             row.needs_review = parsed.needs_review
+        if parser_amount_differs:
+            row.needs_review = True
         if row.needs_review:
             flagged += 1
-        if name_changed or amount_changed:
+        if name_changed:
             changed += 1
             changed_version_ids.add(row.recipe_version_id)
 

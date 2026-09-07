@@ -23,6 +23,29 @@
 - Run the release-metadata test before opening the PR. Do not leave a version
   bump only in a package manifest or rely on a container tag to imply it.
 
+## Sol Medium implementation orchestration
+
+- For every implementation request in this repository, the current Codex agent
+  is the coordinator and must use `gpt-5.6-sol` with `medium` reasoning for
+  the parent task.
+- Delegate bounded, materially useful implementation slices to subagents. Each
+  subagent must use `gpt-5.6-luna` with `max` reasoning. Give every coding
+  subagent a disjoint write scope, require it to edit its forked workspace
+  directly, and ask it to report changed paths and validation.
+- Keep architecture decisions, task decomposition, integration, conflict
+  resolution, final review, and final verification in the coordinator. Do not
+  duplicate a delegated change locally while the subagent is working.
+- Prefer parallel delegation for independent slices. Before handing off work,
+  read `CODEBASE_MAP.md`, identify the nearest code and test, and include the
+  relevant acceptance criteria in the subagent brief.
+- Review every returned change before integrating it. Run the repository's
+  appropriate tests and build checks after integration; a subagent's report is
+  evidence, not a substitute for coordinator verification.
+- This policy controls Codex implementation behavior. The repository cannot
+  force a user's Codex session to select a model, so start the session with
+  `gpt-5.6-sol` with `medium` reasoning as described in
+  [docs/codex-orchestrator.md](docs/codex-orchestrator.md).
+
 ## UI implementation
 
 - Match the existing visual language before inventing a new pattern. Reuse the

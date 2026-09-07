@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { Navigate, Route, Routes, useLocation, type Location } from 'react-router-dom'
+import { lazy, Suspense } from 'react'
+import { Navigate, Route, Routes, useLocation, type Location } from 'react-router'
 import { AppShell } from './components/AppShell'
 import { useTheme } from './lib/theme'
 import { ChangePasswordPage, LoginPage, OnboardingPage, SetupPage } from './pages/AuthPages'
-import { api, isDemoMode } from './api/client'
-import { Loading } from './components/ui'
+import { api, ApiError, isDemoMode } from './api/client'
+import { Button, Loading, Notice } from './components/ui'
 import { ImportReviewDrawer, ImportReviewPage, RecipeImportPage } from './pages/ImportPages'
 import { CustomRecipeEditPage, CustomRecipePage } from './pages/CustomRecipeEditor'
 import { PantryPage } from './pages/PantryPage'
@@ -17,7 +18,9 @@ import { ShoppingIngredientChangePage, ShoppingItemDetailPage } from './pages/Sh
 import { AppearanceSettings, DataSettings, HouseholdSettings, PreferenceSettings, SystemSettings, TargetSettings } from './pages/SettingsPage'
 import { WeekPage } from './pages/WeekPage'
 import { IngredientsPage } from './pages/IngredientsPage'
-import { MethodPage, MethodPreviewPage } from './pages/MethodPage'
+
+const MethodPage = lazy(() => import('./pages/MethodPage').then(module => ({ default: module.MethodPage })))
+const MethodPreviewPage = lazy(() => import('./pages/MethodPage').then(module => ({ default: module.MethodPreviewPage })))
 
 export default function App() {
   const { theme, setTheme } = useTheme()
@@ -36,14 +39,14 @@ export default function App() {
       <Route path="/plan/:planId/occurrences/:occurrenceId/recipes" element={<PlanRecipePickerPage/>}/>
       <Route path="/plan/:planId/batches/:batchId/sides/:componentSlot/recipes" element={<PlanRecipePickerPage/>}/>
       <Route path="/recipes" element={<RecipesPage/>}/>
-      <Route path="/recipes/method-preview" element={<MethodPreviewPage/>}/>
+      <Route path="/recipes/method-preview" element={<Suspense fallback={<Loading label="Opening method editor…"/>}><MethodPreviewPage/></Suspense>}/>
       <Route path="/ingredients" element={<IngredientsPage/>}/>
       <Route path="/recipes/new" element={<CustomRecipePage/>}/>
       <Route path="/recipes/:recipeId/edit" element={<CustomRecipeEditPage/>}/>
       <Route path="/recipes/import" element={<RecipeImportPage/>}/>
       <Route path="/imports/:jobId/review" element={<ImportReviewPage/>}/>
       <Route path="/recipes/:recipeId/review" element={<ImportReviewPage/>}/>
-      <Route path="/recipes/:recipeId/method" element={<MethodPage/>}/>
+      <Route path="/recipes/:recipeId/method" element={<Suspense fallback={<Loading label="Opening method editor…"/>}><MethodPage/></Suspense>}/>
       <Route path="/pantry" element={<PantryPage/>}/>
       <Route path="/shopping" element={<ShoppingPage/>}/>
       <Route path="/shopping/:listId/items/:itemId" element={<ShoppingItemDetailPage/>}/>
@@ -65,8 +68,16 @@ export default function App() {
 
 function ProtectedShell({ theme, setTheme }: { theme: ReturnType<typeof useTheme>['theme']; setTheme: ReturnType<typeof useTheme>['setTheme'] }) {
   const session = useQuery({ queryKey: ['session'], queryFn: api.me, enabled: !isDemoMode, retry: false })
+  const location = useLocation()
   if (!isDemoMode && session.isLoading) return <div className="page"><Loading label="Opening your household…"/></div>
-  if (!isDemoMode && session.isError) return <Navigate to="/login" replace/>
+  if (!isDemoMode && session.isError && isAuthenticationRejection(session.error)) return <Navigate to="/login" replace/>
+  if (!isDemoMode && session.isError && !location.pathname.startsWith('/shopping')) {
+    return <div className="page"><Notice tone="warning" title="Your household is temporarily unavailable">The server could not confirm your session. Reconnect and retry; no household data has been replaced with an empty state.</Notice><Button variant="secondary" onClick={() => void session.refetch()}>Retry connection</Button></div>
+  }
   if (!isDemoMode && session.data?.must_change_password) return <Navigate to="/change-password" replace/>
   return <AppShell theme={theme} setTheme={setTheme}/>
+}
+
+function isAuthenticationRejection(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 401 || error.code === 'AUTH_REQUIRED' || error.code === 'SESSION_INVALID')
 }

@@ -1,7 +1,7 @@
 import { Archive, Bell, BookOpenText, Check, ChevronRight, Database, Download, ExternalLink, HardDrive, KeyRound, LockKeyhole, Moon, Network, RefreshCw, Ruler, Server, Shield, Sun, Upload, UserRound, Users } from 'lucide-react'
 import { FormEvent, ReactNode, useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router'
 import { api, ApiError, isDemoMode, type BackendMealGroup, type BackendMealType, type BackendRestoreComponent, type BackendRestorePreview, type BackendRestriction, type IngredientLocale, type MeasurementSystem, type RestoreComponent } from '../api/client'
 import { Badge, Button, Card, Loading, Notice, PageHeader, Segmented } from '../components/ui'
 import type { ThemeChoice } from '../types'
@@ -316,6 +316,9 @@ export function TargetSettings() {
   const [proteinMin, setProteinMin] = useState(0)
   const [carbsMin, setCarbsMin] = useState(0)
   const [fatMin, setFatMin] = useState(0)
+  const [proteinMax, setProteinMax] = useState<number | null>(null)
+  const [carbsMax, setCarbsMax] = useState<number | null>(null)
+  const [fatMax, setFatMax] = useState<number | null>(null)
   const [tolerance, setTolerance] = useState(5)
   const [allocations, setAllocations] = useState({
     breakfast: 25,
@@ -335,6 +338,9 @@ export function TargetSettings() {
     setProteinMin(0)
     setCarbsMin(0)
     setFatMin(0)
+    setProteinMax(null)
+    setCarbsMax(null)
+    setFatMax(null)
     setTolerance(5)
     setAllocations({ breakfast: 25, lunch: 30, dinner: 35, snack: 10 })
     setSaved(false)
@@ -350,11 +356,17 @@ export function TargetSettings() {
     setProteinMin(Number(target.data.protein_min_g ?? 0))
     setCarbsMin(Number(target.data.carbohydrate_min_g ?? 0))
     setFatMin(Number(target.data.fat_min_g ?? 0))
+    setProteinMax(target.data.protein_max_g == null ? null : Number(target.data.protein_max_g))
+    setCarbsMax(target.data.carbohydrate_max_g == null ? null : Number(target.data.carbohydrate_max_g))
+    setFatMax(target.data.fat_max_g == null ? null : Number(target.data.fat_max_g))
     setTolerance(Number(target.data.tolerance_percent))
-    setAllocations((values) => ({
-      ...values,
-      ...Object.fromEntries(target.data.allocations.map((item) => [item.meal_type, Number(item.percentage)])),
-    }))
+    const loadedAllocations = Object.fromEntries(
+      ['breakfast', 'lunch', 'dinner', 'snack'].map((mealType) => [
+        mealType,
+        Number(target.data.allocations.find((item) => item.meal_type.toLowerCase() === mealType)?.percentage ?? 0),
+      ]),
+    ) as { breakfast: number; lunch: number; dinner: number; snack: number }
+    setAllocations(loadedAllocations)
   }, [target.data])
   const total = Object.values(allocations).reduce((sum, value) => sum + value, 0)
   const save = async () => {
@@ -364,6 +376,7 @@ export function TargetSettings() {
     setSaved(false)
     try {
       await api.setTarget(selectedMemberId, {
+        expected_version: target.data?.version,
         mode,
         tolerance_percent: tolerance,
         calorie_target: mode === 'calorie' ? calories : null,
@@ -371,9 +384,14 @@ export function TargetSettings() {
         carbohydrate_target_g: mode === 'macros' ? carbs : null,
         fat_target_g: mode === 'macros' ? fat : null,
         protein_min_g: mode === 'calorie' ? proteinMin : null,
+        protein_max_g: proteinMax,
         carbohydrate_min_g: mode === 'calorie' ? carbsMin : null,
+        carbohydrate_max_g: carbsMax,
         fat_min_g: mode === 'calorie' ? fatMin : null,
-        allocations: Object.entries(allocations).map(([meal_type, percentage]) => ({ meal_type, percentage })),
+        fat_max_g: fatMax,
+        allocations: Object.entries(allocations)
+          .filter(([, percentage]) => percentage > 0)
+          .map(([meal_type, percentage]) => ({ meal_type, percentage })),
       })
       await Promise.all([
         queryClient.invalidateQueries({
@@ -472,6 +490,13 @@ export function TargetSettings() {
             </label>
           </div>
         )}
+        <h4>Daily macro maximums</h4>
+        <p className="muted">Optional upper bounds. Leave a field empty to keep that macro unconstrained; zero remains an intentional zero.</p>
+        <div className="form-grid form-grid--3">
+          <MacroMaximumInput label="Maximum protein" value={proteinMax} onChange={setProteinMax} />
+          <MacroMaximumInput label="Maximum carbohydrate" value={carbsMax} onChange={setCarbsMax} />
+          <MacroMaximumInput label="Maximum fat" value={fatMax} onChange={setFatMax} />
+        </div>
         <Notice title="How calories and macros work">In calorie mode, calories stay the main target and positive macro minimums steer recipe selection and act as daily floors with a 10 g allowance. For example, a 130 g minimum accepts 120 g or more. A 0 g minimum is ignored.</Notice>
       </Card>
       <Card className="settings-section">
@@ -513,6 +538,24 @@ function MacroMinimumInput({ label, value, onChange }: { label: string; value: n
       {label}
       <div className="input-suffix">
         <input type="number" min="0" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+        <span>g</span>
+      </div>
+    </label>
+  )
+}
+
+function MacroMaximumInput({ label, value, onChange }: { label: string; value: number | null; onChange: (value: number | null) => void }) {
+  return (
+    <label>
+      {label}
+      <div className="input-suffix">
+        <input
+          type="number"
+          min="0"
+          value={value ?? ''}
+          placeholder="Unset"
+          onChange={(event) => onChange(event.target.value.trim() === '' ? null : Number(event.target.value))}
+        />
         <span>g</span>
       </div>
     </label>

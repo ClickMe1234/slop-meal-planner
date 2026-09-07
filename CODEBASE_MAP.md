@@ -1,8 +1,8 @@
 # Slop Meal Planner codebase map
 
 This is the orientation guide for developers and agents working in Slop Meal
-Planner. It describes the repository as inspected on 15 August 2026, at
-release 1.4.0. The source files and tests are authoritative when this guide
+Planner. It describes the repository as inspected on 7 September 2026, at
+release 1.4.1. The source files and tests are authoritative when this guide
 and an implementation disagree; update this document when a structural
 change makes it misleading.
 
@@ -119,8 +119,12 @@ read [Database and migrations](#database-and-migrations) first.
   values pre-filled when available); a complete set is persisted with the
   recipe version for planning, and an explicit source refresh can restore the
   publisher values after an accidental edit.
-- Recipe changes can synchronize eligible current plans and shopping lists
-  through the recipe-plan sync service.
+- Recipe changes synchronize eligible current plans only after the same
+  restrictions, tags, servings, guests, and nutrition validation used by plan
+  editing. Invalid replacements leave the accepted plan unchanged and return
+  structured resolution warnings with the saved recipe.
+- Startup parser maintenance only reviews the newest editable imported recipe
+  version. It never rewrites reviewed quantities or historical versions.
 - Recipes can have attributed publisher cooking methods or concise
   ingredient-flow summaries. Methods are stored as version snapshots, not
   mutable copies of the source page.
@@ -199,8 +203,10 @@ read [Database and migrations](#database-and-migrations) first.
 
 - Pantry lots have quantities, normalized units, optional expiry, use-soon,
   always-stocked flags, food matches, reservations, and transaction history.
-- Accepted plans reserve compatible pantry stock in expiry-first order. A
-  shortage is bought; a unit conflict is surfaced for explicit review.
+- Accepted plans reserve compatible pantry stock in expiry-first order under a
+  household coordination lock. Each allocation is flushed before the next
+  balance query, so concurrent or same-transaction requirements cannot reserve
+  the same stock twice. Cooked batches are excluded.
 - Shopping builds from accepted plan recipe ingredients, subtracts plan
   reservations and usable pantry stock, and preserves recipe-level source
   provenance.
@@ -213,9 +219,14 @@ read [Database and migrations](#database-and-migrations) first.
   active lists, recipe/source detail, unit changes, and manual combining.
 - Fuzzy pantry matching proposes likely matches. Match, reject, undo, buy, and
   use decisions are explicit and version-checked.
-- The shopping list is available offline on the device. Offline name changes
-  queue in IndexedDB, fall back to localStorage where necessary, and expose
-  conflicts when another device changed the same item.
+- Rebuilds reconcile the active list instead of replacing it: manual rows and
+  stable generated identities survive, compatible checks are retained, and a
+  changed requirement is visibly reset for review.
+- The shopping list is available offline on the device. Explicit name, check,
+  unit, and manual-add mutations queue per account/list in IndexedDB, fall back
+  to localStorage and then memory, use bounded retry, and expose conflicts.
+- Retryable inventory operations carry stable client operation IDs. List,
+  pantry, cooking, and target mutations use locked/versioned writes.
 - The list can use the platform share sheet, clipboard copy, or plain-text
   export.
 
@@ -259,6 +270,7 @@ tasks:
 | [AGENTS.md](AGENTS.md) | Instructions for coding agents, especially UI consistency, accessibility, responsive checks, and test expectations. |
 | [README.md](README.md) | Public product overview, installation, feature list, screenshots, nutrition notes, validation history, and boundaries. |
 | [CODEBASE_MAP.md](CODEBASE_MAP.md) | This developer/agent orientation guide. |
+| [docs/codex-orchestrator.md](docs/codex-orchestrator.md) | Luna Max coordinator/subagent workflow for implementation tasks. |
 | [CHANGELOG.md](CHANGELOG.md) | Full release history. |
 | [VERSION](VERSION) | Release version used by packaging and container workflows. |
 | [Makefile](Makefile) | Compose shortcuts for build, lifecycle, migration, backup, restore, tests, and config validation. |
@@ -440,9 +452,9 @@ response shaping. Reusable domain rules belong in services.
 | [quantities.py](backend/app/services/quantities.py) | Canonical unit aliases, storage/display precision, countable-unit rounding, culinary fraction formatting, and purchase round-up. |
 | [measurement_conversion.py](backend/app/services/measurement_conversion.py) | Reviewed ingredient density profiles and safe mass/volume conversion. It never invents density for an unknown ingredient. |
 | [shopping.py](backend/app/services/shopping.py) | Aggregates plan recipe requirements, subtracts reservations and pantry stock, records source ingredients, detects conflicts, and creates practical purchase amounts. |
-| [pantry.py](backend/app/services/pantry.py) | Computes on-hand/reserved/usable balances, records adjustments, and reserves accepted batches FEFO. |
+| [pantry.py](backend/app/services/pantry.py) | Coordinates household inventory locks, computes on-hand/reserved/usable balances, records adjustments, and reserves uncooked accepted batches FEFO. |
 | [pantry_matching.py](backend/app/services/pantry_matching.py) | Similarity candidates for shopping-to-pantry matching; broad matches require user confirmation. |
-| [recipe_plan_sync.py](backend/app/services/recipe_plan_sync.py) | Clones changed recipe versions into mutable current plans and rebuilds linked shopping state safely. |
+| [recipe_plan_sync.py](backend/app/services/recipe_plan_sync.py) | Validates recipe replacements against complete planning rules, applies valid versions, and returns structured warnings while leaving invalid plans unchanged. |
 | [recipe_methods.py](backend/app/services/recipe_methods.py) | Parses source instructions into method documents, snapshots, bindings, scaling, and rendered blocks. |
 | [regional_ingredients.py](backend/app/services/regional_ingredients.py) | UK/US equivalents, query expansion, canonical ingredient keys, and displayed vocabulary. |
 | [ingredient_names.py](backend/app/services/ingredient_names.py) | Stable name keys, household display-name overrides, and reapplication of saved corrections. |
@@ -451,8 +463,9 @@ response shaping. Reusable domain rules belong in services.
 | [open_food_facts.py](backend/app/services/open_food_facts.py) | Barcode/search requests, response normalization, cache, local request limits, and provider error classes. |
 | [integration_credentials.py](backend/app/services/integration_credentials.py) | Fernet-encrypted household credentials and effective USDA-key selection. Preserve MEAL_PLANNER_SECRET_KEY permanently. |
 | [backups.py](backend/app/services/backups.py) | API-facing backup status and serialized backup execution with a process lock. |
-| [selective_restore.py](backend/app/services/selective_restore.py) | Archive resolution/checksum verification, temporary database migration, household-scoped component import, ID remapping, and idempotent merge. |
-| [ingredient_reparse.py](backend/app/services/ingredient_reparse.py) | Reprocesses stale imported ingredients while preserving explicit user name overrides and flagging active shopping rebuilds. |
+| [selective_restore.py](backend/app/services/selective_restore.py) | Archive verification, failure-safe temporary database lifecycle, referenced-row dependency preview, household-safe ID/JSON remapping, inactive history import, and idempotent merge. |
+| [ingredient_reparse.py](backend/app/services/ingredient_reparse.py) | Reviews parser changes on the latest editable import without rewriting stored amounts or historical versions. |
+| [integrity.py](backend/app/services/integrity.py) | Owner-visible reporting for inventory, reservation, active-list, and current-plan inconsistencies plus derived-state repair. |
 | [quantity_normalization.py](backend/app/services/quantity_normalization.py) | One-time/idempotent repair of stored pantry and shopping quantities after quantity rules evolve. |
 
 #### Planner algorithm in one paragraph
@@ -605,7 +618,7 @@ Demo data is presentation seed data, not a replacement for API behavior.
 | hooks/useDebouncedValue.ts | Debounced search input behavior. |
 | lib/safeUrls.ts | External URL validation before opening publisher links. |
 | lib/theme.ts | System/light/dark persistence in localStorage. |
-| lib/offlineShopping.ts | IndexedDB shopping cache, localStorage fallback, queued name mutations, and conflict context. |
+| lib/offlineShopping.ts | Account/list-scoped IndexedDB shopping cache, localStorage/memory fallbacks, explicit coalesced mutation queue, retry state, and conflict context. |
 | pages/planner.ts | Client-side planning wizard draft/group/boost/guest helpers and payload shaping. |
 | pages/planEditDraft.ts | Plan-preserving-edit draft types and transformations. |
 | pages/quantityDisplay.test.ts and pantrySorting.test.ts | Pure display/sorting behavior tests. |
@@ -761,8 +774,9 @@ interactive targets usable at small heights.
    separately. Name edits may create a household name override.
 4. A user can check items offline, rename offline, resolve pantry suggestions,
    change a linked unit through preview/apply, or manually combine items.
-5. Purchased checked items can be explicitly added to pantry; this is never an
-   implicit side effect of checking.
+5. Purchased checked items can be explicitly added to pantry using a stable
+   operation ID; retries reuse their result, re-reserve uncooked requirements,
+   and the browser reloads the authoritative list/version.
 
 ### Backup and selective restore
 
@@ -774,8 +788,10 @@ interactive targets usable at small heights.
 3. Selective restore first verifies all archive files, migrates a temporary
    copy of the source database, and previews available household/component
    counts.
-4. The selected component merge remaps IDs and avoids importing sessions or
-   encrypted integration credentials. Existing matching records remain.
+4. Preview shows referenced-row dependencies. The merge remaps relational and
+   embedded IDs, clears omitted optional references, never reuses another
+   household's collision, restores plans/lists as inactive history, and does
+   not import live pantry reservations.
 5. Full restore is destructive and requires an explicit --confirm path with
    the application stopped. Read [deploy/README.md](deploy/README.md) before
    operating it.
@@ -925,7 +941,7 @@ stops application services, invokes restore, and starts them only after success.
 ## Database and migrations
 
 [backend/migrations/](backend/migrations/) is the authoritative, replayable
-schema history. The current head is 0026_shopping_recipe_snapshots. There was
+schema history. The current head is 0027_inventory_operation_safety. There was
 a historical two-branch 0020 around method flow tables and persistent sessions;
 0021 reconciles the branches, followed by 0022-0026.
 
@@ -944,7 +960,9 @@ The high-level migration themes are:
 - 0024 recipe-specific planner serving constraints;
 - 0025 immutable recipe nutrition-conversion and meal-tag snapshots plus
   append-only household product/unit conversion memory.
-- 0026 plan-only shopping snapshots, which preserve the newer editable draft.
+- 0026 plan-only shopping snapshots, which preserve the newer editable draft;
+- 0027 batch optimistic versions and persisted idempotency results for
+  retryable inventory operations.
 
 Read [docs/database-migrations.md](docs/database-migrations.md) before editing
 the schema. Required rules:
@@ -1008,9 +1026,11 @@ only tests are not sufficient for new controls.
   tests and pip audit, frontend npm ci/tests/build and npm audit, then a
   linux/amd64 container build and Trivy scan. Main and dev pushes plus pull
   requests are covered; main can create a release from VERSION.
-- .github/workflows/container.yml verifies pull-request images and publishes
-  immutable release/SHA or latest images to GHCR on main/release events.
-- .github/workflows/dev.yml builds/publishes the dev image on the dev branch.
+- .github/workflows/container.yml verifies the same commit with tests,
+  PostgreSQL migrations, raw dependency audits plus narrow expiring policy,
+  build, and image scan before promoting its immutable digest to release tags.
+- .github/workflows/dev.yml applies the same verify-before-promote contract to
+  the dev image. Mutable tags cannot publish independently of verification.
 - `VERSION` is the release source of truth. A release bump keeps it aligned
   with the frontend and backend package versions, default API/user-agent
   versions, deployment image references, README, and CHANGELOG; the backend

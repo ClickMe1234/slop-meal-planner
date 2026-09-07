@@ -47,6 +47,7 @@ x-application: &application
     PGPASSWORD: ${POSTGRES_PASSWORD}
     PGDATABASE: ${POSTGRES_DB}
     BACKUP_ROOT: /backups
+    BACKUP_LOCK_FILE: /backups/.backup.lock
     DATA_DIR: /data
     RETAIN_DAILY: ${RETAIN_DAILY:-14}
     RETAIN_WEEKLY: ${RETAIN_WEEKLY:-8}
@@ -90,6 +91,7 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB}
       BACKUP_ROOT: /backups
+      BACKUP_LOCK_FILE: /backups/.backup.lock
       DATA_DIR: /data
       RETAIN_DAILY: ${RETAIN_DAILY:-14}
       RETAIN_WEEKLY: ${RETAIN_WEEKLY:-8}
@@ -178,7 +180,10 @@ services:
       retries: 10
 
   backup:
-    image: postgres:17.10-bookworm
+    # Backup/restore must run from the application image: it contains the
+    # archive validator, matching Python dependencies, and PostgreSQL client
+    # utilities used by the scripts.
+    image: ${MEAL_PLANNER_IMAGE:-meal-planner}:${APP_VERSION:-dev}
     profiles: ["maintenance"]
     user: "0:0"
     environment:
@@ -188,6 +193,7 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB}
       BACKUP_ROOT: /backups
+      BACKUP_LOCK_FILE: /backups/.backup.lock
       DATA_DIR: /source-data
       APP_VERSION: ${APP_VERSION:-dev}
       RETAIN_DAILY: ${RETAIN_DAILY:-14}
@@ -213,7 +219,7 @@ services:
     entrypoint: ["sh", "/opt/meal-planner/backup.sh"]
 
   restore:
-    image: postgres:17.10-bookworm
+    image: ${MEAL_PLANNER_IMAGE:-meal-planner}:${APP_VERSION:-dev}
     profiles: ["maintenance"]
     user: "0:0"
     environment:
@@ -222,6 +228,8 @@ services:
       PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB}
+      BACKUP_ROOT: /backups
+      BACKUP_LOCK_FILE: /backups/.backup.lock
       DATA_DIR: /source-data
     volumes:
       - type: bind
@@ -230,7 +238,9 @@ services:
       - type: bind
         source: ${BACKUP_ROOT:-./backups}
         target: /backups
-        read_only: true
+        # The shared advisory lock lives beside the archives.  The restore
+        # script never mutates archive contents, but it needs this directory
+        # writable for the lock file.
       - type: bind
         source: ./scripts/restore.sh
         target: /opt/meal-planner/restore.sh

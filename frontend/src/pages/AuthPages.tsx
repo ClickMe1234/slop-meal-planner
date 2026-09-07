@@ -1,11 +1,10 @@
 import { ArrowLeft, ArrowRight, Check, ExternalLink, Heart, KeyRound, ShieldCheck } from 'lucide-react'
 import { FormEvent, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge, Button, Card, Loading, Notice, ProgressBar, Segmented } from '../components/ui'
 import { api, ApiError, isDemoMode, type IngredientLocale, type MeasurementSystem } from '../api/client'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
-import { clearOfflineShoppingData } from '../lib/offlineShopping'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -37,7 +36,6 @@ export function LoginPage() {
       } else {
         const result = await api.login(username.trim(), password, rememberMe)
         queryClient.clear()
-        await clearOfflineShoppingData()
         if (result.user.must_change_password) { navigate('/change-password'); return }
       }
       navigate('/week')
@@ -59,12 +57,13 @@ export function LoginPage() {
 
 export function ChangePasswordPage(){
   const navigate=useNavigate()
+  const queryClient=useQueryClient()
   const [current,setCurrent]=useState('')
   const [next,setNext]=useState('')
   const [confirm,setConfirm]=useState('')
   const [error,setError]=useState('')
   const [saving,setSaving]=useState(false)
-  const submit=async(event:FormEvent)=>{event.preventDefault();if(next!==confirm){setError('The new passwords do not match.');return}setSaving(true);setError('');try{await api.changePassword(current,next);navigate('/week')}catch(reason){setError(reason instanceof ApiError?reason.message:'The password could not be changed.')}finally{setSaving(false)}}
+  const submit=async(event:FormEvent)=>{event.preventDefault();if(next!==confirm){setError('The new passwords do not match.');return}setSaving(true);setError('');try{await api.changePassword(current,next);queryClient.setQueryData(['session'],(previous: Awaited<ReturnType<typeof api.me>> | undefined)=>previous?{...previous,must_change_password:false}:previous);try{await queryClient.refetchQueries({queryKey:['session'],type:'active'})}catch{ /* The password was changed; the next protected request can revalidate it. */ }navigate('/week',{replace:true})}catch(reason){setError(reason instanceof ApiError?reason.message:'The password could not be changed.')}finally{setSaving(false)}}
   return <div className="auth-layout"><section className="auth-art"><div className="brand brand--light"><div className="brand-mark"><Heart fill="currentColor"/></div><div><strong>Slop</strong><span>meal planner</span></div></div><div><p className="eyebrow">Account security</p><h1>Choose your own password.</h1><p>Temporary passwords cannot be used to access household data.</p></div></section><section className="auth-panel"><Card className="auth-card"><div className="auth-heading"><h2>Change temporary password</h2><p>Use at least 12 characters.</p></div><form className="form-stack" onSubmit={submit}><label>Temporary password<input required type="password" value={current} onChange={event=>setCurrent(event.target.value)} autoComplete="current-password"/></label><label>New password<input required minLength={12} type="password" value={next} onChange={event=>setNext(event.target.value)} autoComplete="new-password"/></label><label>Confirm new password<input required minLength={12} type="password" value={confirm} onChange={event=>setConfirm(event.target.value)} autoComplete="new-password"/></label>{error&&<p role="alert" className="field-error">{error}</p>}<Button disabled={saving}>{saving?'Changing…':'Change password'}<ArrowRight/></Button></form></Card></section></div>
 }
 
