@@ -130,3 +130,45 @@ def test_import_parser_failure_rolls_back_partial_recipe(
         assert failed.status == JobStatus.FAILED.value
         assert failed.error_code == "IMPORT_FAILED"
         assert "injected" not in failed.error_detail
+
+
+@pytest.mark.parametrize(
+    ("status", "retrying"),
+    [
+        (JobStatus.AWAITING_REVIEW.value, False),
+        (JobStatus.AWAITING_REVIEW.value, True),
+        (JobStatus.SUCCEEDED.value, False),
+        (JobStatus.SUCCEEDED.value, True),
+    ],
+)
+def test_stale_import_failure_preserves_completed_job(
+    client, owner, session_factory, monkeypatch, status, retrying
+):
+    del client
+    result = {"recipe_id": "completed-recipe"}
+    with session_factory() as db:
+        household = db.scalar(select(Household))
+        job = Job(
+            household_id=household.id,
+            user_id=owner["user"]["id"],
+            kind="recipe_import",
+            status=status,
+            stage="recipe_review" if status == JobStatus.AWAITING_REVIEW.value else "complete",
+            progress=100,
+            payload={"url": "https://example.com/completed-import"},
+            result=result,
+        )
+        db.add(job)
+        db.commit()
+        job_id = job.id
+
+    monkeypatch.setattr(worker, "SessionLocal", session_factory)
+    worker._mark_import_failure(job_id, RuntimeError("stale failure"), retrying=retrying)
+
+    with session_factory() as db:
+        completed = db.get(Job, job_id)
+        assert completed.status == status
+        assert completed.progress == 100
+        assert completed.result == result
+        assert completed.error_code is None
+        assert completed.error_detail is None

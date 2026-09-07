@@ -240,6 +240,14 @@ def _mark_import_failure(job_id: str, exc: BaseException, *, retrying: bool) -> 
         failed_job = failure_db.get(Job, job_id)
         if failed_job is None:
             return
+        # A duplicate delivery may fail after another worker has already
+        # completed the same import.  Preserve the freshly committed terminal
+        # result instead of replacing it with this stale worker's outcome.
+        if failed_job.status in (
+            JobStatus.AWAITING_REVIEW.value,
+            JobStatus.SUCCEEDED.value,
+        ):
+            return
         if retrying:
             failed_job.status = JobStatus.QUEUED.value
             failed_job.stage = "retrying"

@@ -55,6 +55,7 @@ export function ShoppingPage() {
   const [notice, setNotice] = useState('')
   const [listId, setListId] = useState('')
   const [listVersion, setListVersion] = useState(0)
+  const [listVersionRefreshRequired, setListVersionRefreshRequired] = useState(false)
   const [mealPlanId, setMealPlanId] = useState('')
   const [rebuildRecommended, setRebuildRecommended] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
@@ -82,10 +83,23 @@ export function ShoppingPage() {
   ) => {
     setListId(server.id)
     setListVersion(server.version)
+    setListVersionRefreshRequired(false)
     setMealPlanId(server.meal_plan_id ?? '')
     setRebuildRecommended(server.rebuild_recommended)
     setVersions(Object.fromEntries(server.items.map(item => [item.id, item.version])))
     setItems(nextItems)
+    saveOfflineShoppingContext({
+      listId: server.id,
+      mealPlanId: server.meal_plan_id ?? '',
+      rebuildRecommended: server.rebuild_recommended,
+    })
+  }
+
+  const applyServerListMetadata = (server: BackendShoppingList) => {
+    setListVersion(server.version)
+    setMealPlanId(server.meal_plan_id ?? '')
+    setRebuildRecommended(server.rebuild_recommended)
+    setVersions(Object.fromEntries(server.items.map(item => [item.id, item.version])))
     saveOfflineShoppingContext({
       listId: server.id,
       mealPlanId: server.meal_plan_id ?? '',
@@ -227,6 +241,8 @@ export function ShoppingPage() {
     const flush = async () => {
       let nextNames = [...nameMutations]
       let nextItems = [...itemMutations]
+      let serverMutationSucceeded = false
+      const authoritativeItemVersions = new Map<string, number>()
       const retryAt = (attempts: number) => Date.now() + Math.min(60_000, 1000 * (2 ** Math.max(0, attempts - 1)))
       const fail = async (entry: { kind: 'name'; mutation: ShoppingNameMutation } | { kind: 'item'; mutation: ShoppingItemMutation }, reason: unknown) => {
         const attempts = (entry.mutation.attempts ?? 0) + 1
@@ -244,8 +260,17 @@ export function ShoppingPage() {
         }
       }
 
-      for (const entry of ready) {
+      for (const queuedEntry of ready) {
         if (cancelled) break
+        const entry = queuedEntry.kind === 'item' && queuedEntry.mutation.itemId && authoritativeItemVersions.has(queuedEntry.mutation.itemId)
+          ? {
+              ...queuedEntry,
+              mutation: {
+                ...queuedEntry.mutation,
+                expectedVersion: authoritativeItemVersions.get(queuedEntry.mutation.itemId),
+              },
+            }
+          : queuedEntry
         try {
           if (entry.kind === 'name') {
             const mutation = entry.mutation
@@ -257,6 +282,8 @@ export function ShoppingPage() {
             nextNames = nextNames.filter(item => item.id !== mutation.id)
             setItems(all => all.map(item => item.id === mutation.itemId ? { ...item, name: updated.display_name, updatedAt: Date.now() } : item))
             setVersions(all => ({ ...all, [mutation.itemId]: updated.version }))
+            authoritativeItemVersions.set(mutation.itemId, updated.version)
+            serverMutationSucceeded = true
           } else {
             const mutation = entry.mutation
             if (!mutation.listId) throw new Error('The shopping list is not available yet.')
@@ -273,6 +300,7 @@ export function ShoppingPage() {
               nextItems = nextItems.filter(item => item.id !== mutation.id)
               setItems(all => [...all.filter(item => item.id !== mutation.localItemId), mapShoppingItem(created)])
               setVersions(all => ({ ...all, [created.id]: created.version }))
+              serverMutationSucceeded = true
             } else {
               if (!mutation.itemId || mutation.expectedVersion === undefined) throw new Error('Waiting for the current shopping-list version.')
               const updated = await api.patchShoppingItem(mutation.listId, mutation.itemId, {
@@ -284,6 +312,19 @@ export function ShoppingPage() {
               nextItems = nextItems.filter(item => item.id !== mutation.id)
               setItems(all => all.map(item => item.id === mutation.itemId ? mapShoppingItem(updated) : item))
               setVersions(all => ({ ...all, [mutation.itemId!]: updated.version }))
+              authoritativeItemVersions.set(mutation.itemId, updated.version)
+              const rebased = nextItems.filter(candidate =>
+                candidate.id !== mutation.id
+                && candidate.itemId === mutation.itemId
+                && candidate.status === 'pending'
+                && candidate.expectedVersion !== updated.version,
+              )
+              for (const candidate of rebased) {
+                const updatedCandidate = { ...candidate, expectedVersion: updated.version }
+                await saveShoppingItemMutation(updatedCandidate)
+                nextItems = nextItems.map(item => item.id === updatedCandidate.id ? updatedCandidate : item)
+              }
+              serverMutationSucceeded = true
             }
           }
         } catch (reason) {
@@ -303,6 +344,18 @@ export function ShoppingPage() {
           } else {
             await fail(entry, reason)
           }
+        }
+      }
+      if (serverMutationSucceeded && !cancelled) {
+        setListVersionRefreshRequired(true)
+        try {
+          const currentList = await api.activeShoppingList()
+          if (currentList.id === listId) {
+            applyServerListMetadata(currentList)
+            setListVersionRefreshRequired(false)
+          }
+        } catch {
+          setNotice('Your changes synchronized, but the current list version could not be refreshed. Reload before adding purchases to the pantry.')
         }
       }
       if (!cancelled) {
@@ -330,6 +383,7 @@ export function ShoppingPage() {
     [nameMutations],
   )
   const currentListMutations = nameMutations.filter(mutation => mutation.listId === listId)
+  const currentListItemMutations = itemMutations.filter(mutation => mutation.listId === listId)
   const conflicts = currentListMutations.filter(mutation => mutation.status === 'conflict')
   const completed = items.filter(item => item.checked).length
 
@@ -685,7 +739,7 @@ export function ShoppingPage() {
   }
 
   const addPurchased = async () => {
-    if (!listId || !listVersion || purchaseSaving) return
+    if (!listId || !listVersion || listVersionRefreshRequired || currentListMutations.length || currentListItemMutations.length || purchaseSaving) return
     if (!purchaseOperationId.current) {
       purchaseOperationId.current = globalThis.crypto?.randomUUID?.()
         ?? `purchase-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -756,7 +810,7 @@ export function ShoppingPage() {
         <Button variant="secondary" onClick={share}><Share2/>Share</Button>
         <Button variant="ghost" onClick={copy}><Clipboard/>Copy</Button>
         <Button variant="ghost" onClick={download}><Download/>.txt</Button>
-        {!isDemoMode && <Button disabled={purchaseSaving} onClick={addPurchased}>
+        {!isDemoMode && <Button disabled={purchaseSaving || listVersionRefreshRequired || currentListMutations.length > 0 || currentListItemMutations.length > 0} onClick={addPurchased}>
           {purchaseSaving ? 'Adding purchases…' : 'Add purchased to pantry'}
         </Button>}
       </>}

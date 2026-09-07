@@ -21,7 +21,7 @@ from ..models import (
     RecipeVersion,
     ShoppingList,
 )
-from .pantry import reserve_plan_batches
+from .pantry import lock_household, reserve_plan_batches
 from .shopping import build_shopping_list
 from .recipe_methods import clone_method_snapshot
 from .planner import BOOST_PORTIONS, PORTIONS, SIDE_PORTIONS, recipe_portions
@@ -222,6 +222,11 @@ def sync_recipe_versions_to_current_plans(
 ) -> PlanSyncResult:
     if not replacements:
         return PlanSyncResult()
+    # Recipe synchronization can replace accepted-plan batches, reservations,
+    # and the active shopping list in one transaction.  Take the shared parent
+    # lock before discovering or locking any plan rows so this path follows the
+    # same household -> plan -> inventory ordering as acceptance and cooking.
+    lock_household(db, household_id)
     batches = db.scalars(
         select(MealBatch)
         .join(MealPlan, MealPlan.id == MealBatch.meal_plan_id)

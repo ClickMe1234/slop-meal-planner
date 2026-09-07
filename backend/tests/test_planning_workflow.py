@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.models import (
     FoodRecord,
@@ -16,6 +17,7 @@ from app.models import (
     ShoppingItem,
     ShoppingList,
 )
+from app.services import recipe_plan_sync
 
 
 PUBLISHER_NUTRITION = {
@@ -508,7 +510,7 @@ def test_shopping_change_keeps_incomplete_custom_draft_as_current_editor_revisio
 
 
 def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list(
-    client, owner, session_factory
+    client, owner, session_factory, monkeypatch
 ):
     member_id = client.get("/api/v1/auth/me").json()["member_id"]
     _set_dinner_target(client, owner, member_id)
@@ -555,6 +557,27 @@ def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list
     previous_list = client.get("/api/v1/shopping-lists/active").json()
     current = client.get(f"/api/v1/recipes/{recipe['id']}").json()
     ingredient = current["ingredients"][0]
+
+    lock_order = []
+    original_household_lock = recipe_plan_sync.lock_household
+    original_scalars = Session.scalars
+
+    def record_household_lock(db, household_id):
+        lock_order.append("household")
+        return original_household_lock(db, household_id)
+
+    def record_locked_select(db, statement, *args, **kwargs):
+        descriptions = getattr(statement, "column_descriptions", ())
+        if (
+            getattr(statement, "_for_update_arg", None) is not None
+            and descriptions
+            and descriptions[0].get("entity") is MealPlan
+        ):
+            lock_order.append("plan")
+        return original_scalars(db, statement, *args, **kwargs)
+
+    monkeypatch.setattr(recipe_plan_sync, "lock_household", record_household_lock)
+    monkeypatch.setattr(Session, "scalars", record_locked_select)
     reviewed = client.put(
         f"/api/v1/recipes/{recipe['id']}/review",
         headers=_headers(owner),
@@ -580,6 +603,7 @@ def test_recipe_review_rebalances_constraints_and_rebuilds_current_shopping_list
         },
     )
     assert reviewed.status_code == 200, reviewed.text
+    assert lock_order[:2] == ["household", "plan"]
     assert reviewed.json()["plan_sync"]["shopping_list_rebuilt"] is True
     detail = client.get(f"/api/v1/meal-plans/{plan['id']}").json()
     assert detail["occurrences"][0]["portions"][0]["servings"] == 1
