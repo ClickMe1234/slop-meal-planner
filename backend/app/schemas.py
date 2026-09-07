@@ -1143,6 +1143,7 @@ class PlanSideRemoveRequest(APIModel):
 class BatchCookedWeightUpdate(APIModel):
     cooked_weight_grams: Decimal | None = Field(default=None, gt=0)
     expected_version: int | None = Field(default=None, ge=1)
+    operation_id: str | None = Field(default=None, min_length=1, max_length=160)
 
 
 class BatchCookRequest(APIModel):

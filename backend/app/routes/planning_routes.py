@@ -1538,6 +1538,7 @@ def _plan_detail(db: Session, plan: MealPlan) -> dict:
                 "meal_group_key": occurrence.meal_group_key,
                 "locked": occurrence.locked,
                 "batch_id": batch.id,
+                "batch_version": batch.version,
                 "parent_batch_id": batch.parent_batch_id,
                 "component_slot": occurrence.component_slot,
                 "guest_servings": occurrence.guest_servings,
@@ -2753,6 +2754,14 @@ def update_batch_cooked_weight(
         or batch.meal_plan_id != plan.id
     ):
         raise NotFoundError("Meal batch")
+    existing_operation = _existing_inventory_operation(
+        db,
+        context.user.household_id,
+        "meal_batch_cooked_weight",
+        payload.operation_id,
+    )
+    if existing_operation is not None:
+        return None
     if batch.cooked_at is None:
         raise DomainError(
             "BATCH_NOT_COOKED",
@@ -2762,6 +2771,23 @@ def update_batch_cooked_weight(
         raise ConflictError()
     batch.cooked_weight_grams = payload.cooked_weight_grams
     batch.version += 1
+    if payload.operation_id:
+        db.add(
+            InventoryOperation(
+                household_id=context.user.household_id,
+                operation_type="meal_batch_cooked_weight",
+                operation_id=payload.operation_id,
+                result={
+                    "plan_id": plan.id,
+                    "batch_id": batch.id,
+                    "cooked_weight_grams": (
+                        str(payload.cooked_weight_grams)
+                        if payload.cooked_weight_grams is not None
+                        else None
+                    ),
+                },
+            )
+        )
     db.commit()
 
 

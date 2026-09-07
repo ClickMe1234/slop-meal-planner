@@ -729,6 +729,50 @@ NUMERIC_COLUMNS = {
 }
 
 
+HISTORICAL_CLONE_TABLES = {
+    "meal_plan",
+    "meal_batch",
+    "meal_occurrence",
+    "portion_allocation",
+    "shopping_list",
+    "shopping_item",
+}
+
+
+def _historical_clone_id(target_household_id: str, table: str, source_id: str) -> str:
+    """Return a stable target ID that can never reuse the live source row.
+
+    Plans and shopping lists are imported as historical snapshots, including
+    when the archive came from the target household itself.  A deterministic
+    UUID keeps repeat restores idempotent while giving every aggregate and
+    child a distinct identity from its live source object.
+    """
+
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"slop-selective-restore:{target_household_id}:{table}:{source_id}",
+        )
+    )
+
+
+def _prepare_historical_id_maps(
+    tables: dict[str, list[dict[str, Any]]],
+    include: set[str],
+    maps: dict[str, dict[str, str]],
+    target_household_id: str,
+) -> None:
+    """Reserve clone identities before remapping rows or embedded snapshots."""
+
+    for table in HISTORICAL_CLONE_TABLES & include:
+        for row in tables[table]:
+            maps[table][row["id"]] = _historical_clone_id(
+                target_household_id,
+                table,
+                row["id"],
+            )
+
+
 def _remap_embedded(value: Any, id_map: dict[str, dict[str, str]]) -> Any:
     """Remap UUID references inside JSON snapshots without changing prose."""
 
@@ -750,7 +794,6 @@ def _mapped_data(
     id_map: dict[str, dict[str, str]],
     model: Any | None = None,
 ) -> dict[str, Any]:
-    result = {key: _remap_embedded(_as_target_value(value), id_map) for key, value in data.items()}
     foreign_keys = {
         "household_id": "household",
         "member_id": "household_member",
@@ -766,9 +809,22 @@ def _mapped_data(
         "meal_occurrence_id": "meal_occurrence",
         "pantry_lot_id": "pantry_lot",
         "meal_batch_id": "meal_batch",
+        "shopping_list_id": "shopping_list",
         "reviewed_by": "app_user",
         "created_by_user_id": "app_user",
         "reviewed_by_user_id": "app_user",
+    }
+    # Keep scalar foreign keys untouched until the mapping loop below.  The
+    # recursive JSON remapper would otherwise map a scalar FK first, after
+    # which the nullable-link guard could mistake the already-mapped target ID
+    # for an omitted source component and clear it.
+    result = {
+        key: (
+            _as_target_value(value)
+            if key in foreign_keys
+            else _remap_embedded(_as_target_value(value), id_map)
+        )
+        for key, value in data.items()
     }
     for foreign_key, map_name in foreign_keys.items():
         mapping = id_map.get(map_name, {})
@@ -928,6 +984,15 @@ def _insert_rows(db: Session, model: Any, rows: list[dict[str, Any]], maps: dict
     for source in rows:
         source_id = source["id"]
         data = _convert_model_values(model, source)
+        if table in HISTORICAL_CLONE_TABLES:
+            # The full restore reserves all historical IDs up front so JSON
+            # snapshots can remap forward references too.  Keep direct helper
+            # use safe by reserving this row lazily when necessary.
+            maps[table].setdefault(
+                source_id,
+                _historical_clone_id(household_id, table, source_id),
+            )
+            data["id"] = maps[table][source_id]
         if "household_id" in data:
             data["household_id"] = household_id
         if "owner_household_id" in data and data["owner_household_id"] == source_household_id:
@@ -983,10 +1048,33 @@ def _insert_rows(db: Session, model: Any, rows: list[dict[str, Any]], maps: dict
         # A source UUID may already exist in another target household.  Never
         # attach the imported row to that record; allocate a fresh ID and keep
         # the source->target mapping for all child rows.
-        target_id = source_id
+        # Historical aggregates already carry their deterministic clone ID;
+        # using the source ID here would turn a same-household restore into a
+        # random clone whenever the live source row is present, breaking
+        # replay idempotence.  Other tables retain the source ID unless it
+        # collides with an unrelated target row.
+        target_id = data["id"]
         collision = db.get(model, target_id)
         if collision is not None:
-            target_id = str(uuid.uuid4())
+            if table in HISTORICAL_CLONE_TABLES:
+                # Keep collision recovery deterministic as well.  UUID5
+                # collisions are extraordinarily unlikely, but a target may
+                # already contain a user-created row with that exact ID.
+                collision_attempt = 1
+                target_id = _historical_clone_id(
+                    household_id,
+                    table,
+                    f"{source_id}:collision:{collision_attempt}",
+                )
+                while db.get(model, target_id) is not None:
+                    collision_attempt += 1
+                    target_id = _historical_clone_id(
+                        household_id,
+                        table,
+                        f"{source_id}:collision:{collision_attempt}",
+                    )
+            else:
+                target_id = str(uuid.uuid4())
         data["id"] = target_id
         db.add(model(**data))
         db.flush()
@@ -1026,6 +1114,12 @@ def restore_archive(
             include = _component_tables(requested, bundle.tables)
             maps: dict[str, dict[str, str]] = defaultdict(dict)
             maps["household"][bundle.household["id"]] = target_household_id
+            _prepare_historical_id_maps(
+                bundle.tables,
+                include,
+                maps,
+                target_household_id,
+            )
             counts: dict[str, int] = defaultdict(int)
 
             ordered = (

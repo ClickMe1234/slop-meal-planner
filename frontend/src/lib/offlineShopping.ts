@@ -4,7 +4,14 @@ const dbName = 'slop-offline'
 const dbVersion = 3
 const shoppingStoreName = 'shopping'
 const mutationStoreName = 'shoppingMutations'
+// Version-two IndexedDB rows were not scoped. Keep them in a reserved scope
+// until the first authenticated load can associate them with the account that
+// owns the browser's old offline cache.
+const legacyDatabaseScope = '__slop_legacy__'
 const scopeStorageKey = 'slop-shopping-scope'
+const legacyShoppingFallbackKey = 'slop-shopping-fallback'
+const legacyMutationFallbackKey = 'slop-shopping-mutations-fallback'
+const legacyContextFallbackKey = 'slop-shopping-context'
 const shoppingFallbackPrefix = 'slop-shopping-fallback:'
 const mutationFallbackPrefix = 'slop-shopping-mutations-fallback:'
 const contextFallbackPrefix = 'slop-shopping-context:'
@@ -69,9 +76,11 @@ let currentScope = 'anonymous'
 let indexedDbUnavailable = false
 let localStorageUnavailable = false
 let memoryShopping: ShoppingItem[] = []
+let memoryShoppingLoaded = false
 let memoryNameMutations: ShoppingNameMutation[] = []
 let memoryItemMutations: ShoppingItemMutation[] = []
 let memoryContext: OfflineShoppingContext | null = null
+let adoptedLegacyDatabaseScope = ''
 
 try {
   currentScope = localStorage.getItem(scopeStorageKey) || 'anonymous'
@@ -88,12 +97,15 @@ export function setOfflineShoppingScope(scope?: string): void {
   const nextScope = normaliseScope(scope ?? 'anonymous')
   if (nextScope !== currentScope) {
     memoryShopping = []
+    memoryShoppingLoaded = false
     memoryNameMutations = []
     memoryItemMutations = []
     memoryContext = null
+    adoptedLegacyDatabaseScope = ''
   }
   currentScope = nextScope
   safeSet(scopeStorageKey, currentScope)
+  migrateLegacyFallbacks()
 }
 
 function scopedKey(prefix: string): string {
@@ -109,10 +121,13 @@ function ensurePersistedScope(): void {
   if (!localStorageUnavailable && !persisted && currentScope !== 'anonymous') {
     currentScope = 'anonymous'
     memoryShopping = []
+    memoryShoppingLoaded = false
     memoryNameMutations = []
     memoryItemMutations = []
     memoryContext = null
+    adoptedLegacyDatabaseScope = ''
   }
+  migrateLegacyFallbacks()
 }
 
 function safeGet(key: string): string | null {
@@ -145,15 +160,71 @@ function safeRemove(key: string): void {
   }
 }
 
+function migrateLegacyFallbacks(): void {
+  if (currentScope === 'anonymous') return
+  for (const [legacyKey, prefix] of [
+    [legacyShoppingFallbackKey, shoppingFallbackPrefix],
+    [legacyMutationFallbackKey, mutationFallbackPrefix],
+    [legacyContextFallbackKey, contextFallbackPrefix],
+  ] as const) {
+    const legacyValue = safeGet(legacyKey)
+    if (legacyValue === null) continue
+    const destinationKey = scopedKey(prefix)
+    const destinationValue = safeGet(destinationKey)
+    let migratedValue = legacyValue
+    if (destinationValue !== null) {
+      if (prefix === contextFallbackPrefix) {
+        // A scoped context is already authoritative. The two values cannot be
+        // merged, but it is safe to discard the old unscoped pointer because
+        // it does not contain queued edits or cached list rows.
+        safeRemove(legacyKey)
+        continue
+      }
+      const merged = mergeFallbackArrays(legacyValue, destinationValue)
+      if (merged === null) continue
+      migratedValue = merged
+    }
+    if (safeSet(destinationKey, migratedValue)) safeRemove(legacyKey)
+  }
+}
+
 function parseArray<T>(key: string): T[] {
-  const stored = safeGet(key)
-  if (!stored) return []
+  return parseStoredArray<T>(safeGet(key)) ?? []
+}
+
+function parseStoredArray<T>(stored: string | null): T[] | null {
+  if (stored === null) return null
   try {
     const parsed = JSON.parse(stored)
-    return Array.isArray(parsed) ? parsed as T[] : []
+    return Array.isArray(parsed) ? parsed as T[] : null
   } catch {
-    return []
+    return null
   }
+}
+
+function mergeFallbackArrays(legacyValue: string, currentValue: string): string | null {
+  const legacyRecords = parseStoredArray<Record<string, unknown>>(legacyValue)
+  const currentRecords = parseStoredArray<Record<string, unknown>>(currentValue)
+  if (!legacyRecords || !currentRecords) return null
+  const merged = currentRecords.filter(record => record !== null && typeof record === 'object')
+  const seen = new Set(
+    currentRecords
+      .filter(record => record !== null && typeof record === 'object')
+      .map(record => record.id)
+      .filter((id): id is string | number => typeof id === 'string' || typeof id === 'number')
+      .map(id => String(id)),
+  )
+  for (const record of legacyRecords) {
+    if (record === null || typeof record !== 'object') continue
+    const id = record.id
+    if (typeof id === 'string' || typeof id === 'number') {
+      const normalisedId = String(id)
+      if (seen.has(normalisedId)) continue
+      seen.add(normalisedId)
+    }
+    merged.push(record)
+  }
+  return JSON.stringify(merged)
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -165,12 +236,31 @@ function openDatabase(): Promise<IDBDatabase> {
     const request = indexedDB.open(dbName, dbVersion)
     request.onupgradeneeded = () => {
       const db = request.result
+      const transaction = request.transaction
+      const migrationScope = currentScope === 'anonymous' ? legacyDatabaseScope : currentScope
       for (const storeName of [shoppingStoreName, mutationStoreName]) {
-        const existing = db.objectStoreNames.contains(storeName)
-          ? request.transaction?.objectStore(storeName)
-          : null
-        if (existing && existing.keyPath !== 'storageKey') db.deleteObjectStore(storeName)
-        if (!db.objectStoreNames.contains(storeName)) db.createObjectStore(storeName, { keyPath: 'storageKey' })
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.createObjectStore(storeName, { keyPath: 'storageKey' })
+          continue
+        }
+        const existing = transaction?.objectStore(storeName)
+        if (!existing || existing.keyPath === 'storageKey') continue
+        const recordsRequest = existing.getAll()
+        recordsRequest.onsuccess = () => {
+          db.deleteObjectStore(storeName)
+          const replacement = db.createObjectStore(storeName, { keyPath: 'storageKey' })
+          for (const record of recordsRequest.result as Array<{ id?: unknown } & Record<string, unknown>>) {
+            if (record.id === undefined || record.id === null) continue
+            const id = String(record.id)
+            replacement.put({
+              ...record,
+              id,
+              storageKey: `${migrationScope}:${id}`,
+              scope: migrationScope,
+            })
+          }
+        }
+        recordsRequest.onerror = () => transaction?.abort()
       }
     }
     request.onsuccess = () => resolve(request.result)
@@ -179,10 +269,55 @@ function openDatabase(): Promise<IDBDatabase> {
   })
 }
 
+async function adoptLegacyDatabaseRecords(db: IDBDatabase): Promise<void> {
+  const targetScope = currentScope
+  if (targetScope === 'anonymous' || adoptedLegacyDatabaseScope === targetScope) return
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction([shoppingStoreName, mutationStoreName], 'readwrite')
+    for (const storeName of [shoppingStoreName, mutationStoreName]) {
+      const store = transaction.objectStore(storeName)
+      const request = store.getAll()
+      request.onsuccess = () => {
+        const records = request.result as Array<StoredRecord & Record<string, unknown>>
+        const currentKeys = new Set(
+          records
+            .filter(record => record.scope === targetScope)
+            .map(record => record.storageKey),
+        )
+        for (const record of records) {
+          const isLegacy = record.scope === legacyDatabaseScope
+            || (!record.scope && String(record.storageKey).startsWith(`${legacyDatabaseScope}:`))
+          if (!isLegacy) continue
+          const id = record.id === undefined || record.id === null
+            ? String(record.storageKey).startsWith(`${legacyDatabaseScope}:`)
+              ? String(record.storageKey).slice(legacyDatabaseScope.length + 1)
+              : ''
+            : String(record.id)
+          if (!id) continue
+          const targetKey = `${targetScope}:${id}`
+          if (!currentKeys.has(targetKey)) {
+            store.put({ ...record, id, storageKey: targetKey, scope: targetScope })
+            currentKeys.add(targetKey)
+          }
+          store.delete(record.storageKey)
+        }
+      }
+      request.onerror = () => transaction.abort()
+    }
+    transaction.oncomplete = () => {
+      adoptedLegacyDatabaseScope = targetScope
+      resolve()
+    }
+    transaction.onerror = () => reject(transaction.error)
+    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB migration was aborted'))
+  })
+}
+
 async function useDatabase<T>(operation: (db: IDBDatabase) => Promise<T>): Promise<T> {
   if (indexedDbUnavailable || typeof indexedDB === 'undefined') throw new Error('IndexedDB is unavailable')
   const db = await openDatabase()
   try {
+    await adoptLegacyDatabaseRecords(db)
     return await operation(db)
   } finally {
     db.close()
@@ -229,22 +364,26 @@ function deleteRecord(storeName: string, id: string): Promise<void> {
 
 export async function loadShoppingItems(seed: ShoppingItem[]): Promise<ShoppingItem[]> {
   ensurePersistedScope()
-  const fallback = parseArray<ShoppingItem>(scopedKey(shoppingFallbackPrefix))
-  if (fallback.length) {
+  const fallbackValue = safeGet(scopedKey(shoppingFallbackPrefix))
+  const fallback = parseStoredArray<ShoppingItem>(fallbackValue)
+  if (!localStorageUnavailable && fallback !== null) {
     memoryShopping = fallback
+    memoryShoppingLoaded = true
     return fallback
   }
-  if (localStorageUnavailable && memoryShopping.length) return memoryShopping
+  if (localStorageUnavailable && memoryShoppingLoaded) return memoryShopping
   try {
     const items = await useDatabase(dbItems)
     if (items.length) {
       memoryShopping = items
+      memoryShoppingLoaded = true
       return items
     }
   } catch {
     indexedDbUnavailable = true
   }
   memoryShopping = seed
+  memoryShoppingLoaded = true
   await saveShoppingItems(seed)
   return seed
 }
@@ -252,12 +391,21 @@ export async function loadShoppingItems(seed: ShoppingItem[]): Promise<ShoppingI
 export async function saveShoppingItems(items: ShoppingItem[]): Promise<void> {
   ensurePersistedScope()
   memoryShopping = items
+  memoryShoppingLoaded = true
   const persisted = safeSet(scopedKey(shoppingFallbackPrefix), JSON.stringify(items))
   try {
     await useDatabase(db => new Promise<void>((resolve, reject) => {
       const transaction = db.transaction(shoppingStoreName, 'readwrite')
       const store = transaction.objectStore(shoppingStoreName)
-      items.forEach(item => store.put({ ...item, storageKey: scopedRecordKey(item.id), scope: currentScope }))
+      const retainedIds = new Set(items.map(item => item.id))
+      const existingRequest = store.getAll()
+      existingRequest.onsuccess = () => {
+        for (const record of existingRequest.result as Array<ShoppingItem & StoredRecord>) {
+          if (record.scope === currentScope && !retainedIds.has(record.id)) store.delete(record.storageKey)
+        }
+        items.forEach(item => store.put({ ...item, storageKey: scopedRecordKey(item.id), scope: currentScope }))
+      }
+      existingRequest.onerror = () => transaction.abort()
       transaction.oncomplete = () => resolve()
       transaction.onerror = () => reject(transaction.error)
     }))
@@ -269,8 +417,9 @@ export async function saveShoppingItems(items: ShoppingItem[]): Promise<void> {
 
 export async function loadShoppingNameMutations(): Promise<ShoppingNameMutation[]> {
   ensurePersistedScope()
-  const fallback = parseArray<ShoppingNameMutation>(scopedKey(mutationFallbackPrefix))
-  if (fallback.length) {
+  const fallbackValue = safeGet(scopedKey(mutationFallbackPrefix))
+  const fallback = parseStoredArray<ShoppingNameMutation>(fallbackValue)
+  if (!localStorageUnavailable && fallback !== null) {
     memoryNameMutations = fallback.filter(item => !('kind' in item) || item.kind === 'name')
     return memoryNameMutations
   }
@@ -285,14 +434,15 @@ export async function loadShoppingNameMutations(): Promise<ShoppingNameMutation[
   } catch {
     indexedDbUnavailable = true
   }
-  memoryNameMutations = fallback.filter(item => !('kind' in item) || item.kind === 'name') as ShoppingNameMutation[]
+  memoryNameMutations = fallback?.filter(item => !('kind' in item) || item.kind === 'name') as ShoppingNameMutation[] ?? []
   return memoryNameMutations
 }
 
 export async function loadShoppingItemMutations(): Promise<ShoppingItemMutation[]> {
   ensurePersistedScope()
-  const fallback = parseArray<ShoppingNameMutation | ShoppingItemMutation>(scopedKey(mutationFallbackPrefix))
-  if (fallback.some(item => 'kind' in item && item.kind !== 'name')) {
+  const fallbackValue = safeGet(scopedKey(mutationFallbackPrefix))
+  const fallback = parseStoredArray<ShoppingNameMutation | ShoppingItemMutation>(fallbackValue)
+  if (!localStorageUnavailable && fallback !== null) {
     memoryItemMutations = fallback.filter(item => 'kind' in item && item.kind !== 'name') as ShoppingItemMutation[]
     return memoryItemMutations
   }
@@ -307,7 +457,7 @@ export async function loadShoppingItemMutations(): Promise<ShoppingItemMutation[
   } catch {
     indexedDbUnavailable = true
   }
-  memoryItemMutations = fallback.filter(item => 'kind' in item && item.kind !== 'name') as ShoppingItemMutation[]
+  memoryItemMutations = fallback?.filter(item => 'kind' in item && item.kind !== 'name') as ShoppingItemMutation[] ?? []
   return memoryItemMutations
 }
 
@@ -422,6 +572,7 @@ export function saveOfflineShoppingContext(context: OfflineShoppingContext): voi
 
 export async function clearOfflineShoppingData(): Promise<void> {
   memoryShopping = []
+  memoryShoppingLoaded = false
   memoryNameMutations = []
   memoryItemMutations = []
   memoryContext = null

@@ -511,18 +511,24 @@ export const api = {
       }),
     }),
   acceptPlan: (id: string) => request<BackendPlan>(`/meal-plans/${id}/accept`, { method: 'POST' }),
-  markBatchCooked: (planId: string, batchId: string) =>
+  markBatchCooked: (planId: string, batchId: string, expectedVersion: number, operationId: string) =>
     request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, {
       method: 'POST',
+      body: JSON.stringify({ expected_version: expectedVersion, operation_id: operationId }),
     }),
-  unmarkBatchCooked: (planId: string, batchId: string) =>
+  unmarkBatchCooked: (planId: string, batchId: string, expectedVersion: number, operationId: string) =>
     request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, {
       method: 'DELETE',
+      body: JSON.stringify({ expected_version: expectedVersion, operation_id: operationId }),
     }),
-  updateBatchCookedWeight: (planId: string, batchId: string, cookedWeightGrams: number | null) =>
+  updateBatchCookedWeight: (planId: string, batchId: string, cookedWeightGrams: number | null, expectedVersion: number, operationId: string) =>
     request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked-weight`, {
       method: 'PATCH',
-      body: JSON.stringify({ cooked_weight_grams: cookedWeightGrams }),
+      body: JSON.stringify({
+        cooked_weight_grams: cookedWeightGrams,
+        expected_version: expectedVersion,
+        operation_id: operationId,
+      }),
     }),
   buildShoppingList: (planId: string) =>
     request<BackendShoppingList>('/shopping-lists/build', {
@@ -1304,6 +1310,8 @@ export interface BackendPlanDetail {
     meal_type: string
     meal_group_key?: string
     batch_id: string
+    /** Live plan responses always include this; demo/test fixtures may omit it. */
+    batch_version?: number
     parent_batch_id?: string
     component_slot: number
     guest_servings?: number
