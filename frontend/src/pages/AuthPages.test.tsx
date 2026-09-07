@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../api/client'
+import { loadShoppingNameMutations, saveShoppingNameMutation, setOfflineShoppingScope } from '../lib/offlineShopping'
 import { ChangePasswordPage, LoginPage } from './AuthPages'
 
 vi.mock('../api/client', async () => {
@@ -105,6 +106,32 @@ describe('LoginPage', () => {
     await user.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() => expect(api.login).toHaveBeenCalledWith('owner', 'password', false))
+  })
+
+  it('preserves authentication-paused offline edits when the same user signs in again', async () => {
+    const user = userEvent.setup()
+    setOfflineShoppingScope(signedInUser.id)
+    const pausedMutation = {
+      id: 'paused-name-edit',
+      kind: 'name' as const,
+      listId: 'list-1',
+      itemId: 'item-1',
+      baseDisplayName: 'courgettes',
+      desiredDisplayName: 'garden courgettes',
+      createdAt: 1,
+      status: 'auth_paused' as const,
+      lastError: 'Sign in required',
+    }
+    await saveShoppingNameMutation(pausedMutation)
+    renderLogin()
+
+    await screen.findByRole('heading', { name: /sign in to your household/i })
+    await user.type(screen.getByRole('textbox', { name: 'Username' }), 'owner')
+    await user.type(screen.getByLabelText('Password'), 'password')
+    await user.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await waitFor(() => expect(screen.getByTestId('current-route')).toHaveTextContent('/week'))
+    expect(await loadShoppingNameMutations()).toEqual([pausedMutation])
   })
 
   it('opens actionable sign-in help instead of leaving the help control inert', async () => {

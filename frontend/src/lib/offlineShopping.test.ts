@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  clearOfflineShoppingData,
   loadOfflineShoppingContext,
   loadShoppingNameMutations,
   queueShoppingNameMutation,
   removeShoppingNameMutation,
   saveOfflineShoppingContext,
   saveShoppingNameMutation,
+  setOfflineShoppingScope,
   shoppingAsText,
 } from './offlineShopping'
 import type { ShoppingItem } from '../types'
@@ -83,5 +85,33 @@ describe('offline shopping name edits', () => {
       mealPlanId: 'plan',
       rebuildRecommended: true,
     })
+  })
+
+  it('keeps account data isolated while allowing the same account to resume edits', async () => {
+    setOfflineShoppingScope('user-a')
+    const userAMutation = await queueShoppingNameMutation({
+      listId: 'list-a',
+      itemId: 'item-a',
+      baseDisplayName: 'mint',
+      desiredDisplayName: 'garden mint',
+    })
+    await saveShoppingNameMutation({ ...userAMutation, status: 'auth_paused' })
+
+    setOfflineShoppingScope('user-b')
+    expect(await loadShoppingNameMutations()).toEqual([])
+    const userBMutation = await queueShoppingNameMutation({
+      listId: 'list-b',
+      itemId: 'item-b',
+      baseDisplayName: 'apples',
+      desiredDisplayName: 'cooking apples',
+    })
+
+    setOfflineShoppingScope('user-a')
+    expect(await loadShoppingNameMutations()).toEqual([{ ...userAMutation, status: 'auth_paused' }])
+
+    await clearOfflineShoppingData()
+    expect(await loadShoppingNameMutations()).toEqual([])
+    setOfflineShoppingScope('user-b')
+    expect(await loadShoppingNameMutations()).toEqual([userBMutation])
   })
 })

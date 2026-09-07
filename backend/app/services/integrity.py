@@ -146,23 +146,25 @@ def repair_household_derived_state(db: Session, household_id: str) -> dict[str, 
             "Choose the authoritative accepted plan before repairing derived state.",
             409,
         )
+    household_batches = db.scalars(
+        select(MealBatch)
+        .join(MealPlan, MealPlan.id == MealBatch.meal_plan_id)
+        .where(MealPlan.household_id == household_id)
+        .order_by(MealPlan.id, MealBatch.id)
+        .with_for_update()
+    ).all()
+    household_batch_ids = [batch.id for batch in household_batches]
+    if household_batch_ids:
+        db.execute(
+            delete(PantryReservation).where(
+                PantryReservation.meal_batch_id.in_(household_batch_ids)
+            )
+        )
+    db.flush()
     rebuilt_list_id: str | None = None
     if accepted_plans:
         plan = accepted_plans[0]
-        batches = db.scalars(
-            select(MealBatch)
-            .where(MealBatch.meal_plan_id == plan.id)
-            .order_by(MealBatch.id)
-            .with_for_update()
-        ).all()
-        batch_ids = [batch.id for batch in batches]
-        if batch_ids:
-            db.execute(
-                delete(PantryReservation).where(
-                    PantryReservation.meal_batch_id.in_(batch_ids)
-                )
-            )
-        db.flush()
+        batches = [batch for batch in household_batches if batch.meal_plan_id == plan.id]
         reserve_plan_batches(
             db,
             household_id,

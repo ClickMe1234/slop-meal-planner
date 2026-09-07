@@ -5,7 +5,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge, Button, Card, Loading, Notice, ProgressBar, Segmented } from '../components/ui'
 import { api, ApiError, isDemoMode, type IngredientLocale, type MeasurementSystem } from '../api/client'
 import { USDA_KEY_SIGNUP_URL } from '../components/UsdaKeyGuidance'
-import { clearOfflineShoppingData } from '../lib/offlineShopping'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -37,7 +36,6 @@ export function LoginPage() {
       } else {
         const result = await api.login(username.trim(), password, rememberMe)
         queryClient.clear()
-        await clearOfflineShoppingData()
         if (result.user.must_change_password) { navigate('/change-password'); return }
       }
       navigate('/week')
