@@ -1,8 +1,8 @@
 # Slop Meal Planner codebase map
 
 This is the orientation guide for developers and agents working in Slop Meal
-Planner. It describes the repository as inspected on 6 September 2026, at
-release 1.4.0. The source files and tests are authoritative when this guide
+Planner. It describes the repository as inspected on 7 September 2026, at
+release 1.4.1. The source files and tests are authoritative when this guide
 and an implementation disagree; update this document when a structural
 change makes it misleading.
 

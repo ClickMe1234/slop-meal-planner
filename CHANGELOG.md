@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.1 - 2026-09-07
 
 - Make pantry reservations, cooking, shopping mutations, and purchase intake
   concurrency-safe and idempotent; preserve manual and compatible checked
