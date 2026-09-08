@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 
 vi.mock('../lib/offlineShopping', async importOriginal => ({
   ...await importOriginal<typeof import('../lib/offlineShopping')>(),

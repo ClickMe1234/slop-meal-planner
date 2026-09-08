@@ -23,7 +23,7 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { NutritionStrip } from '../components/Nutrition'
 import { Badge, Button, Card, Loading, Notice, PageHeader, ProgressBar } from '../components/ui'
 import {

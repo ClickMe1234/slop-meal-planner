@@ -50,51 +50,6 @@ describe('API CSRF recovery', () => {
   })
 })
 
-describe('batch cooking mutations', () => {
-  it('sends the batch version and reuses the caller-provided operation ID', async () => {
-    sessionStorage.setItem('slop-csrf', 'current-token')
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(null, { status: 204 }))
-    const { api } = await import('./client')
-
-    await api.markBatchCooked('plan-1', 'batch-1', 4, 'cook-operation')
-    await api.markBatchCooked('plan-1', 'batch-1', 4, 'cook-operation')
-    await api.unmarkBatchCooked('plan-1', 'batch-1', 5, 'uncook-operation')
-    await api.updateBatchCookedWeight('plan-1', 'batch-1', 1200, 6, 'weight-operation')
-
-    expect(fetchMock.mock.calls.map(([url, init]) => ({
-      url,
-      method: init?.method,
-      body: JSON.parse(init?.body as string),
-    }))).toEqual([
-      {
-        url: '/api/v1/meal-plans/plan-1/batches/batch-1/cooked',
-        method: 'POST',
-        body: { expected_version: 4, operation_id: 'cook-operation' },
-      },
-      {
-        url: '/api/v1/meal-plans/plan-1/batches/batch-1/cooked',
-        method: 'POST',
-        body: { expected_version: 4, operation_id: 'cook-operation' },
-      },
-      {
-        url: '/api/v1/meal-plans/plan-1/batches/batch-1/cooked',
-        method: 'DELETE',
-        body: { expected_version: 5, operation_id: 'uncook-operation' },
-      },
-      {
-        url: '/api/v1/meal-plans/plan-1/batches/batch-1/cooked-weight',
-        method: 'PATCH',
-        body: {
-          cooked_weight_grams: 1200,
-          expected_version: 6,
-          operation_id: 'weight-operation',
-        },
-      },
-    ])
-  })
-})
-
 describe('login persistence', () => {
   it('sends the keep-signed-in choice to the server', async () => {
     sessionStorage.setItem('slop-csrf', 'pre-login-token')

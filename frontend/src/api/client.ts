@@ -1,5 +1,4 @@
 import type { JobStatus } from '../types'
-import { setOfflineShoppingScope } from '../lib/offlineShopping'
 
 const baseUrl = import.meta.env.VITE_API_URL ?? ''
 const csrfStorageKey = 'slop-csrf'
@@ -40,12 +39,6 @@ export interface ApiNutritionIssue {
   violations: ApiNutritionViolation[]
 }
 
-export interface ApiFieldError {
-  loc: Array<string | number>
-  msg: string
-  type?: string
-}
-
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -53,7 +46,6 @@ export class ApiError extends Error {
     public code?: string,
     public actions: ApiAction[] = [],
     public issues: ApiNutritionIssue[] = [],
-    public fieldErrors: ApiFieldError[] = [],
   ) {
     super(message)
   }
@@ -91,12 +83,11 @@ function send(path: string, options: RequestInit | undefined, method: string, to
 
 async function readProblem(response: Response) {
   return response.json().catch(() => null) as Promise<{
-    detail?: string | ApiFieldError[]
+    detail?: string
     code?: string
     action?: ApiAction
     actions?: ApiAction[]
     issues?: ApiNutritionIssue[]
-    field_errors?: ApiFieldError[]
   } | null>
 }
 
@@ -116,11 +107,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     problem = response.ok ? null : await readProblem(response)
   }
   if (!response.ok) {
-    const fieldErrors = problem?.field_errors ?? (Array.isArray(problem?.detail) ? problem.detail : [])
-    const detail = typeof problem?.detail === 'string'
-      ? problem.detail
-      : fieldErrors.map(error => error.msg).filter(Boolean).join(' ')
-    throw new ApiError(response.status, detail || 'The request could not be completed.', problem?.code, problem?.actions ?? (problem?.action ? [problem.action] : []), problem?.issues ?? [], fieldErrors)
+    throw new ApiError(response.status, problem?.detail ?? 'The request could not be completed.', problem?.code, problem?.actions ?? (problem?.action ? [problem.action] : []), problem?.issues ?? [])
   }
   return response.status === 204 ? (undefined as T) : (response.json() as Promise<T>)
 }
@@ -167,7 +154,6 @@ export const api = {
     }>('/auth/setup', { method: 'POST', body: JSON.stringify(payload) })
     csrfToken = result.csrf_token
     sessionStorage.setItem(csrfStorageKey, csrfToken)
-    setOfflineShoppingScope(result.user.id)
     return result
   },
   login: async (username: string, password: string, rememberMe = true) => {
@@ -185,7 +171,6 @@ export const api = {
     })
     csrfToken = result.csrf_token
     sessionStorage.setItem(csrfStorageKey, csrfToken)
-    setOfflineShoppingScope(result.user.id)
     return result
   },
   logout: async () => {
@@ -197,8 +182,8 @@ export const api = {
     csrfToken = null
     sessionStorage.removeItem(csrfStorageKey)
   },
-  me: async () => {
-    const result = await request<{
+  me: () =>
+    request<{
       id: string
       username: string
       role: 'owner' | 'collaborator'
@@ -208,10 +193,7 @@ export const api = {
   method_view_preference?: MethodViewPreference
   measurement_system?: MeasurementSystem
   method_tutorial_version_seen?: number
-    }>('/auth/me')
-    setOfflineShoppingScope(result.id)
-    return result
-  },
+    }>('/auth/me'),
   updateMe: (preferences: IngredientLocale | UserPreferenceUpdate) =>
     request('/auth/me', {
       method: 'PATCH',
@@ -457,20 +439,13 @@ export const api = {
       purchase_quantity: number
       unit: string
       category: string
-      operation_id?: string
     },
   ) =>
     request<BackendShoppingItem>(`/shopping-lists/${listId}/items`, {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  addPurchasedToPantry: (
-    listId: string,
-    payload: { expected_list_version: number; operation_id: string },
-  ) => request<BackendPantryItem[]>(`/shopping-lists/${listId}/add-purchased-to-pantry`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  }),
+  addPurchasedToPantry: (listId: string) => request<BackendPantryItem[]>(`/shopping-lists/${listId}/add-purchased-to-pantry`, { method: 'POST' }),
   generatePlan: (payload: Record<string, unknown>) =>
     request<BackendPlan>('/meal-plans/generate', {
       method: 'POST',
@@ -511,24 +486,18 @@ export const api = {
       }),
     }),
   acceptPlan: (id: string) => request<BackendPlan>(`/meal-plans/${id}/accept`, { method: 'POST' }),
-  markBatchCooked: (planId: string, batchId: string, expectedVersion: number, operationId: string) =>
+  markBatchCooked: (planId: string, batchId: string) =>
     request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, {
       method: 'POST',
-      body: JSON.stringify({ expected_version: expectedVersion, operation_id: operationId }),
     }),
-  unmarkBatchCooked: (planId: string, batchId: string, expectedVersion: number, operationId: string) =>
+  unmarkBatchCooked: (planId: string, batchId: string) =>
     request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked`, {
       method: 'DELETE',
-      body: JSON.stringify({ expected_version: expectedVersion, operation_id: operationId }),
     }),
-  updateBatchCookedWeight: (planId: string, batchId: string, cookedWeightGrams: number | null, expectedVersion: number, operationId: string) =>
+  updateBatchCookedWeight: (planId: string, batchId: string, cookedWeightGrams: number | null) =>
     request<void>(`/meal-plans/${planId}/batches/${batchId}/cooked-weight`, {
       method: 'PATCH',
-      body: JSON.stringify({
-        cooked_weight_grams: cookedWeightGrams,
-        expected_version: expectedVersion,
-        operation_id: operationId,
-      }),
+      body: JSON.stringify({ cooked_weight_grams: cookedWeightGrams }),
     }),
   buildShoppingList: (planId: string) =>
     request<BackendShoppingList>('/shopping-lists/build', {
@@ -749,13 +718,6 @@ export interface BackendRecipeDetail extends BackendRecipe {
     shopping_list_rebuilt: boolean
     shopping_list_id?: string
     cooked_batches_unchanged: number
-    warnings: Array<{
-      plan_id: string
-      code: string
-      detail: string
-      actions?: ApiAction[]
-      issues?: ApiNutritionIssue[]
-    }>
   }
 }
 
@@ -1310,8 +1272,6 @@ export interface BackendPlanDetail {
     meal_type: string
     meal_group_key?: string
     batch_id: string
-    /** Live plan responses always include this; demo/test fixtures may omit it. */
-    batch_version?: number
     parent_batch_id?: string
     component_slot: number
     guest_servings?: number

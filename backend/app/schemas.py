@@ -181,7 +181,6 @@ class MealAllocationIn(APIModel):
 
 
 class TargetProfileIn(APIModel):
-    expected_version: int | None = Field(default=None, ge=1, exclude=True)
     mode: TargetMode
     tolerance_percent: Decimal = Field(default=Decimal("5"), gt=0, le=25)
     calorie_target: Decimal | None = Field(default=None, gt=0)
@@ -556,7 +555,6 @@ class RecipePlanSyncOut(APIModel):
     shopping_list_rebuilt: bool = False
     shopping_list_id: str | None = None
     cooked_batches_unchanged: int = 0
-    warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class RecipeDetail(RecipeSummary):
@@ -1142,20 +1140,6 @@ class PlanSideRemoveRequest(APIModel):
 
 class BatchCookedWeightUpdate(APIModel):
     cooked_weight_grams: Decimal | None = Field(default=None, gt=0)
-    expected_version: int | None = Field(default=None, ge=1)
-    operation_id: str | None = Field(default=None, min_length=1, max_length=160)
-
-
-class BatchCookRequest(APIModel):
-    """Optional optimistic/idempotency metadata for cook state changes.
-
-    The body remains optional at the route boundary so older clients that
-    only POST the cook URL continue to work while updated clients can protect
-    retries with a batch version and stable operation ID.
-    """
-
-    expected_version: int | None = Field(default=None, ge=1)
-    operation_id: str | None = Field(default=None, min_length=1, max_length=160)
 
 
 class PantryLotCreate(APIModel):
@@ -1171,7 +1155,6 @@ class PantryLotCreate(APIModel):
 class PantryAdjustment(APIModel):
     quantity_delta: Decimal
     reason: str = Field(min_length=1, max_length=60)
-    expected_version: int | None = Field(default=None, ge=1)
 
 
 class PantryLotPatch(VersionedUpdate):
@@ -1247,7 +1230,6 @@ class ShoppingItemCreate(APIModel):
     purchase_quantity: Decimal = Field(gt=0)
     unit: str
     category: str = "Other"
-    operation_id: str | None = Field(default=None, min_length=1, max_length=160)
 
 
 class ShoppingItemPatch(VersionedUpdate):
@@ -1257,22 +1239,9 @@ class ShoppingItemPatch(VersionedUpdate):
     display_unit: str | None = None
 
 
-class ShoppingPurchaseIntakeRequest(APIModel):
-    """Metadata for retryable checked-item purchase intake.
-
-    Both fields are optional for compatibility with the original empty-body
-    endpoint. New clients should provide both so a lost response can be
-    replayed without creating duplicate pantry lots.
-    """
-
-    expected_list_version: int | None = Field(default=None, ge=1)
-    operation_id: str | None = Field(default=None, min_length=1, max_length=160)
-
-
 class ShoppingItemNameUpdate(APIModel):
     display_name: str = Field(min_length=1, max_length=240)
     expected_display_name: str = Field(min_length=1, max_length=240)
-    expected_version: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def strip_names(self):

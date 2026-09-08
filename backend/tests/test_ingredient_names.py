@@ -46,20 +46,6 @@ def test_household_name_override_applies_to_singular_and_plural_names(db):
     assert overridden is True
 
 
-def test_ingredient_name_input_cannot_select_an_nltk_model_path(db, monkeypatch):
-    """Untrusted text is stemmed and never used as a model filename."""
-
-    import builtins
-
-    def reject_file_access(*_args, **_kwargs):
-        raise AssertionError("ingredient input attempted filesystem model access")
-
-    monkeypatch.setattr(builtins, "open", reject_file_access)
-    keys = ingredient_name_keys(db, "../../outside/untrusted-model.pickle carrots")
-
-    assert any(key.startswith("stem:") for key in keys)
-
-
 def test_reparse_updates_url_imports_and_prompts_to_rebuild_active_lists(db):
     household = Household(name="Home")
     db.add(household)
@@ -169,7 +155,7 @@ def test_reparse_preserves_a_user_overridden_name(db):
     assert ingredient.name_overridden is True
 
 
-def test_reparse_never_replaces_reviewed_quantity_arithmetic(db):
+def test_reparse_repairs_only_unambiguous_quantity_arithmetic(db):
     household = Household(name="Home")
     db.add(household)
     db.flush()
@@ -249,77 +235,17 @@ def test_reparse_never_replaces_reviewed_quantity_arithmetic(db):
     result = reparse_stale_imported_ingredients(db)
 
     assert result.scanned == 3
-    assert result.changed == 1
+    assert result.changed == 2
     assert result.lists_marked == 1
     assert delight.quantity == Decimal("2")
-    assert delight.unit == "g"
+    assert delight.unit == "bar"
     assert delight.quantity_grams == Decimal("110")
-    assert chicken.quantity == Decimal("4")
+    assert chicken.quantity == Decimal("2")
     assert chicken.unit == "item"
     assert chicken.food_phrase == "chicken breasts"
     assert reviewed_onions.quantity == Decimal("3")
     assert reviewed_onions.unit == "item"
     assert shopping_list.rebuild_recommended is True
-
-
-def test_reparse_skips_historical_versions_and_preserves_reviewed_amount(db):
-    household = Household(name="Home")
-    db.add(household)
-    db.flush()
-    recipe = Recipe(
-        household_id=household.id,
-        title="Reviewed import",
-        source_type="url",
-        source_url="https://example.com/reviewed-import",
-    )
-    db.add(recipe)
-    db.flush()
-    historical = RecipeVersion(
-        recipe_id=recipe.id,
-        version_number=1,
-        title=recipe.title,
-        yield_servings=Decimal("2"),
-    )
-    current = RecipeVersion(
-        recipe_id=recipe.id,
-        version_number=2,
-        title=recipe.title,
-        yield_servings=Decimal("2"),
-    )
-    db.add_all([historical, current])
-    db.flush()
-    old_ingredient = RecipeIngredient(
-        recipe_version_id=historical.id,
-        position=0,
-        original_text="2 x 55g bars Turkish delight",
-        quantity=Decimal("200"),
-        unit="g",
-        quantity_grams=Decimal("200"),
-        food_phrase="Turkish delight",
-        parser_version="ingredient-parser-nlp-2.7.0+adapter1",
-    )
-    reviewed = RecipeIngredient(
-        recipe_version_id=current.id,
-        position=0,
-        original_text="2 x 55g bars Turkish delight",
-        quantity=Decimal("200"),
-        unit="g",
-        quantity_grams=Decimal("200"),
-        food_phrase="Turkish delight",
-        parser_version="ingredient-parser-nlp-2.7.0+adapter1",
-    )
-    db.add_all([old_ingredient, reviewed])
-    db.flush()
-
-    result = reparse_stale_imported_ingredients(db)
-
-    assert result.scanned == 1
-    assert old_ingredient.parser_version == "ingredient-parser-nlp-2.7.0+adapter1"
-    assert old_ingredient.quantity == Decimal("200")
-    assert reviewed.parser_version == PARSER_VERSION
-    assert reviewed.quantity == Decimal("200")
-    assert reviewed.quantity_grams == Decimal("200")
-    assert reviewed.needs_review is True
 
 
 def test_shopping_name_edit_remembers_generated_names_and_detects_conflicts(

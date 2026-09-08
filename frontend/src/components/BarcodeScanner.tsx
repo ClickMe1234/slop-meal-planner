@@ -14,68 +14,46 @@ async function createBarcodeReader() {
 export function BarcodeScanner({ onCode, compact = false }: { onCode: (code: string) => void; compact?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const controlsRef = useRef<IScannerControls | null>(null)
-  const generationRef = useRef(0)
-  const mountedRef = useRef(true)
   const [active, setActive] = useState(false)
   const [error, setError] = useState('')
   const cameraAvailable = typeof window !== 'undefined' && window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia)
 
   const stop = () => {
-    generationRef.current += 1
     controlsRef.current?.stop()
     controlsRef.current = null
-    if (mountedRef.current) setActive(false)
+    setActive(false)
   }
-  useEffect(() => () => {
-    mountedRef.current = false
-    generationRef.current += 1
-    controlsRef.current?.stop()
-    controlsRef.current = null
-  }, [])
+  useEffect(() => stop, [])
 
   const start = async () => {
     if (!cameraAvailable || !videoRef.current) return
-    const generation = ++generationRef.current
     setError('')
     setActive(true)
     try {
       const reader = await createBarcodeReader()
-      if (!mountedRef.current || generation !== generationRef.current || !videoRef.current) return
-      const controls = await reader.decodeFromVideoDevice(undefined, videoRef.current, (result, _error, callbackControls) => {
-        if (!mountedRef.current || generation !== generationRef.current) {
-          callbackControls?.stop()
-          return
-        }
+      controlsRef.current = await reader.decodeFromVideoDevice(undefined, videoRef.current, (result, _error, controls) => {
         if (!result) return
         onCode(result.getText())
-        callbackControls.stop()
+        controls.stop()
         controlsRef.current = null
         setActive(false)
       })
-      if (!mountedRef.current || generation !== generationRef.current) {
-        controls.stop()
-        return
-      }
-      controlsRef.current = controls
     } catch (reason) {
-      if (mountedRef.current && generation === generationRef.current) {
-        setActive(false)
-        setError(reason instanceof Error ? reason.message : 'The camera could not be opened.')
-      }
+      setActive(false)
+      setError(reason instanceof Error ? reason.message : 'The camera could not be opened.')
     }
   }
 
   const scanImage = async (file?: File) => {
     if (!file) return
-    const generation = ++generationRef.current
     setError('')
     const imageUrl = URL.createObjectURL(file)
     try {
       const reader = await createBarcodeReader()
       const result = await reader.decodeFromImageUrl(imageUrl)
-      if (mountedRef.current && generation === generationRef.current) onCode(result.getText())
+      onCode(result.getText())
     } catch {
-      if (mountedRef.current && generation === generationRef.current) setError('No barcode was found in that image. Try a clearer, closer photo.')
+      setError('No barcode was found in that image. Try a clearer, closer photo.')
     } finally {
       URL.revokeObjectURL(imageUrl)
     }

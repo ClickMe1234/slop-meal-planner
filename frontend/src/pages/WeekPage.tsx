@@ -1,11 +1,11 @@
 import { BookOpenText, Check, ChefHat, ChevronLeft, ChevronRight, Clock3, ExternalLink, PencilLine, RefreshCw, Scale } from 'lucide-react'
-import { useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router'
+import { Link } from 'react-router-dom'
 import { NutritionRings } from '../components/Nutrition'
 import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader } from '../components/ui'
 import { demoRecipes, demoWeek } from '../data/demo'
-import { ApiError, api, isDemoMode, type BackendPlanDetail } from '../api/client'
+import { api, isDemoMode, type BackendPlanDetail } from '../api/client'
 import { compareMealTypes } from './planner'
 import { safeExternalUrl, safeImageUrl } from '../lib/safeUrls'
 
@@ -278,8 +278,6 @@ function LiveWeekPage() {
   const [pendingWeights, setPendingWeights] = useState<string[]>([])
   const [weightDrafts, setWeightDrafts] = useState<Record<string, string>>({})
   const [cookError, setCookError] = useState<string>()
-  const cookOperations = useRef<Record<string, { desiredCooked: boolean; expectedVersion: number; operationId: string }>>({})
-  const weightOperations = useRef<Record<string, { cookedWeightGrams: number | null; expectedVersion: number; operationId: string }>>({})
   const session = useQuery({ queryKey: ['session'], queryFn: api.me, retry: false })
   const members = useQuery({ queryKey: ['members'], queryFn: api.listMembers })
   const plans = useQuery({ queryKey: ['plans'], queryFn: api.listPlans, refetchOnMount: 'always' })
@@ -316,18 +314,6 @@ function LiveWeekPage() {
   const toggleCooked = async (batchId: string, currentlyCooked: boolean) => {
     const nextCooked = !currentlyCooked
     const selectedBatch = detail.data.occurrences.find(item => item.batch_id === batchId)
-    if (!selectedBatch) return
-    const expectedVersion = selectedBatch.batch_version ?? 1
-    const previousOperation = cookOperations.current[batchId]
-    const operation = previousOperation?.desiredCooked === nextCooked
-      && previousOperation.expectedVersion === expectedVersion
-      ? previousOperation
-      : {
-          desiredCooked: nextCooked,
-          expectedVersion,
-          operationId: crypto.randomUUID(),
-        }
-    cookOperations.current[batchId] = operation
     const rootBatchId = selectedBatch?.parent_batch_id ?? batchId
     const batchGroupIds = Array.from(new Set(detail.data.occurrences
       .filter(item => item.batch_id === rootBatchId || item.parent_batch_id === rootBatchId)
@@ -336,10 +322,7 @@ function LiveWeekPage() {
     setCookedOverrides(items => batchGroupIds.reduce((next, id) => ({ ...next, [id]: nextCooked }), items))
     setPendingBatches(items => Array.from(new Set([...items, ...batchGroupIds])))
     try {
-      await (nextCooked
-        ? api.markBatchCooked(current.id, batchId, operation.expectedVersion, operation.operationId)
-        : api.unmarkBatchCooked(current.id, batchId, operation.expectedVersion, operation.operationId))
-      delete cookOperations.current[batchId]
+      await (nextCooked ? api.markBatchCooked(current.id, batchId) : api.unmarkBatchCooked(current.id, batchId))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['plan', current.id] }),
         queryClient.invalidateQueries({ queryKey: ['pantry'] }),
@@ -350,10 +333,6 @@ function LiveWeekPage() {
         return next
       })
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        delete cookOperations.current[batchId]
-        await queryClient.invalidateQueries({ queryKey: ['plan', current.id] })
-      }
       setCookedOverrides(items => {
         const next = { ...items }
         batchGroupIds.forEach(id => delete next[id])
@@ -366,30 +345,10 @@ function LiveWeekPage() {
   }
 
   const saveCookedWeight = async (batchId: string, cookedWeightGrams: number | null) => {
-    const selectedBatch = detail.data.occurrences.find(item => item.batch_id === batchId)
-    if (!selectedBatch) return
-    const expectedVersion = selectedBatch.batch_version ?? 1
-    const previousOperation = weightOperations.current[batchId]
-    const operation = previousOperation?.cookedWeightGrams === cookedWeightGrams
-      && previousOperation.expectedVersion === expectedVersion
-      ? previousOperation
-      : {
-          cookedWeightGrams,
-          expectedVersion,
-          operationId: crypto.randomUUID(),
-        }
-    weightOperations.current[batchId] = operation
     setCookError(undefined)
     setPendingWeights(items => [...items, batchId])
     try {
-      await api.updateBatchCookedWeight(
-        current.id,
-        batchId,
-        cookedWeightGrams,
-        operation.expectedVersion,
-        operation.operationId,
-      )
-      delete weightOperations.current[batchId]
+      await api.updateBatchCookedWeight(current.id, batchId, cookedWeightGrams)
       await queryClient.invalidateQueries({ queryKey: ['plan', current.id] })
       setWeightDrafts(items => {
         const next = { ...items }
@@ -397,10 +356,6 @@ function LiveWeekPage() {
         return next
       })
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        delete weightOperations.current[batchId]
-        await queryClient.invalidateQueries({ queryKey: ['plan', current.id] })
-      }
       setCookError(error instanceof Error ? error.message : 'Could not save this batch weight.')
     } finally {
       setPendingWeights(items => items.filter(id => id !== batchId))

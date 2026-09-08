@@ -5,7 +5,7 @@ import { api, type ApiDecimal, ApiError, isDemoMode, normaliseFoodQuery, type Ba
 import { BarcodeScanner } from '../components/BarcodeScanner'
 import { FoodSearchSources, type FoodSearchSourceSelection } from '../components/FoodSearchSources'
 import { UsdaKeyGuidance } from '../components/UsdaKeyGuidance'
-import { Badge, Button, Card, Dialog, EmptyState, Loading, Notice, PageHeader } from '../components/ui'
+import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader } from '../components/ui'
 
 const nutrientLabels: Record<NutrientCode, string> = {
   energy_kcal: 'kcal',
@@ -100,6 +100,22 @@ function NutritionFacts({ nutrients, basisAmount, basisUnit }: { nutrients: Reco
           </small>
         </span>
       ))}
+    </div>
+  )
+}
+
+function Dialog({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className={`card dialog-card ${wide ? 'dialog-card--wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+        <header>
+          <h2>{title}</h2>
+          <button type="button" aria-label="Close" onClick={onClose}>
+            <X />
+          </button>
+        </header>
+        {children}
+      </section>
     </div>
   )
 }

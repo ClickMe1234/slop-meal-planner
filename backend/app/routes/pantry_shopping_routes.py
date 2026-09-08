@@ -10,7 +10,7 @@ from ..db import get_db
 from ..errors import ConflictError, DomainError, NotFoundError
 from ..models import (
     FoodRecord,
-    InventoryOperation,
+    Household,
     MealBatch,
     MealPlan,
     NutritionCalculation,
@@ -46,9 +46,8 @@ from ..schemas import (
     ShoppingPantryMatchRequest,
     ShoppingPantryReviewOut,
     ShoppingPantryReviewRequest,
-    ShoppingPurchaseIntakeRequest,
 )
-from ..services.pantry import adjust_lot, balances, lock_household, reserve_plan_batches
+from ..services.pantry import adjust_lot, balances, reserve_plan_batches
 from ..services.pantry_matching import pantry_match_candidates, pantry_name_similarity
 from ..services.ingredient_names import ingredient_name_keys, remember_ingredient_name
 from ..services.quantities import (
@@ -72,23 +71,6 @@ from ..services.measurement_conversion import (
 )
 
 router = APIRouter(tags=["pantry and shopping"])
-
-
-def _existing_operation(
-    db: Session,
-    household_id: str,
-    operation_type: str,
-    operation_id: str | None,
-) -> InventoryOperation | None:
-    if not operation_id:
-        return None
-    return db.scalar(
-        select(InventoryOperation).where(
-            InventoryOperation.household_id == household_id,
-            InventoryOperation.operation_type == operation_type,
-            InventoryOperation.operation_id == operation_id,
-        )
-    )
 
 
 def _pantry_out(db: Session, lot: PantryLot, ingredient_locale: str = "uk") -> PantryLotOut:
@@ -152,7 +134,6 @@ def create_pantry_lot(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
     if payload.food_record_id is not None:
         accessible_food_record(db, payload.food_record_id, context.user.household_id)
     unit = canonical_quantity_unit(payload.unit)
@@ -179,12 +160,9 @@ def adjust_pantry_lot(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
-    lot = db.scalar(select(PantryLot).where(PantryLot.id == lot_id).with_for_update())
+    lot = db.get(PantryLot, lot_id)
     if lot is None or lot.household_id != context.user.household_id:
         raise NotFoundError("Pantry lot")
-    if payload.expected_version is not None and lot.version != payload.expected_version:
-        raise ConflictError()
     adjust_lot(db, lot.id, payload.quantity_delta, payload.reason)
     db.commit()
     db.refresh(lot)
@@ -198,7 +176,6 @@ def patch_pantry_lot(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
     lot = db.scalar(select(PantryLot).where(PantryLot.id == lot_id).with_for_update())
     if lot is None or lot.household_id != context.user.household_id:
         raise NotFoundError("Pantry lot")
@@ -230,7 +207,6 @@ def confirm_pantry_food_match(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
     lot = db.scalar(select(PantryLot).where(PantryLot.id == lot_id).with_for_update())
     if lot is None or lot.household_id != context.user.household_id:
         raise NotFoundError("Pantry lot")
@@ -283,7 +259,6 @@ def delete_pantry_lot(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
     lot = db.scalar(select(PantryLot).where(PantryLot.id == lot_id).with_for_update())
     if lot is None or lot.household_id != context.user.household_id:
         raise NotFoundError("Pantry lot")
@@ -303,7 +278,6 @@ def batch_delete_pantry_lots(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
     requested_ids = list(dict.fromkeys(payload.item_ids))
     lots = db.scalars(
         select(PantryLot)
@@ -536,7 +510,6 @@ def build_list(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
     plan = db.scalar(
         select(MealPlan)
         .where(MealPlan.id == payload.meal_plan_id)
@@ -544,6 +517,9 @@ def build_list(
     )
     if plan is None or plan.household_id != context.user.household_id:
         raise NotFoundError("Meal plan")
+    db.scalar(
+        select(Household).where(Household.id == plan.household_id).with_for_update()
+    )
     if plan.status != PlanStatus.ACCEPTED.value:
         raise DomainError(
             "PLAN_NOT_ACCEPTED",
@@ -849,7 +825,6 @@ def apply_shopping_ingredient_change(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
     shopping_list = db.scalar(
         select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
     )
@@ -1025,24 +1000,9 @@ def add_manual_item(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
-    shopping_list = db.scalar(
-        select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
-    )
+    shopping_list = db.get(ShoppingList, list_id)
     if shopping_list is None or shopping_list.household_id != context.user.household_id:
         raise NotFoundError("Shopping list")
-    existing_operation = _existing_operation(
-        db,
-        context.user.household_id,
-        "shopping_manual_add",
-        payload.operation_id,
-    )
-    if existing_operation is not None:
-        item_id = str((existing_operation.result or {}).get("item_id") or "")
-        existing_item = db.get(ShoppingItem, item_id)
-        if existing_item is not None and existing_item.shopping_list_id == shopping_list.id:
-            return _shopping_item_out(db, existing_item, context.user.ingredient_locale)
-        raise ConflictError("The shopping operation was already completed but its item is unavailable.")
     unit = canonical_quantity_unit(payload.unit)
     exact = round_quantity(payload.exact_quantity, unit)
     purchase = max(round_purchase_quantity(payload.purchase_quantity, unit), exact)
@@ -1058,16 +1018,6 @@ def add_manual_item(
     )
     db.add(item)
     shopping_list.version += 1
-    db.flush()
-    if payload.operation_id:
-        db.add(
-            InventoryOperation(
-                household_id=context.user.household_id,
-                operation_type="shopping_manual_add",
-                operation_id=payload.operation_id,
-                result={"item_id": item.id, "shopping_list_id": shopping_list.id},
-            )
-        )
     db.commit()
     db.refresh(item)
     return _shopping_item_out(db, item, context.user.ingredient_locale)
@@ -1081,11 +1031,8 @@ def patch_item(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
-    shopping_list = db.scalar(
-        select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
-    )
-    item = db.scalar(select(ShoppingItem).where(ShoppingItem.id == item_id).with_for_update())
+    shopping_list = db.get(ShoppingList, list_id)
+    item = db.get(ShoppingItem, item_id)
     if (
         shopping_list is None
         or shopping_list.household_id != context.user.household_id
@@ -1132,7 +1079,6 @@ def confirm_shopping_pantry_match(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
     shopping_list = db.scalar(
         select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
     )
@@ -1268,7 +1214,6 @@ def resolve_shopping_pantry_review(
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
-    lock_household(db, context.user.household_id)
     shopping_list = db.scalar(
         select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
     )
@@ -1406,7 +1351,6 @@ def update_item_name(
 ):
     """Compare-and-set an item name and remember generated-item corrections."""
 
-    lock_household(db, context.user.household_id)
     shopping_list = db.scalar(
         select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
     )
@@ -1420,8 +1364,6 @@ def update_item_name(
         or item.shopping_list_id != shopping_list.id
     ):
         raise NotFoundError("Shopping item")
-    if payload.expected_version is not None and item.version != payload.expected_version:
-        raise ConflictError()
 
     desired_name = (
         convert_ingredient_text(db, payload.display_name.strip(), "uk")
@@ -1470,52 +1412,19 @@ def update_item_name(
 @router.post("/shopping-lists/{list_id}/add-purchased-to-pantry", response_model=list[PantryLotOut])
 def add_purchased_to_pantry(
     list_id: str,
-    payload: ShoppingPurchaseIntakeRequest | None = None,
     context: AuthContext = Depends(require_csrf),
     db: Session = Depends(get_db),
 ):
     """Explicitly add checked shopping quantities to pantry inventory."""
 
-    lock_household(db, context.user.household_id)
-    shopping_list = db.scalar(
-        select(ShoppingList).where(ShoppingList.id == list_id).with_for_update()
-    )
+    shopping_list = db.get(ShoppingList, list_id)
     if shopping_list is None or shopping_list.household_id != context.user.household_id:
         raise NotFoundError("Shopping list")
-    operation_id = payload.operation_id if payload is not None else None
-    existing_operation = _existing_operation(
-        db,
-        context.user.household_id,
-        "shopping_purchase_intake",
-        operation_id,
-    )
-    if existing_operation is not None:
-        lot_ids = [str(value) for value in (existing_operation.result or {}).get("lot_ids", [])]
-        existing_lots = db.scalars(
-            select(PantryLot)
-            .where(
-                PantryLot.household_id == context.user.household_id,
-                PantryLot.id.in_(lot_ids),
-            )
-            .order_by(PantryLot.id)
-        ).all()
-        if len(existing_lots) != len(lot_ids):
-            raise ConflictError("The purchase operation was recorded but its pantry lots are unavailable.")
-        return [_pantry_out(db, lot, context.user.ingredient_locale) for lot in existing_lots]
-    if (
-        payload is not None
-        and payload.expected_list_version is not None
-        and shopping_list.version != payload.expected_list_version
-    ):
-        raise ConflictError()
     checked = db.scalars(
-        select(ShoppingItem)
-        .where(
+        select(ShoppingItem).where(
             ShoppingItem.shopping_list_id == shopping_list.id,
             ShoppingItem.checked.is_(True),
         )
-        .order_by(ShoppingItem.id)
-        .with_for_update()
     ).all()
     if not checked:
         raise DomainError("NO_PURCHASED_ITEMS", "Tick purchased items before adding them to the pantry")
@@ -1537,34 +1446,9 @@ def add_purchased_to_pantry(
     db.flush()
     if shopping_list.meal_plan_id:
         batches = db.scalars(
-            select(MealBatch)
-            .where(MealBatch.meal_plan_id == shopping_list.meal_plan_id)
-            .order_by(MealBatch.id)
-            .with_for_update()
+            select(MealBatch).where(MealBatch.meal_plan_id == shopping_list.meal_plan_id)
         ).all()
         reserve_plan_batches(db, context.user.household_id, list(batches))
-        # Reconcile the active list against the newly reserved pantry stock so
-        # callers can immediately refresh authoritative item identities,
-        # checked state, and the list version after intake.
-        build_shopping_list(
-            db,
-            context.user.household_id,
-            shopping_list.meal_plan_id,
-            shopping_list.name,
-        )
-    if operation_id:
-        db.add(
-            InventoryOperation(
-                household_id=context.user.household_id,
-                operation_type="shopping_purchase_intake",
-                operation_id=operation_id,
-                result={
-                    "shopping_list_id": shopping_list.id,
-                    "lot_ids": [lot.id for lot in lots],
-                    "item_ids": [item.id for item in checked],
-                },
-            )
-        )
     db.commit()
     for lot in lots:
         db.refresh(lot)

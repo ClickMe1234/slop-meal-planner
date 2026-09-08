@@ -58,7 +58,7 @@ ENV APP_VERSION=${APP_VERSION} \
     HOME=/tmp
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gosu=1.14-1+b10 postgresql-client=15+248+deb12u1 util-linux && \
+    apt-get install -y --no-install-recommends gosu=1.14-1+b10 postgresql-client=15+248+deb12u1 && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --gid 10001 mealplanner && \
     useradd --uid 10001 --gid mealplanner --no-create-home --shell /usr/sbin/nologin mealplanner && \

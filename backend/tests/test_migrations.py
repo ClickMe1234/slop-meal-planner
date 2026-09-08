@@ -65,7 +65,7 @@ def test_clean_database_replays_to_head_without_model_drift(tmp_path):
     current = _alembic(database, "current")
 
     assert "No new upgrade operations detected" in check.stdout
-    assert "0027_inventory_operation_safety (head)" in current.stdout
+    assert "0026_shopping_recipe_snapshots (head)" in current.stdout
     assert len("0017_quarantine_urls") <= 32
     assert "recipe_publisher_tag" in _tables(database)
     assert "household_food_unit_conversion" in _tables(database)
@@ -133,10 +133,10 @@ def test_downgrade_refuses_split_meal_groups_without_mutating_data(tmp_path):
         )
         connection.commit()
 
-    # The inventory-safety, live-unit and shopping-snapshot migrations sit
-    # above the serving-constraints migration, so step through all four before
+    # The live-unit and shopping-snapshot migrations sit above the
+    # serving-constraints migration, so step through all three before
     # exercising the guarded 0023 downgrade.
-    result = _run_alembic(database, "downgrade", "-5")
+    result = _run_alembic(database, "downgrade", "-4")
 
     assert result.returncode != 0
     assert "Cannot downgrade 0023_member_meal_groups" in result.stderr

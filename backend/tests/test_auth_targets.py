@@ -34,33 +34,6 @@ def test_owner_setup_login_and_calorie_target(client, owner):
     assert response.json()["carbohydrate_min_g"] == "0.00"
     assert response.json()["fat_min_g"] == "0.00"
 
-    original_version = response.json()["version"]
-    fresh = client.put(
-        f"/api/v1/household-members/{member_id}/target",
-        headers={"X-CSRF-Token": csrf},
-        json={
-            "expected_version": original_version,
-            "mode": "calorie",
-            "calorie_target": 1800,
-            "tolerance_percent": 10,
-            "allocations": [{"meal_type": "dinner", "percentage": 100}],
-        },
-    )
-    assert fresh.status_code == 200, fresh.text
-    stale = client.put(
-        f"/api/v1/household-members/{member_id}/target",
-        headers={"X-CSRF-Token": csrf},
-        json={
-            "expected_version": original_version,
-            "mode": "calorie",
-            "calorie_target": 1700,
-            "tolerance_percent": 10,
-            "allocations": [{"meal_type": "dinner", "percentage": 100}],
-        },
-    )
-    assert stale.status_code == 409
-    assert stale.json()["code"] == "VERSION_CONFLICT"
-
 
 def test_login_username_is_trimmed_and_case_insensitive(client, owner):
     client.post(

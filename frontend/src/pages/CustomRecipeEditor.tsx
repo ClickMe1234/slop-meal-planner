@@ -1,6 +1,6 @@
 import { ArrowLeft, Barcode, Check, Package, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarcodeScanner } from '../components/BarcodeScanner'
 import { FoodSearchSources, type FoodSearchSourceSelection } from '../components/FoodSearchSources'
@@ -636,7 +636,6 @@ export function CustomRecipePage({ recipe: suppliedRecipe }: { recipe?: BackendR
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [savedMessage, setSavedMessage] = useState('')
-  const [planSyncWarnings, setPlanSyncWarnings] = useState<NonNullable<BackendRecipeDetail['plan_sync']>['warnings']>([])
   const [savedRecipe, setSavedRecipe] = useState<BackendRecipeDetail | undefined>()
   const returnFocus = useRef<HTMLElement | null>(null)
   const hydratedVersion = useRef<string | null>(null)
@@ -735,7 +734,6 @@ export function CustomRecipePage({ recipe: suppliedRecipe }: { recipe?: BackendR
     if (saving) return
     setError('')
     setSavedMessage('')
-    setPlanSyncWarnings([])
     if (isDemoMode) {
       setError('Saving custom recipes is unavailable in demo mode. Connect a live household to persist your work.')
       return
@@ -781,7 +779,6 @@ export function CustomRecipePage({ recipe: suppliedRecipe }: { recipe?: BackendR
         queryClient.invalidateQueries({ queryKey: ['plan'] }),
       ])
       const savedComplete = saved.nutrition_method === 'complete'
-      setPlanSyncWarnings(saved.plan_sync?.warnings ?? [])
       setSavedMessage(savedComplete ? 'Recipe saved with complete nutrition. It can be used for planning when it has meal types.' : 'Draft saved. Your current plans still use their last complete recipe version.')
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'The custom recipe could not be saved.')
@@ -825,10 +822,6 @@ export function CustomRecipePage({ recipe: suppliedRecipe }: { recipe?: BackendR
         {previewError && <Notice tone="warning" title="Could not update nutrition">{previewError}</Notice>}
         {error && <Notice tone="warning" title="Could not save recipe">{error}</Notice>}
         {savedMessage && <Notice tone="success" title="Recipe saved">{savedMessage}</Notice>}
-        {planSyncWarnings.length > 0 && <Notice tone="warning" title="Review the affected plan">
-          <p>The recipe was saved, but one or more current plans were left unchanged because they need review.</p>
-          {planSyncWarnings.map((warning) => <p key={`${warning.plan_id}-${warning.code}`}><strong>{warning.detail}</strong>{warning.actions?.map((action, index) => action.href && <Link key={`${action.href}-${index}`} to={action.href}>{action.label ?? 'Resolve this plan'}</Link>)}</p>)}
-        </Notice>}
         {error && recipe && <Button type="button" variant="secondary" onClick={reloadEditor}>Reload editor</Button>}
         <div className="custom-ingredient-list-header"><div><p className="eyebrow">Ingredients</p><h2>Recipe quantities and nutrition</h2><span>{resolvedRows} of {validRows.length} ingredients matched</span></div><Button type="button" variant="secondary" onClick={() => setRows((current) => [...current, emptyIngredient()])}><Plus aria-hidden="true" />Add ingredient</Button></div>
         <div className="ingredient-review-list custom-ingredient-review-list">

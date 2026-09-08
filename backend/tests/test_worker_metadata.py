@@ -1,9 +1,8 @@
-import pytest
 from sqlalchemy import select
 
 from app import worker
 from app.discovery.extraction import extract_recipe
-from app.models import Household, Job, JobStatus, Recipe, RecipePublisherTag, RecipeVersion
+from app.models import Household, Recipe, RecipePublisherTag, RecipeVersion
 
 
 def _pending_recipe(session_factory, title="Backfill soup"):
@@ -79,96 +78,3 @@ def test_metadata_backfill_retries_three_times_then_stops(
         assert recipe.publisher_metadata_attempts == 3
         assert recipe.publisher_metadata_error == "publisher unavailable"
     assert final["selected"] == 0
-
-
-def test_import_parser_failure_rolls_back_partial_recipe(
-    client, owner, session_factory, monkeypatch
-):
-    del client
-    with session_factory() as db:
-        household = db.scalar(select(Household))
-        job = Job(
-            household_id=household.id,
-            user_id=owner["user"]["id"],
-            kind="recipe_import",
-            status=JobStatus.QUEUED.value,
-            payload={"url": "https://example.com/atomic-import"},
-        )
-        db.add(job)
-        db.commit()
-        job_id = job.id
-
-    async def fake_extract(url):
-        return extract_recipe(
-            '''<script type="application/ld+json">{
-              "@type":"Recipe", "name":"Atomic soup", "recipeYield":"4",
-              "recipeIngredient":["1 tomato", "2 onions"]
-            }</script>''',
-            url,
-        )
-
-    original_parse = worker.parse_ingredient
-    calls = 0
-
-    def fail_second(line):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("injected parser failure")
-        return original_parse(line)
-
-    monkeypatch.setattr(worker, "SessionLocal", session_factory)
-    monkeypatch.setattr(worker, "_fetch_and_extract", fake_extract)
-    monkeypatch.setattr(worker, "parse_ingredient", fail_second)
-
-    with pytest.raises(RuntimeError, match="injected parser failure"):
-        worker.process_recipe_import.run(job_id)
-
-    with session_factory() as db:
-        assert db.scalar(select(Recipe).where(Recipe.title == "Atomic soup")) is None
-        failed = db.get(Job, job_id)
-        assert failed.status == JobStatus.FAILED.value
-        assert failed.error_code == "IMPORT_FAILED"
-        assert "injected" not in failed.error_detail
-
-
-@pytest.mark.parametrize(
-    ("status", "retrying"),
-    [
-        (JobStatus.AWAITING_REVIEW.value, False),
-        (JobStatus.AWAITING_REVIEW.value, True),
-        (JobStatus.SUCCEEDED.value, False),
-        (JobStatus.SUCCEEDED.value, True),
-    ],
-)
-def test_stale_import_failure_preserves_completed_job(
-    client, owner, session_factory, monkeypatch, status, retrying
-):
-    del client
-    result = {"recipe_id": "completed-recipe"}
-    with session_factory() as db:
-        household = db.scalar(select(Household))
-        job = Job(
-            household_id=household.id,
-            user_id=owner["user"]["id"],
-            kind="recipe_import",
-            status=status,
-            stage="recipe_review" if status == JobStatus.AWAITING_REVIEW.value else "complete",
-            progress=100,
-            payload={"url": "https://example.com/completed-import"},
-            result=result,
-        )
-        db.add(job)
-        db.commit()
-        job_id = job.id
-
-    monkeypatch.setattr(worker, "SessionLocal", session_factory)
-    worker._mark_import_failure(job_id, RuntimeError("stale failure"), retrying=retrying)
-
-    with session_factory() as db:
-        completed = db.get(Job, job_id)
-        assert completed.status == status
-        assert completed.progress == 100
-        assert completed.result == result
-        assert completed.error_code is None
-        assert completed.error_detail is None

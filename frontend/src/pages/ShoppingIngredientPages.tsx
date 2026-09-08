@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, Check, ChefHat, Link2, RefreshCw, Scale, ShoppingBasket } from 'lucide-react'
 import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   api,
   ApiError,

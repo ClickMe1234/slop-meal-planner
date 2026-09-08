@@ -12,9 +12,6 @@ export function NutritionStrip({ nutrition, compact = false }: { nutrition: Nutr
 
 export function NutritionRings({ calories, target, protein, carbs, fat, macroTargets }: { calories: number; target: number; protein: number; carbs: number; fat: number; macroTargets?: { protein: number; carbs: number; fat: number } }) {
   const pct = Math.min(100, Math.round(calories / target * 100))
-  // Keep the historical display defaults when a caller has no macro target
-  // data, but do not turn an intentional zero into an arbitrary target.
-  const macros = macroTargets ?? { protein: 130, carbs: 225, fat: 67 }
   return <div className="nutrition-summary">
     <div className="calorie-ring">
       <svg viewBox="0 0 150 150" aria-hidden="true">
@@ -24,15 +21,13 @@ export function NutritionRings({ calories, target, protein, carbs, fat, macroTar
       <div aria-live="polite"><strong>{calories}</strong><span>of {target} kcal</span></div>
     </div>
     <div className="macro-bars">
-      <Macro label="Protein" value={protein} target={macros.protein} tone="green" />
-      <Macro label="Carbs" value={carbs} target={macros.carbs} tone="warm" />
-      <Macro label="Fat" value={fat} target={macros.fat} tone="blue" />
+      <Macro label="Protein" value={protein} target={macroTargets?.protein || 130} tone="green" />
+      <Macro label="Carbs" value={carbs} target={macroTargets?.carbs || 225} tone="warm" />
+      <Macro label="Fat" value={fat} target={macroTargets?.fat || 67} tone="blue" />
     </div>
   </div>
 }
 
 function Macro({ label, value, target, tone }: { label: string; value: number; target: number; tone: string }) {
-  const constrained = target > 0
-  const width = constrained ? Math.min(100, value / target * 100) : 0
-  return <div className="macro-row"><div><span>{label}</span><small>{value} / {constrained ? `${target}g` : 'unconstrained'}</small></div><div className="macro-track" aria-label={constrained ? `${label}: ${value} of ${target} grams` : `${label}: no target`}><span className={`macro-fill macro-fill--${tone}`} style={{ width: `${width}%` }} /></div></div>
+  return <div className="macro-row"><div><span>{label}</span><small>{value} / {target}g</small></div><div className="macro-track"><span className={`macro-fill macro-fill--${tone}`} style={{ width: `${Math.min(100, value / target * 100)}%` }} /></div></div>
 }

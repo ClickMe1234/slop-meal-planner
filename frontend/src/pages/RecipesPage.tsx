@@ -1,6 +1,6 @@
 import { BookOpenText, Check, ChefHat, ExternalLink, Filter, Link2, Search, Sparkles, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { NutritionStrip } from '../components/Nutrition'
 import { RecipeRating } from '../components/RecipeRating'
@@ -193,15 +193,12 @@ export function RecipesPage() {
         })
         return
       }
-      const saved = await api.saveRecipeReview(imported.id, reviewPayload(imported, pendingMealTypes))
+      await api.saveRecipeReview(imported.id, reviewPayload(imported, pendingMealTypes))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['recipes'] }),
         queryClient.invalidateQueries({ queryKey: ['recipe', imported.id] }),
       ])
-      const warnings = saved.plan_sync?.warnings ?? []
-      setMessage(warnings.length
-        ? `${imported.title} was saved. The current plan was left unchanged and needs review: ${warnings.map(warning => warning.detail).join(' ')}`
-        : `${imported.title} was saved and is ready for meal planning.`)
+      setMessage(`${imported.title} was saved and is ready for meal planning.`)
       setPendingRecipe(null)
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'The recipe could not be saved.')

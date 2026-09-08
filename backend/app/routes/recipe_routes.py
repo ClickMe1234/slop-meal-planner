@@ -373,7 +373,6 @@ def _sync_out(sync) -> RecipePlanSyncOut:
         shopping_list_rebuilt=sync.shopping_list_rebuilt,
         shopping_list_id=sync.shopping_list_id,
         cooked_batches_unchanged=sync.cooked_batches_unchanged,
-        warnings=list(sync.warnings),
     )
 
 
@@ -558,172 +557,6 @@ def _recipe_detail(db: Session, recipe: Recipe, ingredient_locale: str = "uk") -
     )
 
 
-def _recipe_summaries(db: Session, recipes: list[Recipe]) -> list[RecipeSummary]:
-    """Build one catalogue page with a fixed set of batched queries."""
-
-    if not recipes:
-        return []
-    recipe_ids = [recipe.id for recipe in recipes]
-    versions: dict[str, RecipeVersion] = {}
-    for version in db.scalars(
-        select(RecipeVersion)
-        .where(
-            RecipeVersion.recipe_id.in_(recipe_ids),
-            RecipeVersion.is_shopping_snapshot.is_(False),
-        )
-        .order_by(RecipeVersion.recipe_id, RecipeVersion.version_number.desc())
-    ).all():
-        versions.setdefault(version.recipe_id, version)
-    version_ids = [version.id for version in versions.values()]
-    review_counts = {
-        version_id: count
-        for version_id, count in db.execute(
-            select(RecipeIngredient.recipe_version_id, func.count(RecipeIngredient.id))
-            .where(
-                RecipeIngredient.recipe_version_id.in_(version_ids),
-                RecipeIngredient.included.is_(True),
-                RecipeIngredient.needs_review.is_(True),
-            )
-            .group_by(RecipeIngredient.recipe_version_id)
-        ).all()
-    }
-    meal_types_by_recipe: dict[str, list[RecipeTag]] = {}
-    for recipe_id, meal_type_value in db.execute(
-        select(RecipeMealType.recipe_id, RecipeMealType.meal_type)
-        .where(RecipeMealType.recipe_id.in_(recipe_ids))
-        .order_by(RecipeMealType.recipe_id, RecipeMealType.meal_type)
-    ).all():
-        meal_types_by_recipe.setdefault(recipe_id, []).append(RecipeTag(meal_type_value))
-    publisher_tags_by_recipe: dict[str, list[dict[str, str]]] = {}
-    normalised_tags_by_recipe: dict[str, set[str]] = {}
-    for tag in db.scalars(
-        select(RecipePublisherTag)
-        .where(RecipePublisherTag.recipe_id.in_(recipe_ids))
-        .order_by(
-            RecipePublisherTag.recipe_id,
-            RecipePublisherTag.kind,
-            RecipePublisherTag.label,
-        )
-    ).all():
-        publisher_tags_by_recipe.setdefault(tag.recipe_id, []).append(
-            {"kind": tag.kind, "label": tag.label}
-        )
-        normalised_tags_by_recipe.setdefault(tag.recipe_id, set()).add(
-            tag.normalised_value
-        )
-    calculations: dict[str, NutritionCalculation] = {}
-    for calculation in db.scalars(
-        select(NutritionCalculation)
-        .where(NutritionCalculation.recipe_version_id.in_(version_ids))
-        .order_by(
-            NutritionCalculation.recipe_version_id,
-            NutritionCalculation.calculated_at.desc(),
-        )
-    ).all():
-        calculations.setdefault(calculation.recipe_version_id, calculation)
-    methods = {
-        method.recipe_version_id: method
-        for method in db.scalars(
-            select(RecipeMethodSnapshot).where(
-                RecipeMethodSnapshot.recipe_version_id.in_(version_ids)
-            )
-        ).all()
-    }
-    result: list[RecipeSummary] = []
-    for recipe in recipes:
-        version = versions.get(recipe.id)
-        if version is None:
-            raise DomainError("CORRUPT_RECIPE", "The recipe has no version", 500)
-        reported = publisher_values(version)
-        calculation = calculations.get(version.id)
-        nutrition_values = (
-            {key: float(value) for key, value in reported.items()}
-            if reported is not None
-            else (
-                calculation.per_serving_values
-                if calculation is not None and calculation.status == "complete"
-                else None
-            )
-        )
-        nutrition_method = (
-            "publisher"
-            if reported is not None
-            else (
-                "complete"
-                if calculation is not None and calculation.status == "complete"
-                else None
-            )
-        )
-        eligibility = (
-            RecipeEligibility.DRAFT
-            if recipe.source_type == "custom" and nutrition_method != "complete"
-            else (
-                RecipeEligibility.PLANNER_READY
-                if reported is not None and version.yield_servings
-                else RecipeEligibility(recipe.eligibility)
-            )
-        )
-        meal_types = (
-            sorted(
-                (RecipeTag(value) for value in version.meal_types),
-                key=lambda value: value.value,
-            )
-            if version.meal_types is not None
-            else meal_types_by_recipe.get(recipe.id, [])
-        )
-        review_count = review_counts.get(version.id, 0)
-        warnings: list[str] = []
-        if not meal_types:
-            warnings.append(
-                "Choose at least one meal type before this recipe can be used for meal planning."
-            )
-        if nutrition_values is None or not version.yield_servings:
-            warnings.append("Complete per-serving nutrition and a serving yield are required.")
-        if review_count:
-            warnings.append(
-                f"Confirm {review_count} uncertain ingredient name"
-                f"{'s' if review_count != 1 else ''} before creating the shopping list."
-            )
-        method = methods.get(version.id)
-        result.append(
-            RecipeSummary(
-                id=recipe.id,
-                title=version.title,
-                eligibility=eligibility,
-                source_type=recipe.source_type,
-                source_url=recipe.source_url,
-                publisher=recipe.publisher,
-                image_url=recipe.image_url,
-                version=recipe.version,
-                yield_servings=version.yield_servings,
-                minimum_servings=version.minimum_servings,
-                serving_increment=version.serving_increment,
-                publisher_nutrition=version.publisher_nutrition,
-                calculated_nutrition=nutrition_values,
-                nutrition_method=nutrition_method,
-                review_count=review_count,
-                meal_types=meal_types,
-                planner_eligible=(
-                    eligibility == RecipeEligibility.PLANNER_READY
-                    and nutrition_values is not None
-                    and bool(version.yield_servings)
-                    and bool(meal_types)
-                ),
-                planner_warnings=warnings,
-                publisher_tags=publisher_tags_by_recipe.get(recipe.id, []),
-                publisher_categories=list(
-                    categories_for_normalised_tags(
-                        normalised_tags_by_recipe.get(recipe.id, set())
-                    )
-                ),
-                publisher_metadata_status=recipe.publisher_metadata_status,
-                method_available=method is not None,
-                method_status=method.status if method is not None else None,
-            )
-        )
-    return result
-
-
 @router.get("/recipes", response_model=dict)
 def list_recipes(
     q: str = Query(default="", max_length=200),
@@ -762,15 +595,6 @@ def list_recipes(
             .join(RecipeVersion, RecipeVersion.id == RecipeIngredient.recipe_version_id)
             .where(
                 RecipeVersion.recipe_id == Recipe.id,
-                RecipeVersion.is_shopping_snapshot.is_(False),
-                RecipeVersion.version_number
-                == select(func.max(RecipeVersion.version_number))
-                .where(
-                    RecipeVersion.recipe_id == Recipe.id,
-                    RecipeVersion.is_shopping_snapshot.is_(False),
-                )
-                .correlate(Recipe)
-                .scalar_subquery(),
                 or_(
                     *(
                         or_(
@@ -833,7 +657,13 @@ def list_recipes(
         .limit(page_size)
     ).all()
     return {
-        "items": [item.model_dump(mode="json") for item in _recipe_summaries(db, recipes)],
+        "items": [
+            _recipe_detail(db, recipe, context.user.ingredient_locale).model_dump(
+                mode="json",
+                include=set(RecipeSummary.model_fields),
+            )
+            for recipe in recipes
+        ],
         "page": page,
         "page_size": page_size,
         "total": total,
@@ -1444,7 +1274,6 @@ def save_recipe_serving_constraints(
                 shopping_list_rebuilt=sync.shopping_list_rebuilt,
                 shopping_list_id=sync.shopping_list_id,
                 cooked_batches_unchanged=sync.cooked_batches_unchanged,
-                warnings=list(sync.warnings),
             )
         }
     )
