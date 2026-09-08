@@ -588,6 +588,9 @@ class MealBatch(IdMixin, Base):
     planned_cook_date: Mapped[date] = mapped_column(Date, nullable=False)
     cooked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cooked_weight_grams: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # Batch mutations (especially cook/uncook) use the same optimistic
+    # concurrency contract as the other editable household resources.
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     parent_batch_id: Mapped[str | None] = mapped_column(
         ForeignKey("meal_batch.id", ondelete="CASCADE"), nullable=True, index=True
     )
@@ -668,6 +671,28 @@ class PantryReservation(IdMixin, Base):
     meal_batch_id: Mapped[str] = mapped_column(ForeignKey("meal_batch.id", ondelete="CASCADE"), index=True)
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     unit: Mapped[str] = mapped_column(String(30), nullable=False)
+
+
+class InventoryOperation(IdMixin, Base):
+    """Durable idempotency record for retryable inventory mutations."""
+
+    __tablename__ = "inventory_operation"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id",
+            "operation_type",
+            "operation_id",
+            name="uq_inventory_operation_household_type_id",
+        ),
+    )
+
+    household_id: Mapped[str] = mapped_column(
+        ForeignKey("household.id", ondelete="CASCADE"), index=True
+    )
+    operation_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    operation_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    result: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ShoppingList(IdMixin, AuditMixin, Base):

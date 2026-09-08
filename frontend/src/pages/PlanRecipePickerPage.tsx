@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChefHat, ExternalLink, Search, WandSparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { NutritionStrip } from '../components/Nutrition'
 import { RecipeRating } from '../components/RecipeRating'
 import { Badge, Button, Card, EmptyState, Loading, Notice, PageHeader } from '../components/ui'

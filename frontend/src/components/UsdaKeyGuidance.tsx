@@ -1,5 +1,5 @@
 import { CircleHelp, ExternalLink, KeyRound } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 
 export const USDA_KEY_SIGNUP_URL = 'https://fdc.nal.usda.gov/api-key-signup.html'
 

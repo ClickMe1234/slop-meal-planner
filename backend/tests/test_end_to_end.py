@@ -420,22 +420,55 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner, session_f
         json={"expected_version": item["version"], "checked": True},
     )
     assert checked.status_code == 200, checked.text
+    current_list = client.get("/api/v1/shopping-lists/active")
+    assert current_list.status_code == 200, current_list.text
 
     purchased = client.post(
         f"/api/v1/shopping-lists/{shopping_data['id']}/add-purchased-to-pantry",
         headers=headers,
+        json={
+            "expected_list_version": current_list.json()["version"],
+            "operation_id": "intake-retry-regression",
+        },
     )
     assert purchased.status_code == 200, purchased.text
     assert purchased.json()[0]["reserved_quantity"] == "100"
     assert purchased.json()[0]["reserved_quantity_display"] == "100 g"
     assert purchased.json()[0]["usable_quantity"] == "0"
 
+    retried = client.post(
+        f"/api/v1/shopping-lists/{shopping_data['id']}/add-purchased-to-pantry",
+        headers=headers,
+        json={
+            "expected_list_version": current_list.json()["version"],
+            "operation_id": "intake-retry-regression",
+        },
+    )
+    assert retried.status_code == 200, retried.text
+    assert [lot["id"] for lot in retried.json()] == [lot["id"] for lot in purchased.json()]
+
     plan = client.get(f"/api/v1/meal-plans/{plan_id}").json()
-    batch_id = plan["occurrences"][0]["batch_id"]
+    batch_occurrence = plan["occurrences"][0]
+    batch_id = batch_occurrence["batch_id"]
+    assert batch_occurrence["batch_version"] == 1
     cooked = client.post(
-        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked", headers=headers
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked",
+        headers=headers,
+        json={"expected_version": 1, "operation_id": "cook-retry-regression"},
     )
     assert cooked.status_code == 204
+    cooked_retry = client.post(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked",
+        headers=headers,
+        json={"expected_version": 1, "operation_id": "cook-retry-regression"},
+    )
+    assert cooked_retry.status_code == 204
+    stale_cook = client.post(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked",
+        headers=headers,
+        json={"expected_version": 1, "operation_id": "stale-cook-regression"},
+    )
+    assert stale_cook.status_code == 409
     pantry = client.get("/api/v1/pantry-items").json()[0]
     assert pantry["on_hand_quantity"] == "0"
     assert pantry["on_hand_quantity_display"] == "0 g"
@@ -447,26 +480,77 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner, session_f
     weighed = client.patch(
         f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked-weight",
         headers=headers,
-        json={"cooked_weight_grams": 1003},
+        json={
+            "cooked_weight_grams": 1003,
+            "expected_version": 2,
+            "operation_id": "weight-retry-regression",
+        },
     )
     assert weighed.status_code == 204, weighed.text
+    weighed_retry = client.patch(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked-weight",
+        headers=headers,
+        json={
+            "cooked_weight_grams": 1003,
+            "expected_version": 2,
+            "operation_id": "weight-retry-regression",
+        },
+    )
+    assert weighed_retry.status_code == 204
+    stale_weight = client.patch(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked-weight",
+        headers=headers,
+        json={
+            "cooked_weight_grams": 1200,
+            "expected_version": 2,
+            "operation_id": "stale-weight-regression",
+        },
+    )
+    assert stale_weight.status_code == 409
     occurrence = client.get(f"/api/v1/meal-plans/{plan_id}").json()["occurrences"][0]
     assert Decimal(str(occurrence["cooked_weight_grams"])) == Decimal("1003")
     assert occurrence["serving_weight_grams"] == 251
+    assert occurrence["batch_version"] == 3
 
     edited_weight = client.patch(
         f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked-weight",
         headers=headers,
-        json={"cooked_weight_grams": 1200},
+        json={
+            "cooked_weight_grams": 1200,
+            "expected_version": 3,
+            "operation_id": "weight-edit-regression",
+        },
     )
     assert edited_weight.status_code == 204, edited_weight.text
     occurrence = client.get(f"/api/v1/meal-plans/{plan_id}").json()["occurrences"][0]
     assert occurrence["serving_weight_grams"] == 300
 
-    uncooked = client.delete(
-        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked", headers=headers
+    uncooked = client.request(
+        "DELETE",
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked",
+        headers=headers,
+        json={"expected_version": 4, "operation_id": "uncook-retry-regression"},
     )
     assert uncooked.status_code == 204
+    uncooked_retry = client.request(
+        "DELETE",
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked",
+        headers=headers,
+        json={"expected_version": 4, "operation_id": "uncook-retry-regression"},
+    )
+    assert uncooked_retry.status_code == 204
+    delayed_cook_retry = client.post(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked",
+        headers=headers,
+        json={"expected_version": 1, "operation_id": "cook-retry-regression"},
+    )
+    assert delayed_cook_retry.status_code == 204
+    stale_new_cook = client.post(
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked",
+        headers=headers,
+        json={"expected_version": 4, "operation_id": "delayed-new-cook"},
+    )
+    assert stale_new_cook.status_code == 409
     pantry = client.get("/api/v1/pantry-items").json()[0]
     assert pantry["on_hand_quantity"] == "100"
     assert pantry["reserved_quantity"] == "100"
@@ -474,6 +558,7 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner, session_f
     occurrence = client.get(f"/api/v1/meal-plans/{plan_id}").json()["occurrences"][0]
     assert occurrence["cooked_at"] is None
     assert occurrence["cooked_weight_grams"] is None
+    assert occurrence["batch_version"] == 5
     cannot_weigh = client.patch(
         f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked-weight",
         headers=headers,
@@ -483,7 +568,9 @@ def test_household_recipe_plan_pantry_and_shopping_loop(client, owner, session_f
     assert cannot_weigh.json()["code"] == "BATCH_NOT_COOKED"
 
     cooked_again = client.post(
-        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked", headers=headers
+        f"/api/v1/meal-plans/{plan_id}/batches/{batch_id}/cooked",
+        headers=headers,
+        json={"expected_version": 5, "operation_id": "cook-again-regression"},
     )
     assert cooked_again.status_code == 204
     pantry = client.get("/api/v1/pantry-items").json()[0]

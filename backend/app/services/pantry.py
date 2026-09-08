@@ -6,9 +6,38 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..errors import DomainError, NotFoundError
-from ..models import FoodRecord, MealBatch, PantryLot, PantryReservation, PantryTransaction, RecipeVersion
+from ..models import (
+    FoodRecord,
+    Household,
+    MealBatch,
+    PantryLot,
+    PantryReservation,
+    PantryTransaction,
+    RecipeVersion,
+)
 from .measurement_conversion import convert_quantity_to_unit
 from .quantities import canonical_quantity_unit, round_quantity
+
+
+def lock_household(db: Session, household_id: str) -> Household:
+    """Acquire the household coordination lock used by inventory workflows.
+
+    Inventory, reservations, and the active shopping list are household-wide
+    state.  Locking this stable parent row before reading any dependent row
+    gives PostgreSQL a deterministic lock order and serialises operations that
+    otherwise would each lock a different pantry/list row first.  SQLite
+    simply ignores ``FOR UPDATE`` while keeping the same transaction shape in
+    tests.
+    """
+
+    household = db.scalar(
+        select(Household)
+        .where(Household.id == household_id)
+        .with_for_update()
+    )
+    if household is None:
+        raise NotFoundError("Household")
+    return household
 
 
 def balances(db: Session, lot: PantryLot) -> tuple[Decimal, Decimal, Decimal]:
@@ -39,7 +68,17 @@ def adjust_lot(
     reference_type: str | None = None,
     reference_id: str | None = None,
 ) -> PantryTransaction:
+    # Service callers outside the HTTP routes (recipe synchronisation and
+    # maintenance jobs) must follow the same lock order as the routes.  The
+    # first lookup is only used to discover the household; the locked lookup
+    # below is the row whose balance will be changed.
     lot = db.get(PantryLot, lot_id)
+    if lot is None:
+        raise NotFoundError("Pantry lot")
+    lock_household(db, lot.household_id)
+    lot = db.scalar(
+        select(PantryLot).where(PantryLot.id == lot_id).with_for_update()
+    )
     if lot is None:
         raise NotFoundError("Pantry lot")
     rounded_delta = round_quantity(delta, lot.unit)
@@ -72,7 +111,42 @@ def reserve_plan_batches(db: Session, household_id: str, batches: list[MealBatch
     ingredients must have been resolved before a recipe becomes planner-ready.
     """
 
+    # Flush before any balance query.  The application intentionally uses
+    # autoflush=False, so a reservation created for an earlier batch would
+    # otherwise be invisible to the next batch and the same lot could be
+    # over-reserved.
+    lock_household(db, household_id)
+    db.flush()
+
+    batch_ids = sorted({batch.id for batch in batches})
+    if batch_ids:
+        locked_batches = db.scalars(
+            select(MealBatch)
+            .where(MealBatch.id.in_(batch_ids))
+            .order_by(MealBatch.id)
+            .with_for_update()
+        ).all()
+        batches_by_id = {batch.id: batch for batch in locked_batches}
+        # Keep the caller's order because requirements from the same plan are
+        # deterministic, while the dependent row locks above are ordered by
+        # primary key for all concurrent callers.
+        batches = [batches_by_id.get(batch.id, batch) for batch in batches]
+
+    # Lock every household lot once, in id order, before FEFO allocation.  A
+    # later query can sort this in expiry order without changing lock order.
+    locked_lots = db.scalars(
+        select(PantryLot)
+        .where(PantryLot.household_id == household_id)
+        .order_by(PantryLot.id)
+        .with_for_update()
+    ).all()
+
     for batch in batches:
+        # Once food has been cooked its reservation has either been consumed
+        # or is historical.  Re-acceptance, purchase intake, and pantry-match
+        # refreshes must never reserve it again.
+        if batch.cooked_at is not None:
+            continue
         version = db.get(RecipeVersion, batch.recipe_version_id)
         if version is None or not version.yield_servings:
             raise DomainError("INVALID_BATCH", "A meal batch references an invalid recipe yield")
@@ -117,15 +191,24 @@ def reserve_plan_batches(db: Session, household_id: str, batches: list[MealBatch
             remaining = max(required - existing, Decimal("0"))
             if remaining <= 0:
                 continue
-            lots = db.scalars(
-                select(PantryLot)
-                .where(
-                    PantryLot.household_id == household_id,
-                    PantryLot.food_record_id == food_record_id,
-                )
-                .order_by(PantryLot.expires_on.asc().nullslast(), PantryLot.created_at)
-            ).all()
+            lots = sorted(
+                (
+                    lot
+                    for lot in locked_lots
+                    if lot.food_record_id == food_record_id
+                ),
+                key=lambda lot: (
+                    lot.expires_on is None,
+                    lot.expires_on,
+                    lot.created_at,
+                    lot.id,
+                ),
+            )
             for lot in lots:
+                # Reservation rows added or updated earlier in this function
+                # are pending in this session.  Flush before reading balances
+                # so the next batch sees them even with autoflush disabled.
+                db.flush()
                 _, _, usable = balances(db, lot)
                 available = convert_quantity_to_unit(usable, lot.unit, unit, density)
                 if available is None:
@@ -154,6 +237,7 @@ def reserve_plan_batches(db: Session, household_id: str, batches: list[MealBatch
                         quantity_in_lot_unit, lot.unit, unit, density
                     )
                     remaining -= reserved_in_required_unit or Decimal("0")
+                    db.flush()
                 if remaining <= 0:
                     break
     db.flush()

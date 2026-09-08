@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../api/client'
-import { LoginPage } from './AuthPages'
+import { loadShoppingNameMutations, saveShoppingNameMutation, setOfflineShoppingScope } from '../lib/offlineShopping'
+import { ChangePasswordPage, LoginPage } from './AuthPages'
 
 vi.mock('../api/client', async () => {
   const actual = await vi.importActual<typeof import('../api/client')>('../api/client')
@@ -16,6 +17,7 @@ vi.mock('../api/client', async () => {
       me: vi.fn(),
       setupStatus: vi.fn(),
       login: vi.fn(),
+      changePassword: vi.fn(),
     },
   }
 })
@@ -33,6 +35,21 @@ function renderLogin(queryClient = new QueryClient()) {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/week" element={<h1>Week</h1>} />
           <Route path="/change-password" element={<h1>Change password</h1>} />
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
+function renderPasswordChange(queryClient = new QueryClient()) {
+  queryClient.setQueryData(['session'], { ...signedInUser, must_change_password: true })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/change-password']}>
+        <Routes>
+          <Route path="/change-password" element={<ChangePasswordPage />} />
+          <Route path="/week" element={<h1>Week</h1>} />
         </Routes>
         <LocationProbe />
       </MemoryRouter>
@@ -91,6 +108,32 @@ describe('LoginPage', () => {
     await waitFor(() => expect(api.login).toHaveBeenCalledWith('owner', 'password', false))
   })
 
+  it('preserves authentication-paused offline edits when the same user signs in again', async () => {
+    const user = userEvent.setup()
+    setOfflineShoppingScope(signedInUser.id)
+    const pausedMutation = {
+      id: 'paused-name-edit',
+      kind: 'name' as const,
+      listId: 'list-1',
+      itemId: 'item-1',
+      baseDisplayName: 'courgettes',
+      desiredDisplayName: 'garden courgettes',
+      createdAt: 1,
+      status: 'auth_paused' as const,
+      lastError: 'Sign in required',
+    }
+    await saveShoppingNameMutation(pausedMutation)
+    renderLogin()
+
+    await screen.findByRole('heading', { name: /sign in to your household/i })
+    await user.type(screen.getByRole('textbox', { name: 'Username' }), 'owner')
+    await user.type(screen.getByLabelText('Password'), 'password')
+    await user.click(screen.getByRole('button', { name: /sign in/i }))
+
+    await waitFor(() => expect(screen.getByTestId('current-route')).toHaveTextContent('/week'))
+    expect(await loadShoppingNameMutations()).toEqual([pausedMutation])
+  })
+
   it('opens actionable sign-in help instead of leaving the help control inert', async () => {
     const user = userEvent.setup()
     renderLogin()
@@ -103,5 +146,22 @@ describe('LoginPage', () => {
 
     expect(help).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('region', { name: 'Sign-in help' })).toHaveTextContent(/contact the household owner/i)
+  })
+})
+
+describe('ChangePasswordPage', () => {
+  it('refreshes cached session state before replacing the password route', async () => {
+    const user = userEvent.setup()
+    const queryClient = new QueryClient()
+    vi.mocked(api.changePassword).mockResolvedValue(undefined)
+    renderPasswordChange(queryClient)
+
+    await user.type(screen.getByLabelText('Temporary password'), 'temporary-password')
+    await user.type(screen.getByLabelText('New password'), 'a-new-secure-password')
+    await user.type(screen.getByLabelText('Confirm new password'), 'a-new-secure-password')
+    await user.click(screen.getByRole('button', { name: 'Change password' }))
+
+    await waitFor(() => expect(screen.getByTestId('current-route')).toHaveTextContent('/week'))
+    expect(queryClient.getQueryData<typeof signedInUser>(['session'])?.must_change_password).toBe(false)
   })
 })

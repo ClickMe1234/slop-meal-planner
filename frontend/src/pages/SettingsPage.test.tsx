@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
@@ -15,7 +15,7 @@ vi.mock("../api/client", async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("TargetSettings", () => {
-  it("saves calorie-mode macro minimums and defaults unconstrained macros to zero", async () => {
+  it("round-trips dinner-only allocation, maximums, and target version", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "listMembers").mockResolvedValue([
       { id: "member-1", name: "Alex", active: true, version: 1 },
@@ -25,12 +25,12 @@ describe("TargetSettings", () => {
       member_id: "member-1",
       mode: "calorie",
       calorie_target: 2000,
+      protein_max_g: 160,
+      carbohydrate_max_g: 240,
+      fat_max_g: 80,
       tolerance_percent: 5,
       allocations: [
-        { meal_type: "breakfast", percentage: 25 },
-        { meal_type: "lunch", percentage: 30 },
-        { meal_type: "dinner", percentage: 35 },
-        { meal_type: "snack", percentage: 10 },
+        { meal_type: "dinner", percentage: 100 },
       ],
       version: 1,
     });
@@ -52,6 +52,7 @@ describe("TargetSettings", () => {
     expect(
       screen.getByRole("spinbutton", { name: /Minimum carbohydrate/ }),
     ).toHaveValue(0);
+    await waitFor(() => expect(screen.getByRole("spinbutton", { name: /Maximum protein/ })).toHaveValue(160));
 
     await user.clear(protein);
     await user.type(protein, "130");
@@ -62,9 +63,14 @@ describe("TargetSettings", () => {
       "member-1",
       expect.objectContaining({
         mode: "calorie",
+        expected_version: 1,
         protein_min_g: 130,
+        protein_max_g: 160,
         carbohydrate_min_g: 0,
+        carbohydrate_max_g: 240,
         fat_min_g: 0,
+        fat_max_g: 80,
+        allocations: [{ meal_type: "dinner", percentage: 100 }],
       }),
     );
   });

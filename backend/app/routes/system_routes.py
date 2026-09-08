@@ -15,6 +15,10 @@ from ..services.integration_credentials import (
     effective_usda_key,
     save_credential,
 )
+from ..services.integrity import (
+    household_integrity_report,
+    repair_household_derived_state,
+)
 
 
 router = APIRouter(prefix="/system", tags=["system"])
@@ -58,6 +62,26 @@ def run_selective_restore(
         db,
         context.user.household_id,
     )
+
+
+@router.get("/integrity")
+def get_integrity_report(
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    if context.user.role != UserRole.OWNER.value:
+        raise DomainError("OWNER_REQUIRED", "This action requires the owner role", 403)
+    return household_integrity_report(db, context.user.household_id)
+
+
+@router.post("/integrity/repair")
+def repair_integrity(
+    context: AuthContext = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    result = repair_household_derived_state(db, context.user.household_id)
+    db.commit()
+    return result
 
 
 @router.get("/integrations/usda")

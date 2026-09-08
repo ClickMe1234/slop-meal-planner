@@ -299,8 +299,22 @@ def set_target(
         raise NotFoundError("Household member")
     if context.user.role != UserRole.OWNER.value and context.user.member_id != member.id:
         raise DomainError("TARGET_EDIT_FORBIDDEN", "You may edit only your linked target", 403)
-    target = db.scalar(select(TargetProfile).where(TargetProfile.member_id == member.id))
-    data = payload.model_dump(exclude={"allocations"})
+    target = db.scalar(
+        select(TargetProfile)
+        .where(TargetProfile.member_id == member.id)
+        .with_for_update()
+    )
+    if (
+        target is not None
+        and payload.expected_version is not None
+        and target.version != payload.expected_version
+    ):
+        raise DomainError(
+            "VERSION_CONFLICT",
+            "These target settings changed on another device. Reload before saving.",
+            409,
+        )
+    data = payload.model_dump(exclude={"allocations", "expected_version"})
     data["mode"] = payload.mode.value
     if target is None:
         target = TargetProfile(member_id=member.id, **data)

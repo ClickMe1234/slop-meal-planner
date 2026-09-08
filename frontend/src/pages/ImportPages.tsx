@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, Barcode, Check, ExternalLink, FileSearch, Link2, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarcodeScanner } from '../components/BarcodeScanner'
 import { FoodSearchSources, type FoodSearchSourceSelection } from '../components/FoodSearchSources'
@@ -984,6 +984,7 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
   const [nutritionRefreshError, setNutritionRefreshError] = useState('')
   const [refreshingNutrition, setRefreshingNutrition] = useState(false)
   const [error, setError] = useState('')
+  const [planSyncWarnings, setPlanSyncWarnings] = useState<NonNullable<BackendRecipeDetail['plan_sync']>['warnings']>([])
   const [deleteError, setDeleteError] = useState('')
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -1142,10 +1143,14 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
           }
         }),
       }
-      await api.saveRecipeReview(recipe.data.id, payload)
+      const saved = await api.saveRecipeReview(recipe.data.id, payload)
       await Promise.all([queryClient.invalidateQueries({ queryKey: ['recipes'] }), queryClient.invalidateQueries({ queryKey: ['recipe', recipe.data.id] }), queryClient.invalidateQueries({ queryKey: ['plan'] })])
-      if (presentation === 'drawer' && onSaved) onSaved()
-      else navigate(returnTo)
+      const warnings = saved.plan_sync?.warnings ?? []
+      setPlanSyncWarnings(warnings)
+      if (!warnings.length) {
+        if (presentation === 'drawer' && onSaved) onSaved()
+        else navigate(returnTo)
+      }
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : 'The reviewed recipe could not be saved.')
     } finally {
@@ -1337,6 +1342,13 @@ function LiveImportReviewPage({ presentation = 'page', onDismiss, onSaved }: Imp
             {error && (
               <Notice tone="warning" title="Could not save">
                 {error}
+              </Notice>
+            )}
+            {planSyncWarnings.length > 0 && (
+              <Notice tone="warning" title="Recipe saved; review the affected plan">
+                <p>The recipe was saved, but the current plan was left unchanged because it needs review.</p>
+                {planSyncWarnings.map((warning) => <p key={`${warning.plan_id}-${warning.code}`}><strong>{warning.detail}</strong>{warning.actions?.map((action, index) => action.href && <Link key={`${action.href}-${index}`} to={action.href}>{action.label ?? 'Resolve this plan'}</Link>)}</p>)}
+                <Button variant="secondary" onClick={() => presentation === 'drawer' && onDismiss ? onDismiss() : navigate(returnTo)}>Continue</Button>
               </Notice>
             )}
             <Button disabled={busy} onClick={save}>

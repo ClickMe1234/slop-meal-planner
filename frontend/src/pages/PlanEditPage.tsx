@@ -15,7 +15,7 @@ import {
   UserRoundPlus,
   Utensils,
 } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router'
 import {
   api,
   ApiError,
