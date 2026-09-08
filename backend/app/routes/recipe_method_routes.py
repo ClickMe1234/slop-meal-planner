@@ -427,6 +427,57 @@ def _batch_context(db: Session, batch: MealBatch) -> dict[str, Any]:
     }
 
 
+def _batch_method_versions_compatible(
+    pinned: RecipeVersion,
+    current: RecipeVersion,
+) -> bool:
+    """Check whether a current method can be rendered for an older batch.
+
+    A method snapshot is tied to a recipe version, while an uncooked batch can
+    still point at an older version after the recipe has been saved again.  The
+    fallback is safe only when the method's ingredient lineages and the
+    physical recipe inputs are unchanged.  Keep this comparison deliberately
+    strict: a changed quantity, unit, gram amount, ingredient identity,
+    preparation, or inclusion flag means the current method may no longer
+    describe what the batch contains.
+    """
+
+    if pinned.yield_servings != current.yield_servings:
+        return False
+
+    pinned_ingredients = {item.lineage_id: item for item in pinned.ingredients}
+    current_ingredients = {item.lineage_id: item for item in current.ingredients}
+    if set(pinned_ingredients) != set(current_ingredients):
+        return False
+
+    for lineage_id, pinned_ingredient in pinned_ingredients.items():
+        current_ingredient = current_ingredients[lineage_id]
+        if any(
+            getattr(pinned_ingredient, field) != getattr(current_ingredient, field)
+            for field in (
+                "quantity",
+                "unit",
+                "quantity_grams",
+                "included",
+                "optional",
+                "food_phrase",
+                "parsed_food_phrase",
+                "preparation",
+                "food_record_id",
+            )
+        ):
+            return False
+    return True
+
+
+def _current_method_action(recipe_id: str) -> dict[str, Any]:
+    return {
+        "kind": "current_method",
+        "label": "Open current recipe method",
+        "href": f"/recipes/{recipe_id}/method",
+    }
+
+
 def _historical_method_recovery_actions(recipe_id: str, batch_id: str) -> list[dict[str, Any]]:
     return [
         {
@@ -439,11 +490,7 @@ def _historical_method_recovery_actions(recipe_id: str, batch_id: str) -> list[d
                 "scaled. The cooked record and batch ingredients stay unchanged."
             ),
         },
-        {
-            "kind": "current_method",
-            "label": "Open current recipe method",
-            "href": f"/recipes/{recipe_id}/method",
-        },
+        _current_method_action(recipe_id),
     ]
 
 
@@ -576,6 +623,35 @@ def get_recipe_method(
             raise DomainError("CORRUPT_RECIPE", "The recipe has no version.", 500)
         requested = servings or version.yield_servings
     snapshot = version.method_snapshot
+    if snapshot is None and batch_id and batch_context and not batch_context.get("cooked_at"):
+        latest = _latest_version(db, recipe.id)
+        current_snapshot = latest.method_snapshot if latest is not None else None
+        if (
+            latest is not None
+            and latest.id != version.id
+            and current_snapshot is not None
+            and _batch_method_versions_compatible(version, latest)
+        ):
+            # Keep the batch's immutable recipe revision as the source of
+            # ingredients/yield and use only the current method snapshot.  A
+            # read of an uncooked batch must not rewrite its batch, plan, or
+            # historical recipe version.
+            return _method_view(
+                db,
+                recipe,
+                version,
+                current_snapshot,
+                context,
+                requested_servings=requested,
+                batch_context=batch_context,
+            )
+        if latest is not None and latest.id != version.id and current_snapshot is not None:
+            raise DomainError(
+                "BATCH_METHOD_INCOMPATIBLE",
+                "The current saved method cannot be safely applied to this batch because its saved recipe inputs changed. Open the current recipe method to review it; the batch and plan were not changed.",
+                409,
+                actions=[_current_method_action(recipe.id)],
+            )
     if snapshot is None and recipe.source_type == "custom":
         locked_version = db.scalar(
             select(RecipeVersion)

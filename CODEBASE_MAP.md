@@ -762,6 +762,10 @@ interactive targets usable at small heights.
    portion allocations to show practical serving weights.
 4. The method page can be opened from Discover, saved recipes, or a planned
    batch and scales ingredient quantities to the authoritative context.
+   Uncooked batches without a captured method can use the current saved method
+   when their ingredient lineage, amounts, and yield match. Cooked history
+   retains explicit recovery. The batch view links to separate recipe scaling
+   without changing the plan's allocated servings.
 
 ### Shopping/pantry loop
 

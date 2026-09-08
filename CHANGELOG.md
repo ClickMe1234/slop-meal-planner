@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Recognise saved methods for compatible uncooked batches pinned to an older
+  recipe revision, and offer separate serving scaling from the batch view.
+
 ## 1.4.1 - 2026-09-07
 
 - Make pantry reservations, cooking, shopping mutations, and purchase intake

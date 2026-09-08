@@ -309,6 +309,194 @@ def test_batch_method_scales_custom_recipe_ingredients_to_planned_servings(
     assert method["ingredients"][0]["quantity_text"] == "4"
 
 
+def test_uncooked_old_batch_uses_compatible_current_method_without_mutating_history(
+    client, owner, session_factory
+):
+    recipe = _custom_recipe(client, owner, "Fry the zucchini in a pan for 5 minutes.")
+    initial = client.get(f"/api/v1/recipes/{recipe['id']}/method").json()
+    with session_factory() as db:
+        from app.models import Household, MealBatch, MealPlan, RecipeVersion
+
+        household = db.scalar(select(Household))
+        version = db.get(RecipeVersion, initial["recipe_version_id"])
+        assert household is not None
+        assert version is not None
+        plan = MealPlan(
+            household_id=household.id,
+            name="Uncooked older revision",
+            start_date=date(2026, 8, 24),
+            end_date=date(2026, 8, 30),
+        )
+        db.add(plan)
+        db.flush()
+        batch = MealBatch(
+            meal_plan_id=plan.id,
+            recipe_version_id=version.id,
+            servings=8,
+            planned_cook_date=plan.start_date,
+        )
+        db.add(batch)
+        db.commit()
+        batch_id = batch.id
+        old_version_id = version.id
+        plan_id = plan.id
+
+    updated = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method",
+        headers=_headers(owner),
+        json={
+            "expected_version": initial["recipe_version"],
+            "method": initial["method"],
+            "mark_reviewed": True,
+            "source_kind": "custom",
+            "source_blocks": [
+                {**initial["source_blocks"][0], "text": "Cook the zucchini gently in a pan for 7 minutes."}
+            ],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    latest_version_id = updated.json()["recipe_version_id"]
+
+    with session_factory() as db:
+        from app.models import RecipeMethodSnapshot
+
+        old_snapshot = db.scalar(
+            select(RecipeMethodSnapshot).where(
+                RecipeMethodSnapshot.recipe_version_id == old_version_id
+            )
+        )
+        assert old_snapshot is not None
+        db.delete(old_snapshot)
+        db.commit()
+
+    first = client.get(f"/api/v1/recipes/{recipe['id']}/method?batch_id={batch_id}")
+    assert first.status_code == 200, first.text
+    method = first.json()
+    assert method["recipe_version_id"] == old_version_id
+    assert method["recipe_version_id"] != latest_version_id
+    assert method["recipe_version_number"] == initial["recipe_version_number"]
+    assert method["method_status"] == "reviewed"
+    assert method["source_blocks"][0]["text"] == "Cook the zucchini gently in a pan for 7 minutes."
+    assert method["batch_context"]["batch_id"] == batch_id
+    assert method["requested_servings"] == "8.00"
+    assert method["base_servings"] == "4.00"
+    assert method["ingredients"][0]["quantity_text"] == "4"
+
+    reloaded = client.get(f"/api/v1/recipes/{recipe['id']}/method?batch_id={batch_id}")
+    assert reloaded.status_code == 200, reloaded.text
+    assert reloaded.json()["source_blocks"][0]["text"] == method["source_blocks"][0]["text"]
+
+    with session_factory() as db:
+        from app.models import MealBatch, MealPlan, RecipeMethodSnapshot
+
+        batch = db.get(MealBatch, batch_id)
+        plan = db.get(MealPlan, plan_id)
+        assert batch is not None
+        assert plan is not None
+        assert batch.recipe_version_id == old_version_id
+        assert batch.cooked_at is None
+        assert plan.status == "draft"
+        assert db.scalar(
+            select(RecipeMethodSnapshot).where(
+                RecipeMethodSnapshot.recipe_version_id == old_version_id
+            )
+        ) is None
+
+
+def test_uncooked_old_batch_rejects_incompatible_current_method_with_recipe_link(
+    client, owner, session_factory
+):
+    recipe = _custom_recipe(client, owner, "Fry the zucchini in a pan for 5 minutes.")
+    initial = client.get(f"/api/v1/recipes/{recipe['id']}/method").json()
+    with session_factory() as db:
+        from app.models import Household, MealBatch, MealPlan, RecipeVersion
+
+        household = db.scalar(select(Household))
+        version = db.get(RecipeVersion, initial["recipe_version_id"])
+        assert household is not None
+        assert version is not None
+        plan = MealPlan(
+            household_id=household.id,
+            name="Changed older revision",
+            start_date=date(2026, 8, 24),
+            end_date=date(2026, 8, 30),
+        )
+        db.add(plan)
+        db.flush()
+        batch = MealBatch(
+            meal_plan_id=plan.id,
+            recipe_version_id=version.id,
+            servings=8,
+            planned_cook_date=plan.start_date,
+        )
+        db.add(batch)
+        db.commit()
+        batch_id = batch.id
+        old_version_id = version.id
+        plan_id = plan.id
+
+    updated = client.put(
+        f"/api/v1/recipes/{recipe['id']}/method",
+        headers=_headers(owner),
+        json={
+            "expected_version": initial["recipe_version"],
+            "method": initial["method"],
+            "mark_reviewed": True,
+            "source_kind": "custom",
+            "source_blocks": [
+                {**initial["source_blocks"][0], "text": "Cook the zucchini gently in a pan for 7 minutes."}
+            ],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    latest_version_id = updated.json()["recipe_version_id"]
+
+    with session_factory() as db:
+        from app.models import RecipeMethodSnapshot, RecipeVersion
+
+        latest = db.get(RecipeVersion, latest_version_id)
+        old_snapshot = db.scalar(
+            select(RecipeMethodSnapshot).where(
+                RecipeMethodSnapshot.recipe_version_id == old_version_id
+            )
+        )
+        assert latest is not None
+        assert latest.ingredients
+        latest.ingredients[0].quantity = Decimal("3")
+        assert old_snapshot is not None
+        db.delete(old_snapshot)
+        db.commit()
+
+    response = client.get(f"/api/v1/recipes/{recipe['id']}/method?batch_id={batch_id}")
+    assert response.status_code == 409, response.text
+    problem = response.json()
+    assert problem["code"] == "BATCH_METHOD_INCOMPATIBLE"
+    assert problem["actions"] == [
+        {
+            "kind": "current_method",
+            "label": "Open current recipe method",
+            "href": f"/recipes/{recipe['id']}/method",
+        }
+    ]
+    assert "batch and plan were not changed" in problem["detail"]
+
+    with session_factory() as db:
+        from app.models import MealBatch, MealPlan, RecipeMethodSnapshot
+
+        batch = db.get(MealBatch, batch_id)
+        plan = db.get(MealPlan, plan_id)
+        assert batch is not None
+        assert plan is not None
+        assert batch.recipe_version_id == old_version_id
+        assert batch.cooked_at is None
+        assert plan.status == "draft"
+        assert db.scalar(
+            select(RecipeMethodSnapshot).where(
+                RecipeMethodSnapshot.recipe_version_id == old_version_id
+            )
+        ) is None
+
+
 def test_cooked_historical_batch_can_capture_the_current_method(
     client, owner, session_factory
 ):
