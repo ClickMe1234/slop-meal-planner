@@ -370,6 +370,24 @@ describe('MethodPage', () => {
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled()
   })
 
+  it('opens editable serving scaling separately from the allocated plan batch', async () => {
+    const user = userEvent.setup()
+    mockMethodPage()
+    vi.mocked(api.getRecipeMethod).mockImplementation(async (_id, options) => options?.batchId ? {
+      ...methodView,
+      method_status: 'reviewed',
+      batch_context: { batch_id: 'batch-1', servings: 4.5, planned_cook_date: '2026-09-08', occurrences: [] },
+      requested_servings: 4.5,
+    } : { ...methodView, requested_servings: options?.servings ?? 4 })
+    renderMethod('/recipes/recipe-1/method?batch=batch-1')
+    await user.click(await screen.findByRole('link', { name: 'Scale a separate batch' }))
+    const input = await screen.findByLabelText('Servings')
+    await user.clear(input)
+    await user.type(input, '8')
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    await waitFor(() => expect(api.getRecipeMethod).toHaveBeenLastCalledWith('recipe-1', { batchId: undefined, servings: 8 }))
+  })
+
   it('offers to capture the current method for a cooked batch with no historical snapshot', async () => {
     const user = userEvent.setup()
     mockMethodPage()

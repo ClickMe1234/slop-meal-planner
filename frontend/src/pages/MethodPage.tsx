@@ -917,6 +917,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
         {recoveryActionView}
       </Notice>}
       <Card className="method-empty-state">
+        {batchId && <Link className="button button--secondary" to={`/recipes/${recipeId}/method`}>Open current recipe method</Link>}
         {recipe.data?.source_url && <Button disabled={extract.isPending} onClick={() => extract.mutate()}><Sparkles size={17}/>{extract.isPending ? 'Reading source…' : 'Create draft from source'}</Button>}
         <div className="method-empty-divider"><span>or</span></div>
         <label>Write or paste the cooking method<textarea rows={10} value={manualText} onChange={event => setManualText(event.target.value)} placeholder="Fry the onions until soft. Add the tomatoes…"/></label>
@@ -951,7 +952,7 @@ export function MethodPage({ preview = false }: { preview?: boolean }) {
     {message && <Notice tone="success" title="Saved">{message}</Notice>}
     <div className="method-status" aria-live="polite"><Badge tone={data.method_status === 'reviewed' ? 'green' : 'warning'}>{data.method_status === 'reviewed' ? 'Reviewed' : 'Needs review'}</Badge></div>
     {data.method_status === 'needs_review' && <Notice tone="warning" title="Automatically generated draft">Save when you have finished reviewing. {unreviewed ? `${unreviewed} unaccounted clause${unreviewed === 1 ? '' : 's'} will remain highlighted as a warning.` : 'The highlighted suggestions are optional to accept.'}</Notice>}
-    {data.batch_context && <Card className="method-batch-banner"><Flame/><div><strong>Cook the whole batch: {data.batch_context.servings} servings</strong><span>{data.batch_context.occurrences.map(item => `${item.date} ${item.meal_type}`).join(' · ')}</span></div></Card>}
+    {data.batch_context && <Card className="method-batch-banner"><Flame/><div><strong>Cook the whole batch: {data.batch_context.servings} servings</strong><span>{data.batch_context.occurrences.map(item => `${item.date} ${item.meal_type}`).join(' · ')}</span><Link className="source-link" to={`/recipes/${recipeId}/method`}>Scale a separate batch</Link><span>The planned batch keeps its allocated servings.</span></div></Card>}
     <div className="method-toolbar">
       {!data.batch_context && data.scaling_available && <form className="method-serving-control" onSubmit={event => { event.preventDefault(); commitServings() }}>
         <label htmlFor="method-servings">Servings</label>
